@@ -255,8 +255,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # zones); typing "EPSG:32628" here overrides the picker entirely.
         self.addParameter(QgsProcessingParameterString(
             self.TARGET_CRS_EPSG,
-            "OR target CRS as EPSG string (e.g. 'EPSG:32628') -- overrides "
-            "the picker above when non-empty. Ignored when Auto UTM is ticked.",
+            "OR target CRS as EPSG code (e.g. '5266' or 'EPSG:5266') -- "
+            "overrides the picker above when non-empty. Bare digits are "
+            "treated as EPSG. Ignored when Auto UTM is ticked.",
             defaultValue="",
             optional=True))
         # AOI buffer distance — rarely tuned; stowed under Advanced.
@@ -393,7 +394,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.48"
+    PFF_VERSION = "0.8.49"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -553,13 +554,22 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             target_crs_str = _detect_utm_zone(forest_layer, aoi_layer, feedback)
             crs_source = "Auto UTM"
         elif target_crs_epsg_str:
-            # Validate the typed string before trusting it.
-            candidate = QgsCoordinateReferenceSystem(target_crs_epsg_str)
+            # Be permissive about format -- everyone uses EPSG codes, so
+            # accept bare numbers ("5266"), lowercase ("epsg:5266"), or
+            # the canonical "EPSG:5266". Normalise to "EPSG:<digits>"
+            # before validating.
+            _normalised = target_crs_epsg_str
+            if _normalised.isdigit():
+                _normalised = f"EPSG:{_normalised}"
+            elif _normalised.lower().startswith("epsg:"):
+                _normalised = "EPSG:" + _normalised.split(":", 1)[1].strip()
+            candidate = QgsCoordinateReferenceSystem(_normalised)
             if not candidate.isValid():
                 raise QgsProcessingException(
                     f"TARGET_CRS_EPSG '{target_crs_epsg_str}' is not a valid "
-                    "CRS authority string. Expected format e.g. 'EPSG:32628'.")
-            target_crs_str = candidate.authid() or target_crs_epsg_str
+                    "CRS code. Expected an EPSG code -- either bare ('5266') "
+                    "or prefixed ('EPSG:5266').")
+            target_crs_str = candidate.authid() or _normalised
             crs_source = f"EPSG-string field ('{target_crs_epsg_str}')"
         else:
             target_crs = self.parameterAsCrs(
