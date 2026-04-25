@@ -1,5 +1,15 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.8";
+var PFF_SCRIPT_VERSION = "4.1.9";
+
+// Changes vs v4.1.8:
+//  - P2.14: Primary Forest map layer now uses the named
+//    binary_darkgreen_palette (#26600e) instead of CSS 'darkgreen'
+//    (#006400). Fixes the legend/layer colour mismatch (legend already
+//    used #26600e) and gives a cleaner contrast with the
+//    "Forest outside buffers" pre-connectivity layer (#228B22).
+//  - P0.12: Slope input layer recoloured brown (#8B4513) -> slate grey
+//    (#708090) on both map layer and legend swatch. Brown was easily
+//    confused with the agriculture/built-up palette family.
 
 // Changes vs v4.1.7:
 //  - FRA terminology renames (P0.13b, completes 14b rename table):
@@ -2991,7 +3001,7 @@ var LEGEND_ENTRIES = [
   {key: 'inputBuiltupLarge',   color: '#1a1a80', label: 'Input: Large Built-up',  group: 'Human Influence'},
   {key: 'inputAgriculture',    color: '#b38f00', label: 'Input: Agriculture',     group: 'Human Influence'},
   {key: 'protectedAreas',      color: '#00cccc', label: 'Input: Protected Areas', group: 'Buffer Exceptions'},
-  {key: 'slope',               color: '#8B4513', label: 'Input: Slope',           group: 'Buffer Exceptions'}
+  {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'}
 ];
 
 function createLegendPanel() {
@@ -4571,7 +4581,7 @@ map2.add(createDisclaimerPanel());
     }
     
     if (enableSlope.getValue())
-      map.addLayer(slopeAreasToKeep.selfMask(), {palette: '#8B4513'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
+      map.addLayer(slopeAreasToKeep.selfMask(), {palette: '#708090'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
     
     // Protected areas analysis (using cached category masks)
     var wdpaYearCutoff = current_year - years_protected;
@@ -4694,7 +4704,7 @@ map2.add(createDisclaimerPanel());
       // Skip refinement — all pre-connectivity forest becomes primary
       largeForestPatches = all_forest_1_1_to_1_3;
     }
-      map.addLayer(largeForestPatches.selfMask(), {palette: 'darkgreen'}, 'Primary Forest', visibleLayers.primaryForest, 1);
+      map.addLayer(largeForestPatches.selfMask(), binary_darkgreen_palette, 'Primary Forest', visibleLayers.primaryForest, 1);
 
     // Additional datasets 
     
