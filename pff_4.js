@@ -1,5 +1,21 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.9";
+var PFF_SCRIPT_VERSION = "4.1.10";
+
+// Changes vs v4.1.9:
+//  - P2.16: Both export-panel "Options" toggles renamed to "Advanced".
+//    A 1-pixel slate-grey horizontal-rule panel separates the in-browser
+//    Download and Drive Export sections (replacing the empty-label spacer).
+//  - P2.15: Legend panel widened from 160 to 180px and toggle button
+//    shrunk from 80 to 72px so the refresh icon stays visible at narrower
+//    panel widths.
+//  - P1.1: FRA comparison line (modules/fraStats.js formatFRA) now reads
+//    "FRA 2025 (YYYY): ..." instead of "FRA (YYYY): ..." -- making clear
+//    that "2025" is the source REPORT version (FAO Forest Resources
+//    Assessment 2025) while the parenthesised year is the data reference
+//    year being compared. Note: fraStats.js is loaded as a GEE script
+//    repo dependency (users/andyarnellgee/apps:modules/fraStats.js); the
+//    local file under modules/ is the source of truth but must also be
+//    pushed to the GEE repo for the change to surface in the app.
 
 // Changes vs v4.1.8:
 //  - P2.14: Primary Forest map layer now uses the named
@@ -1856,11 +1872,11 @@ var driveOptionsContent = ui.Panel({
   style: {shown: false, margin: '0 0 0 4px'}
 });
 var driveOptionsToggle = ui.Button({
-  label: '▸ Options',
+  label: '▸ Advanced',
   onClick: function() {
     var s = driveOptionsContent.style().get('shown');
     driveOptionsContent.style().set({shown: !s});
-    driveOptionsToggle.setLabel(s ? '▸ Options' : '▾ Options');
+    driveOptionsToggle.setLabel(s ? '▸ Advanced' : '▾ Advanced');
   },
   style: {fontSize: '11px', color: '#555', margin: '2px 0', padding: '2px 6px', backgroundColor: '#ffffff'}
 });
@@ -2264,11 +2280,11 @@ var downloadAdvancedContent = ui.Panel({
   style: {shown: false, margin: '0 0 0 4px'}
 });
 var downloadAdvancedToggle = ui.Button({
-  label: '▸ Options',
+  label: '▸ Advanced',
   onClick: function() {
     var s = downloadAdvancedContent.style().get('shown');
     downloadAdvancedContent.style().set({shown: !s});
-    downloadAdvancedToggle.setLabel(s ? '▸ Options' : '▾ Options');
+    downloadAdvancedToggle.setLabel(s ? '▸ Advanced' : '▾ Advanced');
   },
   style: {fontSize: '11px', color: '#555', margin: '2px 0', padding: '2px 6px', backgroundColor: '#ffffff'}
 });
@@ -3092,7 +3108,7 @@ function createLegendPanel() {
 
   var legendContent = ui.Panel({
     widgets: [legendItemsPanel],
-    style: {shown: true, width: '160px', border: '1px solid #ccc', backgroundColor: 'rgba(255, 255, 255, 0.95)'}
+    style: {shown: true, width: '180px', border: '1px solid #ccc', backgroundColor: 'rgba(255, 255, 255, 0.95)'}
   });
 
   var legendRefreshButton = ui.Button({
@@ -3108,7 +3124,7 @@ function createLegendPanel() {
       legendContent.style().set({shown: !isShown});
       legendToggleButton.setLabel(isShown ? '▶ Legend' : '▼ Legend');
     },
-    style: {width: '80px', padding: '4px', margin: '4px'}
+    style: {width: '72px', padding: '4px', margin: '4px'}
   });
 
   return ui.Panel({
@@ -3302,7 +3318,17 @@ var saveDataWidgets = [
   downloadPanel
 ];
 if (!IS_PUBLISHED_APP) {
-  saveDataWidgets.push(ui.Label('', {margin: '6px 0 0 0'})); // spacer
+  // Horizontal-rule-style separator between the in-browser Download and
+  // Drive sections so it's visually clear they are distinct export paths.
+  saveDataWidgets.push(ui.Panel({
+    widgets: [],
+    style: {
+      height: '1px',
+      margin: '8px 0 6px 0',
+      backgroundColor: '#cccccc',
+      stretch: 'horizontal'
+    }
+  }));
   saveDataWidgets.push(ui.Label('Export to Google Drive', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 4px 0', color: '#333'}));
   saveDataWidgets.push(exportRastersPanel);
 }

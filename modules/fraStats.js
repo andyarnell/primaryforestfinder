@@ -423,15 +423,21 @@ exports.getFRA = function(countryName, year) {
 // ── Convenience: format for display ───────────────────
 /**
  * Format FRA stats as a display string.
+ *
+ * The "FRA 2025" prefix names the source REPORT (FAO Forest Resources
+ * Assessment 2025); the parenthesised year names the data reference
+ * year being compared (e.g. 2020 forest area as reported in FRA 2025).
+ * Both are needed so users don't conflate report version with data year.
+ *
  * @param {string} countryName  GAUL 2024 country name
- * @param {number} year  Target year
- * @return {string}  e.g. "FRA: 502,366.9 kha forest, 228,319.5 kha primary, 274,663.3 kha natural"
- *                   or "FRA: not reported"
+ * @param {number} year  Target data year
+ * @return {string}  e.g. "FRA 2025 (2020): 502,366.9 kha forest, ..."
+ *                   or "FRA 2025 (2020): not reported"
  */
 exports.formatFRA = function(countryName, year) {
   var d = exports.getFRA(countryName, year);
   if (d.forestArea === null && d.primaryForest === null && d.naturalForest === null) {
-    return "FRA (" + year + "): not reported";
+    return "FRA 2025 (" + year + "): not reported";
   }
   var parts = [];
   if (d.forestArea !== null) {
@@ -445,7 +451,7 @@ exports.formatFRA = function(countryName, year) {
   } else {
     parts.push("primary: not reported");
   }
-  return "FRA (" + year + "): " + parts.join(", ");
+  return "FRA 2025 (" + year + "): " + parts.join(", ");
 };
 
 exports.FRA_FOREST_AREA = FRA_FOREST_AREA;
