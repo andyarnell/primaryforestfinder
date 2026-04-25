@@ -31,6 +31,9 @@ docs/QGIS Workflow_Ann_Rotich_V0.docx
 # One-off debug comparison scripts (hardcoded local OneDrive paths)
 tests/compare_*.py
 
+# Per-contributor test-data paths (template lives in local_paths.example.py)
+tests/local_paths.py
+
 # SQLite transient lock files (write-ahead log / shared memory)
 *.gpkg-shm
 *.gpkg-wal
