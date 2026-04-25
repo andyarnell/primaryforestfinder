@@ -1,5 +1,13 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.6";
+var PFF_SCRIPT_VERSION = "4.1.7";
+
+// Changes vs v4.1.6:
+//  - IS_APP flag renamed to IS_PUBLISHED_APP for clarity. When true, hides
+//    both the "Export to Google Drive" raster panel AND the "Export
+//    Statistics to Drive" button. Rationale: published-app users typically
+//    lack Drive write permissions, so any Drive export silently fails. The
+//    in-browser "Download to Computer" path remains for both rasters and
+//    stats. (P0.9)
 
 // Changes vs v4.1.1:
 //  • Bugfix: export region now uses .bounds() of the buffered country polygon
@@ -31,9 +39,12 @@ var PFF_SCRIPT_VERSION = "4.1.6";
 // AIM: run decision tree for primary forest delineation
 print('Primary Forest Finder v' + PFF_SCRIPT_VERSION);
 
-// Set to true when publishing as a GEE App (hides Export panel,
-// which requires the Code Editor Tasks tab to function).
-var IS_APP = false;
+// Set to true when publishing as a GEE App. Hides Drive-export UI
+// ("Export to Google Drive" raster panel + "Export Statistics to Drive"
+// button) which requires the Code Editor Tasks tab and Drive write
+// permissions that published-app users typically don't have. The
+// in-browser "Download to Computer" path remains available.
+var IS_PUBLISHED_APP = false;
 
 var latestMaskedForest = {};
 var latestMaskedPrimaryForest = {};
@@ -3130,10 +3141,12 @@ var statsWidgets = [
   statsInfoContent,
   clearStatsButton,
   ui.Panel([statsScaleLabel, statsScaleSlider], ui.Panel.Layout.flow('horizontal'), {stretch: 'horizontal', margin: '0 0 0 8px'}),
-  areaStatsPanel,
-  exportStatsPanel,
-  exportStatusLabel
+  areaStatsPanel
 ];
+if (!IS_PUBLISHED_APP) {
+  statsWidgets.push(exportStatsPanel);
+}
+statsWidgets.push(exportStatusLabel);
 
 var statsContent = ui.Panel({
   widgets: statsWidgets,
@@ -3262,7 +3275,7 @@ var saveDataWidgets = [
   ui.Label('Download to Computer', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 4px 0', color: '#333'}),
   downloadPanel
 ];
-if (!IS_APP) {
+if (!IS_PUBLISHED_APP) {
   saveDataWidgets.push(ui.Label('', {margin: '6px 0 0 0'})); // spacer
   saveDataWidgets.push(ui.Label('Export to Google Drive', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 4px 0', color: '#333'}));
   saveDataWidgets.push(exportRastersPanel);
