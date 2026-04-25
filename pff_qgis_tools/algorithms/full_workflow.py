@@ -65,6 +65,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     AOI = "AOI"
     # -- Parameters --
     TARGET_CRS = "TARGET_CRS"
+    TARGET_CRS_EPSG = "TARGET_CRS_EPSG"
     AUTO_UTM = "AUTO_UTM"
     AOI_BUFFER = "AOI_BUFFER"
     ROADS_DIST = "ROADS_DIST"
@@ -217,6 +218,15 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.TARGET_CRS,
             "Target projected CRS (ignored when Auto UTM is ticked)",
             defaultValue="EPSG:32717"))
+        # Optional EPSG-string fallback. Workshop users sometimes can't find
+        # the right CRS via the picker (no Choose button on QGIS-LTR; obscure
+        # zones); typing "EPSG:32628" here overrides the picker entirely.
+        self.addParameter(QgsProcessingParameterString(
+            self.TARGET_CRS_EPSG,
+            "OR target CRS as EPSG string (e.g. 'EPSG:32628') -- overrides "
+            "the picker above when non-empty. Ignored when Auto UTM is ticked.",
+            defaultValue="",
+            optional=True))
         # AOI buffer distance — rarely tuned; stowed under Advanced.
         _aoi_buf_param = QgsProcessingParameterNumber(
             self.AOI_BUFFER,
@@ -351,7 +361,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.41"
+    PFF_VERSION = "0.8.42"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -467,17 +477,49 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.FOREST_RASTER, context)
         aoi_layer = self.parameterAsVectorLayer(parameters, self.AOI, context)
 
+        from qgis.core import (
+            QgsCoordinateReferenceSystem,
+            QgsProcessingException,
+        )
+
+        # CRS resolution priority: AUTO_UTM > TARGET_CRS_EPSG (if non-empty)
+        # > TARGET_CRS picker. The EPSG-string fallback exists because the
+        # QGIS CRS picker is fiddly on some installs (no Choose button on
+        # older QGIS-LTR) and workshop users get stuck.
+        target_crs_epsg_str = (self.parameterAsString(
+            parameters, self.TARGET_CRS_EPSG, context) or "").strip()
+
         if auto_utm:
             target_crs_str = _detect_utm_zone(forest_layer, aoi_layer, feedback)
+            crs_source = "Auto UTM"
+        elif target_crs_epsg_str:
+            # Validate the typed string before trusting it.
+            candidate = QgsCoordinateReferenceSystem(target_crs_epsg_str)
+            if not candidate.isValid():
+                raise QgsProcessingException(
+                    f"TARGET_CRS_EPSG '{target_crs_epsg_str}' is not a valid "
+                    "CRS authority string. Expected format e.g. 'EPSG:32628'.")
+            target_crs_str = candidate.authid() or target_crs_epsg_str
+            crs_source = f"EPSG-string field ('{target_crs_epsg_str}')"
         else:
             target_crs = self.parameterAsCrs(
                 parameters, self.TARGET_CRS, context)
             target_crs_str = target_crs.authid()
+            crs_source = "CRS picker"
 
-        from qgis.core import QgsCoordinateReferenceSystem
         target_crs = QgsCoordinateReferenceSystem(target_crs_str)
 
-        feedback.pushInfo(f"Target CRS: {target_crs_str}")
+        # Validate the resolved CRS is projected (metres). Distance / area
+        # operations downstream silently produce wrong values on geographic
+        # CRS, so fail loud here.
+        if target_crs.isGeographic():
+            raise QgsProcessingException(
+                f"Resolved target CRS '{target_crs_str}' is geographic "
+                "(degrees). Choose a projected CRS in metres -- e.g. a UTM "
+                "zone, a continental equal-area projection, or your country's "
+                "national grid.")
+
+        feedback.pushInfo(f"Target CRS: {target_crs_str} (source: {crs_source})")
 
         # All non-headline outputs (caches + tier rasters) nest under intermediates/.
         # Headlines (primary_forest, pre_connectivity_forest, forest_natreg,
