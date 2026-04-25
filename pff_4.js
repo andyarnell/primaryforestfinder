@@ -1,5 +1,5 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.5";
+var PFF_SCRIPT_VERSION = "4.1.6";
 
 // Changes vs v4.1.1:
 //  • Bugfix: export region now uses .bounds() of the buffered country polygon
