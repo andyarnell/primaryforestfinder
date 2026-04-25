@@ -1,5 +1,19 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.13";
+var PFF_SCRIPT_VERSION = "4.1.14";
+
+// Changes vs v4.1.13:
+//  - P0.10 stats button hygiene:
+//    * statsScaleSlider onChange now marks the Show Area Statistics
+//      button stale (was a no-op). The slider only affects stats
+//      reduction, not analysis cache, so it doesn't trigger
+//      markNeedsUpdate -- just paints the stats * directly.
+//    * Show Area Statistics now prepends an "⚠ Analysis is OUT OF DATE"
+//      warning row when needsUpdate=true. Previously the user could
+//      change a slider, click Show Stats, and silently see numbers
+//      computed from stale forest cache as if they were current.
+//    Audit findings (no change needed): country/year selectors call
+//    updateMap() directly so they don't need a stale flag; threshold
+//    sliders + buffer sliders + checkboxes already hook markNeedsUpdate.
 
 // Changes vs v4.1.12:
 //  - P1.6 + P1.7 (combined): per-run metadata bundle JSON.
@@ -1302,6 +1316,17 @@ var showStatsButton = ui.Button({
       areaStatsPanel.add(ui.Label('No forest data available. Please wait for the map to load first.'));
       return;
     }
+    // P0.10 stale-stats warning: if a parameter was changed since the
+    // last analysis run, the cached forest layers are out of date and
+    // the stats below will reflect the OLD parameters, not what's
+    // currently set in the UI. Prompt the user to re-run analysis.
+    if (needsUpdate) {
+      areaStatsPanel.add(ui.Label(
+        '⚠ Analysis is OUT OF DATE (parameters changed since last run). ' +
+        'Stats below reflect the previous run. Click "↻ Update Analysis" ' +
+        'and re-run "↻ Show Area Statistics" for current numbers.',
+        {color: '#b58105', fontSize: '11px', fontWeight: 'bold', margin: '0 0 6px 0'}));
+    }
     var selectedCountry = countrySelector.getValue();
     areaStatsPanel.add(ui.Label(selectedCountry, {fontWeight: 'bold'}));
     var statsScale = statsScaleSlider.getValue();
@@ -1436,11 +1461,15 @@ var clearStatsButton = ui.Button({
 
 
 
-// Shared scale slider for both on-the-fly and export statistics
+// Shared scale slider for both on-the-fly and export statistics.
+// Marks Stats button stale on change; doesn't touch the analysis cache
+// (the scale only affects stats reduction, not the per-pixel analysis).
 var statsScaleSlider = ui.Slider({
   min: 30, max: 3000, value: 900, step: 30,
   style: {margin: '0 0 6px 0', stretch: 'horizontal'},
-  onChange: function() {}
+  onChange: function() {
+    showStatsButton.setLabel('↻ Show Area\nStatistics *');
+  }
 });
 var statsScaleLabel = ui.Label('Resolution (m):', {margin: '0 8px 0 0'});
 
