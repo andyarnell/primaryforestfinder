@@ -394,7 +394,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.49"
+    PFF_VERSION = "0.8.50"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -409,6 +409,15 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         _pff_last_stage = {"name": None, "t": _pff_t_start}
 
         def _stage(name):
+            # P2.6: every stage transition is a graceful cancel point. If
+            # the user clicked Cancel during the previous stage, raise here
+            # with a clear "Cancelled by user" message instead of cascading
+            # into the next stage and erroring on a half-finished file.
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (between stages -- no half-written "
+                    "outputs from the new stage).")
             last = _pff_last_stage["name"]
             if last:
                 elapsed = _pff_time.monotonic() - _pff_last_stage["t"]
@@ -877,15 +886,26 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 feedback.pushDebugInfo(
                     f"Could not check roads raster resolution: {_e}")
 
-        # Raster inputs override vectors when both are provided
-        # Process sequentially with GC between to avoid GDAL memory buildup
+        # Raster inputs override vectors when both are provided.
+        # Process sequentially with GC + cancel checks between -- prep on
+        # national rasters can run minutes per layer, so let cancel land
+        # between layers without waiting for the full anthro batch.
         import gc
         roads_raster = _prep_raster(self.ROADS_RASTER, "roads")
         gc.collect()
+        if feedback.isCanceled():
+            from qgis.core import QgsProcessingException
+            raise QgsProcessingException("Cancelled by user (after roads prep).")
         builtup_small_raster = _prep_raster(self.BUILTUP_SMALL_RASTER, "builtup_small")
         gc.collect()
+        if feedback.isCanceled():
+            from qgis.core import QgsProcessingException
+            raise QgsProcessingException("Cancelled by user (after builtup_small prep).")
         builtup_large_raster = _prep_raster(self.BUILTUP_LARGE_RASTER, "builtup_large")
         gc.collect()
+        if feedback.isCanceled():
+            from qgis.core import QgsProcessingException
+            raise QgsProcessingException("Cancelled by user (after builtup_large prep).")
         agri_raster = _prep_raster(self.AGRICULTURE_RASTER, "agriculture")
         gc.collect()
 
@@ -1092,7 +1112,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         dist_paths = {}
         for name, raster_path in rasters.items():
             if feedback.isCanceled():
-                break
+                # Was: silent break (continued into Stage 3 with partial
+                # dist_paths and produced nonsense). Now raises so cancel
+                # honoured loudly.
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    f"Cancelled by user (during distance surfaces, "
+                    f"before completing '{name}').")
             if raster_path is None:
                 continue
             if not enable_buffers.get(name, True):
@@ -1138,7 +1164,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         combined_mask = np.zeros((y_size, x_size), dtype=np.uint8)
         for name, dp in dist_paths.items():
             if feedback.isCanceled():
-                break
+                # Was: silent break (then wrote a half-built anthro mask).
+                # Now raises so cancel honoured loudly.
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    f"Cancelled by user (during anthropogenic mask, "
+                    f"before applying '{name}' threshold).")
             thresh = thresholds.get(name, 0)
             if thresh <= 0:
                 continue
