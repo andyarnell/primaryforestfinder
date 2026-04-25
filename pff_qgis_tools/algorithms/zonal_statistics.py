@@ -27,6 +27,7 @@ from qgis.core import (
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFileDestination,
     QgsProcessingParameterField,
+    QgsProcessingParameterNumber,
     QgsCoordinateReferenceSystem,
 )
 
@@ -44,11 +45,15 @@ from ..defaults import class_label
 def compute_zonal_stats(ref_raster_path, raster_paths=None,
                         zone_layer_path=None, zone_field=None,
                         target_crs_str=None, work_dir=None,
+                        year=None,
                         context=None, feedback=None):
     """Compute area in kha for each binary raster.
 
     Without a zone layer, returns a single-row total.
     With a zone layer, returns one row per zone.
+
+    Pass `year` (int) to prepend a `year` column to every result row --
+    useful for downstream multi-year aggregations / time-series CSVs.
 
     Returns (results, totals) where:
       results = list[dict]  (per-zone or single-row)
@@ -74,7 +79,10 @@ def compute_zonal_stats(ref_raster_path, raster_paths=None,
 
     # -- No zones: single total --
     if zone_layer_path is None:
-        row = {"zone_name": "TOTAL"}
+        row = {}
+        if year is not None:
+            row["year"] = int(year)
+        row["zone_name"] = "TOTAL"
         for label, arr in loaded.items():
             if feedback:
                 feedback.pushInfo(f"  Calculating {label} area...")
@@ -174,7 +182,11 @@ def compute_zonal_stats(ref_raster_path, raster_paths=None,
             break
         z_mask = (zone_arr == z_id)
         zone_name = zone_names.get(int(z_id), str(int(z_id)))
-        row = {"zone_id": int(z_id), "zone_name": zone_name}
+        row = {}
+        if year is not None:
+            row["year"] = int(year)
+        row["zone_id"] = int(z_id)
+        row["zone_name"] = zone_name
         for label, arr in loaded.items():
             count = int((arr[z_mask] == 1).sum())
             kha = round(count * pixel_area_kha, 1)
@@ -197,11 +209,22 @@ def write_zonal_csv(results, totals, csv_path, feedback=None):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
-        # Totals row
+        # Totals row -- preserve year column if present, blank zone_id,
+        # set zone_name to TOTAL, fill kha values from totals dict.
         if len(results) > 1:
-            total_row = {fieldnames[0]: "", "zone_name": "TOTAL"}
-            for k, v in totals.items():
-                total_row[f"{k}_kha"] = v
+            total_row = {}
+            if "year" in fieldnames:
+                total_row["year"] = results[0]["year"]
+            for fn in fieldnames:
+                if fn == "year":
+                    continue
+                if fn == "zone_name":
+                    total_row[fn] = "TOTAL"
+                elif fn.endswith("_kha"):
+                    label = fn[:-4]
+                    total_row[fn] = totals.get(label, "")
+                else:
+                    total_row[fn] = ""
             writer.writerow(total_row)
     if feedback:
         feedback.pushInfo(f"CSV written: {csv_path}")
@@ -270,6 +293,7 @@ class ZonalStatisticsAlgorithm(QgsProcessingAlgorithm):
     PRIMARY_FOREST = "PRIMARY_FOREST"
     PRE_CONNECTIVITY = "PRE_CONNECTIVITY"
     INPUT_FOREST = "INPUT_FOREST"
+    YEAR = "YEAR"
     USE_ZONES = "USE_ZONES"
     ZONE_LAYER = "ZONE_LAYER"
     ZONE_FIELD = "ZONE_FIELD"
@@ -315,6 +339,17 @@ class ZonalStatisticsAlgorithm(QgsProcessingAlgorithm):
             self.INPUT_FOREST,
             "Input forest raster (binary)",
             optional=True))
+        # Optional year tag -- prepended as a 'year' column to every CSV
+        # row when set. Useful for stitching multi-year runs into a
+        # single time-series CSV downstream.
+        _year_param = QgsProcessingParameterNumber(
+            self.YEAR,
+            "Year (optional, integer; written as a 'year' column in CSV)",
+            type=QgsProcessingParameterNumber.Integer,
+            optional=True,
+            defaultValue=None,
+            minValue=1900, maxValue=2100)
+        self.addParameter(_year_param)
 
         self.addParameter(QgsProcessingParameterBoolean(
             self.USE_ZONES,
@@ -379,12 +414,22 @@ class ZonalStatisticsAlgorithm(QgsProcessingAlgorithm):
             os.path.dirname(csv_path or pf_layer.source()),
             "_pff_zonal_work"))
 
+        # Year is optional -- parameterAsInt returns 0 when unset for an
+        # optional Number param, so explicitly check the parameters dict
+        # for the key presence to distinguish "not set" from "set to 0".
+        year_val = parameters.get(self.YEAR)
+        if year_val in (None, "", 0):
+            year_val = None
+        else:
+            year_val = int(year_val)
+
         results, totals = compute_zonal_stats(
             ref_raster_path=pf_layer.source(),
             raster_paths=raster_paths,
             zone_layer_path=zone_path,
             zone_field=zone_field,
             work_dir=work_dir,
+            year=year_val,
             context=context,
             feedback=feedback,
         )
