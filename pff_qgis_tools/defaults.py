@@ -22,3 +22,47 @@ SLOPE_THRESHOLD = 45  # degrees
 # Refine Output (connectivity filter)
 SMOOTH_RADIUS = 2000  # metres
 DENSITY_THRESHOLD = 0.5  # 0-1
+
+
+# ---------------------------------------------------------------------------
+# Canonical PFF class registry.
+#
+# Single source of truth for the human-readable labels and (eventually) the
+# numeric class codes used in the optional combined coded raster output.
+#
+# String labels are wired in now; numeric `code` slots are parked until the
+# coded-raster pyramiding artefact decision (planning task 15) lands.
+# ---------------------------------------------------------------------------
+PFF_CLASSES = {
+    "forest": {
+        "label": "Forest",
+        "filename": "forest.tif",
+    },
+    "forest_natreg": {
+        "label": "Naturally regenerating forest",
+        "filename": "forest_natreg.tif",
+    },
+    "pre_connectivity_forest": {
+        "label": "Pre-connectivity forest",
+        "filename": "pre_connectivity_forest.tif",
+    },
+    "primary_forest": {
+        "label": "Primary forest",
+        "filename": "primary_forest.tif",
+    },
+    "input_forest": {
+        "label": "Input forest",
+        "filename": "forest.tif",
+    },
+}
+
+
+def class_label(key: str) -> str:
+    """Return the canonical human-readable label for a PFF class key.
+
+    Falls back to the key itself if not registered, so existing call sites
+    that pass arbitrary strings (zone-stats column names, etc.) don't break
+    when migrated piecemeal.
+    """
+    entry = PFF_CLASSES.get(key)
+    return entry["label"] if entry else key

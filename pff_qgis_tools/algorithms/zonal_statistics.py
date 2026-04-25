@@ -36,6 +36,7 @@ from ..utils import (
     reproject_vector,
     run_processing,
 )
+from ..defaults import class_label
 
 
 # ── Reusable core ────────────────────────────────────────────────────
@@ -389,11 +390,14 @@ class ZonalStatisticsAlgorithm(QgsProcessingAlgorithm):
         )
 
         # -- Print headline totals --
+        # Map raw class keys (primary_forest, ...) to friendly labels via the
+        # canonical PFF_CLASSES registry in defaults.py. CSV column names
+        # remain the raw keys -- only the run-log display switches.
         if totals:
             feedback.pushInfo("")
             feedback.pushInfo("========================================")
             for label, kha in totals.items():
-                feedback.pushInfo(f"  {label}: {kha} kha")
+                feedback.pushInfo(f"  {class_label(label)}: {kha} kha")
             feedback.pushInfo("========================================")
             feedback.pushInfo("")
         elif results:
@@ -404,7 +408,7 @@ class ZonalStatisticsAlgorithm(QgsProcessingAlgorithm):
                 key = f"{label}_kha"
                 if key in results[0]:
                     feedback.pushInfo(
-                        f"  {label}: {results[0][key]} kha")
+                        f"  {class_label(label)}: {results[0][key]} kha")
             feedback.pushInfo("========================================")
             feedback.pushInfo("")
 
