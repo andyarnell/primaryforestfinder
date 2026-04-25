@@ -1,5 +1,19 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.7";
+var PFF_SCRIPT_VERSION = "4.1.8";
+
+// Changes vs v4.1.7:
+//  - FRA terminology renames (P0.13b, completes 14b rename table):
+//    * Slider labels: "Hansen Cover (%) >" -> "Tree canopy threshold (%):";
+//      "GLAD Height (m) >" -> "Tree height threshold (m):". Source-agnostic
+//      wording (these sliders also drive Agreement / Combined extent).
+//    * Stats display labels: "Total Treecover (incl. plantations)" ->
+//      "Forest"; "Total Treecover (excl. plantations)" -> "Naturally
+//      regenerating forest". Matches FRA cascade.
+//    * Download dropdown: "Tier 0: Input Treecover (raw Hansen)" ->
+//      "Tier 0: Input forest cover (before thresholding)". Source-agnostic.
+//    Stats CSV column headers ("Treecover Threshold (%)", "GLAD Treecover
+//    Height (m)") preserved as downstream-consumer contracts. "Primary
+//    Forest" capitalization preserved for layer-key string-equality checks.
 
 // Changes vs v4.1.6:
 //  - IS_APP flag renamed to IS_PUBLISHED_APP for clarity. When true, hides
@@ -1166,17 +1180,19 @@ function processForestAreaStats(image, name, year, scale, exportToDrive, country
       }
     });
   } else {
-    // Only include relevant thresholds for each dataset
-    var isHansen = name.indexOf('Treecover') !== -1;
-    var isGlad = name.indexOf('Primary Forest') !== -1;
+    // Only include relevant thresholds for each dataset.
+    // After 14b rename: forest stats rows are "Forest" / "Naturally
+    // regenerating forest"; primary row stays "Primary Forest".
+    var isPrimary = name.indexOf('Primary Forest') !== -1;
+    var isForestRow = !isPrimary;
     var feature = ee.Feature(null, {
       'Country': countryName,
       'Year': year,
       'Forest Type': name,
       'Area (sq km)': totalArea.divide(1e6),
       'Resolution (m)': scale,
-      "Treecover Threshold (%)": isHansen ? treecoverThresholdSlider.getValue() : '',
-      'GLAD Treecover Height (m)': isGlad ? treecoverHeightThresholdSlider.getValue() : '',
+      "Treecover Threshold (%)": isForestRow ? treecoverThresholdSlider.getValue() : '',
+      'GLAD Treecover Height (m)': isPrimary ? treecoverHeightThresholdSlider.getValue() : '',
       "Road Small Buffer (m)": roadSmallBufferSlider.getValue(),
       "Built-Up Small Buffer (m)": builtUpSmallBufferSlider.getValue(),
       "Built-Up Large Buffer (m)": builtUpLargeBufferSlider.getValue(),
@@ -1245,7 +1261,7 @@ var showStatsButton = ui.Button({
         }
       };
 
-      var treecoverLabel = includePlantationsCheckbox.getValue() ? 'Total Treecover (excl. plantations)' : 'Total Treecover (incl. plantations)';
+      var treecoverLabel = includePlantationsCheckbox.getValue() ? 'Naturally regenerating forest' : 'Forest';
       processForestAreaStats(latestMaskedForest[year], treecoverLabel, yearInt, statsScale, false, selectedCountry, yearPanel, function() {
         if (latestMaskedPrimaryForest[year]) {
           calcLabel.setValue('  Calculating primary forest area...');
@@ -1378,7 +1394,7 @@ var exportStatsButton = ui.Button({
     var exportScale = statsScaleSlider.getValue();
     Object.keys(latestMaskedForest).forEach(function(year) {
       var yearInt = parseInt(year);
-      var treecoverLabel = includePlantationsCheckbox.getValue() ? 'Total Treecover (excl. plantations)' : 'Total Treecover (incl. plantations)';
+      var treecoverLabel = includePlantationsCheckbox.getValue() ? 'Naturally regenerating forest' : 'Forest';
       processForestAreaStats(latestMaskedForest[year], treecoverLabel, yearInt, exportScale, true, selectedCountry);
       if (latestMaskedPrimaryForest[year]) {
         processForestAreaStats(latestMaskedPrimaryForest[year], "Primary Forest", yearInt, exportScale, true, selectedCountry);
@@ -1858,14 +1874,14 @@ var dlModule = require('users/andyarnellgee/apps:modules/downloadViaUrl.js');
 
 var downloadLayerSelect = ui.Select({
   items: [
-    'Tier 0: Input Treecover (raw Hansen)',
+    'Tier 0: Input forest cover (before thresholding)',
     'Tier 1: Undisturbed (outside buffers)',
     'Tier 2: Steep Slope in Buffer',
     'Tier 3: Protected in Buffer',
     'Tier 4: Pre-connectivity Forest',
     'Primary Forest (final mask)'
   ],
-  value: 'Tier 0: Input Treecover (raw Hansen)',
+  value: 'Tier 0: Input forest cover (before thresholding)',
   style: {margin: '0 0 4px 0', stretch: 'horizontal'}
 });
 var downloadScaleSlider = ui.Slider({
@@ -2003,7 +2019,7 @@ function downloadLayer() {
   var layerChoice = downloadLayerSelect.getValue();
   var sourceDict;
   var nameBase;
-  if (layerChoice === 'Tier 0: Input Treecover (raw Hansen)') {
+  if (layerChoice === 'Tier 0: Input forest cover (before thresholding)') {
     sourceDict = latestMaskedForest;
     nameBase = 'tier0_treecover';
   } else if (layerChoice === 'Tier 1: Undisturbed (outside buffers)') {
@@ -2343,7 +2359,7 @@ showHideWdpaCheckboxes(false);
 var treecoverPanel = ui.Panel({
   layout: ui.Panel.Layout.flow('horizontal'),
   widgets: [
-    ui.Label('Hansen Cover (%) >', {margin: '6px 2px 0 0'}),
+    ui.Label('Tree canopy threshold (%):', {margin: '6px 2px 0 0'}),
     treecoverThresholdSlider
   ],
   style: {margin: '0px', shown: false}
@@ -2352,7 +2368,7 @@ var treecoverPanel = ui.Panel({
 var treecoverHeightPanel = ui.Panel({
   layout: ui.Panel.Layout.flow('horizontal'),
   widgets: [
-    ui.Label('GLAD Height (m) >', {margin: '6px 2px 0 0'}),
+    ui.Label('Tree height threshold (m):', {margin: '6px 2px 0 0'}),
     treecoverHeightThresholdSlider
   ],
   style: {margin: '0px', shown: true}
