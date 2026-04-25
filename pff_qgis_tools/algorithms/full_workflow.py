@@ -361,7 +361,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.42"
+    PFF_VERSION = "0.8.43"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -623,7 +623,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # so prepared/ shows only the 9 user-reusable inputs.
         aoi_mask = None
         if aoi_layer is not None:
-            feedback.pushInfo("Buffering AOI...")
+            feedback.pushInfo(
+                f"Buffering AOI by {aoi_buffer_dist:g} m "
+                "(extends analysis past the boundary so edge-of-country "
+                "anthropogenic features still influence buffers)...")
             aoi_workspace = ensure_dir(os.path.join(prepared_dir, "_aoi"))
             # Use .shp for reproject to avoid gpkg FID uniqueness dropping features
             aoi_reproj_raw = os.path.join(aoi_workspace, "aoi_reproj_raw.shp")
@@ -1133,7 +1136,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Tier 2 -- steep slope forest (GEE canonical name: tier2_steep)
         tier2_steep = np.zeros_like(forest)
         if steep is not None:
-            feedback.pushInfo("Tier 2 -- steep slope forest...")
+            feedback.pushInfo(
+                f"Tier 2 -- steep slope forest (slope >= {slope_thresh:g} deg)...")
             tier2_steep = (
                 (forest_inside_buffers == 1) & (steep == 1)
             ).astype(np.uint8)
