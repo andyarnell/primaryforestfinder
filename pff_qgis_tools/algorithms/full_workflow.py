@@ -393,7 +393,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.47"
+    PFF_VERSION = "0.8.48"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -857,8 +857,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                         f"Roads raster resolution is {_roads_res:g} m -- "
                         f"coarser than ~{_ROADS_THIN_FEATURE_WARN_M} m. "
                         "Linear features (roads / tracks) are likely under-"
-                        "represented at this resolution. Re-export at finer "
-                        "resolution if road buffers matter for your analysis.")
+                        "represented at this resolution. If road buffers "
+                        "matter for your analysis, either re-export at "
+                        "finer resolution OR supply roads as a vector "
+                        "input (vectors get rasterised to the reference "
+                        "grid, so no thin-feature loss).")
             except Exception as _e:
                 # Resolution check is advisory; never block the run.
                 feedback.pushDebugInfo(
