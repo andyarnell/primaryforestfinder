@@ -361,10 +361,38 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.43"
+    PFF_VERSION = "0.8.44"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
+
+        # Per-stage timing. _stage() closes the previous stage timer and
+        # opens a new one; _close_last_stage() flushes the final stage
+        # before the metadata write at the end. Times collected into
+        # _pff_stage_times for run_metadata.json.
+        import time as _pff_time
+        _pff_t_start = _pff_time.monotonic()
+        _pff_stage_times = {}
+        _pff_last_stage = {"name": None, "t": _pff_t_start}
+
+        def _stage(name):
+            last = _pff_last_stage["name"]
+            if last:
+                elapsed = _pff_time.monotonic() - _pff_last_stage["t"]
+                _pff_stage_times[last] = round(elapsed, 2)
+                feedback.pushInfo(f"  [{last} took {elapsed:.1f}s]")
+            _pff_last_stage["name"] = name
+            _pff_last_stage["t"] = _pff_time.monotonic()
+            feedback.pushInfo(f"=== {name} ===")
+
+        def _close_last_stage():
+            last = _pff_last_stage["name"]
+            if last:
+                elapsed = _pff_time.monotonic() - _pff_last_stage["t"]
+                _pff_stage_times[last] = round(elapsed, 2)
+                feedback.pushInfo(f"  [{last} took {elapsed:.1f}s]")
+                _pff_last_stage["name"] = None
+
         out_dir = ensure_dir(
             self.parameterAsString(parameters, self.OUTPUT_FOLDER, context))
         save_combined = self.parameterAsBool(
@@ -581,7 +609,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  STAGE 1 -- Prepare datasets
         # ================================================================
-        feedback.pushInfo("=== STAGE 1: Prepare Datasets ===")
+        _stage("STAGE 1: Prepare Datasets")
 
         validate_crs_projected(forest_layer, feedback)
         forest_src = forest_layer.source()
@@ -982,7 +1010,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  STAGE 2 -- Distance surfaces
         # ================================================================
-        feedback.pushInfo("=== STAGE 2: Distance Surfaces ===")
+        _stage("STAGE 2: Distance Surfaces")
         if reuse_distances:
             feedback.pushInfo("  Reuse ticked: existing dist_*.tif will be reused if the grid matches.")
         else:
@@ -1029,7 +1057,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  STAGE 3 -- Anthropogenic mask
         # ================================================================
-        feedback.pushInfo("=== STAGE 3: Anthropogenic Mask ===")
+        _stage("STAGE 3: Anthropogenic Mask")
 
         # Read reference dimensions
         ref_ds = gdal.Open(reference, gdal.GA_ReadOnly)
@@ -1060,7 +1088,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  STAGE 4 -- Primary forest tiers
         # ================================================================
-        feedback.pushInfo("=== STAGE 4: Primary Forest Logic ===")
+        _stage("STAGE 4: Primary Forest Logic")
 
         forest_ds = gdal.Open(reference, gdal.GA_ReadOnly)
         forest = forest_ds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
@@ -1172,7 +1200,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Aligned naming: primary_forest (matches pFF_4 GEE export name)
         final_path = os.path.join(out_dir, "primary_forest.tif")
         if enable_refine_output and smooth_radius > 0:
-            feedback.pushInfo("=== STAGE 5: Refine Output ===")
+            _stage("STAGE 5: Refine Output")
             from .connectivity_filter import refine_output
             fast_approx = self.parameterAsBool(
                 parameters, self.FAST_APPROXIMATION, context)
@@ -1216,7 +1244,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.RUN_ZONAL_STATS, context)
 
         if run_zonal:
-            feedback.pushInfo("=== STAGE 6: Zonal Statistics ===")
+            _stage("STAGE 6: Zonal Statistics")
 
             from .zonal_statistics import (
                 compute_zonal_stats, write_zonal_csv,
@@ -1287,11 +1315,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  Write run metadata
         # ================================================================
+        _close_last_stage()
+        _pff_total_runtime = round(_pff_time.monotonic() - _pff_t_start, 2)
+        feedback.pushInfo(f"Total runtime: {_pff_total_runtime:.1f}s")
+
         import json
         from datetime import datetime
         metadata = {
             "pff_version": self.PFF_VERSION,
             "timestamp": datetime.now().isoformat(),
+            "runtime_seconds": _pff_total_runtime,
+            "stage_runtimes_seconds": _pff_stage_times,
             "target_crs": target_crs_str,
             "parameters": {
                 "aoi_buffer_m": aoi_buffer_dist,

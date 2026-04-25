@@ -147,6 +147,7 @@ def compute_zonal_stats(ref_raster_path, raster_paths=None,
         "NODATA": -1,
         "DATA_TYPE": 4,         # Int32 (supports -1)
         "INIT": -1,
+        "OPTIONS": "COMPRESS=LZW|TILED=YES",
         "OUTPUT": zone_ras,
     }, context=context, feedback=feedback)
 
