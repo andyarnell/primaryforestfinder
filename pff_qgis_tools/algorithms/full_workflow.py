@@ -118,6 +118,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "5. Refine output (neighbourhood density filter)\n\n"
             "Auto UTM: when enabled, the plugin detects the appropriate "
             "UTM zone from the AOI or forest raster centroid.\n\n"
+            "Speed vs detail:\n"
+            "  Workflow runtime scales roughly linearly with raster pixel "
+            "count -- doubling resolution (e.g. 60m -> 30m) ~quadruples "
+            "runtime. Coarser is faster but loses detail. Linear features "
+            "(roads, tracks, narrow rivers) are 1-pixel-wide; at "
+            "resolutions coarser than ~45m they get under-represented "
+            "during rasterisation, so road buffers may miss segments. "
+            "If road buffers matter for your analysis, export at <=30m. "
+            "If you only care about built-up / agriculture / protection, "
+            "60-100m is usually fine and much faster.\n\n"
             "Output folder layout:\n"
             "  <out>/primary_forest.tif, pre_connectivity_forest.tif,\n"
             "        forest_natreg.tif (if plantations), anthropogenic_mask.tif,\n"
@@ -383,7 +393,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.45"
+    PFF_VERSION = "0.8.46"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -830,6 +840,29 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         # Limit GDAL cache to avoid memory pressure on large rasters
         gdal.SetCacheMax(512 * 1024 * 1024)  # 512 MB
+
+        # Thin-feature resolution warning: roads (and to a lesser extent
+        # waterways) are 1-pixel-wide linear features. At raster resolutions
+        # coarser than ~45 m, single-cell roads disappear into surrounding
+        # cells (the rasterisation collapses the geometry). Warn loud so the
+        # user knows their roads input may under-represent the network.
+        _ROADS_THIN_FEATURE_WARN_M = 45
+        _user_roads_layer = self.parameterAsRasterLayer(
+            parameters, self.ROADS_RASTER, context)
+        if _user_roads_layer is not None:
+            try:
+                _roads_res = raster_resolution(_user_roads_layer.source())
+                if _roads_res > _ROADS_THIN_FEATURE_WARN_M:
+                    feedback.pushWarning(
+                        f"Roads raster resolution is {_roads_res:g} m -- "
+                        f"coarser than ~{_ROADS_THIN_FEATURE_WARN_M} m. "
+                        "Linear features (roads / tracks) are likely under-"
+                        "represented at this resolution. Re-export at finer "
+                        "resolution if road buffers matter for your analysis.")
+            except Exception as _e:
+                # Resolution check is advisory; never block the run.
+                feedback.pushDebugInfo(
+                    f"Could not check roads raster resolution: {_e}")
 
         # Raster inputs override vectors when both are provided
         # Process sequentially with GC between to avoid GDAL memory buildup
