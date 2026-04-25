@@ -1,5 +1,16 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.11";
+var PFF_SCRIPT_VERSION = "4.1.12";
+
+// Changes vs v4.1.11:
+//  - P0.8 master toggle: new "Add input + buffer layers to map" checkbox
+//    in the Human Influence section (default OFF). When unchecked, the
+//    11 input/buffer/exception layers (Plantations, Slope, Protected
+//    Areas, 4 Buffer:* and 4 Input:* layers) are NOT added to the map
+//    -- keeps the EE Layers dropdown tidy at first paint. Per-layer
+//    enable* checkboxes still control whether the layer is computed;
+//    this toggle only controls map-add. markNeedsUpdate on change so
+//    next Update Analysis honours the new state. Saved/loaded with
+//    settings as 'Add Input Layers To Map'.
 
 // Changes vs v4.1.10:
 //  - P0.8: Default visible layers expanded to include the input forest
@@ -2724,6 +2735,17 @@ var enableSlope = ui.Checkbox({
   }
 });
 
+// Master "add to map" toggle for all input + buffer + exception layers.
+// Off by default to keep the EE Layers dropdown tidy; tick + Update
+// Analysis to surface them. Independent of the per-layer enable* flags
+// (which control whether the layer is COMPUTED). This only controls
+// whether the layer is ADDED to the map.
+var addInputLayersToMap = ui.Checkbox({
+  label: 'Add input + buffer layers to map',
+  value: false,
+  onChange: markNeedsUpdate
+});
+
 var protectedControls = ui.Panel({
   widgets: [
     createCompactRow('IUCN Categories:', wdpaPresetSelect),
@@ -2819,6 +2841,7 @@ var enableCustomDataCheckbox = ui.Checkbox({
 var anthropogenicContent = ui.Panel({
   widgets: [
     ui.Label('Define Human Influence (m):', {fontWeight: 'bold', margin: '0 0 4px 0'}),
+    addInputLayersToMap,
     useMasterBufferCheckbox,
     masterBufferRow,
     roadsToggle.row,
@@ -3442,7 +3465,8 @@ function collectSettings() {
     'Enable Agriculture Buffer': enableAgriBuffer.getValue(),
     'Enable Slope': enableSlope.getValue(),
     'Enable Protected Areas': enableProtectedAreas.getValue(),
-    'Enable Refine Output': enableRefineOutput.getValue()
+    'Enable Refine Output': enableRefineOutput.getValue(),
+    'Add Input Layers To Map': addInputLayersToMap.getValue()
   };
 
   // Add custom forest asset inputs if used
@@ -3598,6 +3622,7 @@ function applySettings(settings) {
   if (settings['Enable Slope'] !== undefined) enableSlope.setValue(settings['Enable Slope']);
   if (settings['Enable Protected Areas'] !== undefined) enableProtectedAreas.setValue(settings['Enable Protected Areas']);
   if (settings['Enable Refine Output'] !== undefined) enableRefineOutput.setValue(settings['Enable Refine Output']);
+  if (settings['Add Input Layers To Map'] !== undefined) addInputLayersToMap.setValue(settings['Add Input Layers To Map']);
   slopeToKeepSlider.setValue(settings['Slope to keep (degrees)']);
   // otherNatBufferSlider.setValue(settings['Other Natural Buffer (m)']);
   smoothRadiusForestSlider.setValue(settings['Forest Smoothing Radius (m)']);
@@ -4357,7 +4382,8 @@ map2.add(createDisclaimerPanel());
 
     // map.addLayer(country_and_buffer_mask,'',"country_and_buffer_mask")
 
-    map.addLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Plantations', visibleLayers.plantations, 0.7);
+    if (addInputLayersToMap.getValue())
+      map.addLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Plantations', visibleLayers.plantations, 0.7);
     // map.addLayer(pastureDatasetSel,"","pastureDatasetSel")
     // map.addLayer(croplandComb,"","croplandComb")
 
@@ -4562,24 +4588,29 @@ map2.add(createDisclaimerPanel());
         };
     }
     
-    // Add buffer layers — only for enabled buffers
+    // Add buffer layers — only when master toggle on AND per-buffer enabled.
     // Order: agriculture (bottom), roads, small built-up, large built-up (top)
-    if (enableAgriBuffer.getValue())
-      map.addLayer(buffer_from_agriculture, getVisParams('#ffcc00'), 'Buffer: Agriculture', visibleLayers.agriBuffer, 0.5);
-    if (enableRoadsBuffer.getValue())
-      map.addLayer(buffer_from_road_small, getVisParams('#ff6600'), 'Buffer: Roads', visibleLayers.roadSmallBuffer, 0.5);
-    if (enableBuiltUpSmallBuffer.getValue())
-      map.addLayer(buffer_from_built_up_small, getVisParams('#cc00cc'), 'Buffer: Small Built-up', visibleLayers.builtSmallBuffer, 0.5);
-    if (enableBuiltUpLargeBuffer.getValue())
-      map.addLayer(buffer_from_built_up_large, getVisParams('#3333cc'), 'Buffer: Large Built-up', visibleLayers.builtLargeBuffer, 0.5);
+    if (addInputLayersToMap.getValue()) {
+      if (enableAgriBuffer.getValue())
+        map.addLayer(buffer_from_agriculture, getVisParams('#ffcc00'), 'Buffer: Agriculture', visibleLayers.agriBuffer, 0.5);
+      if (enableRoadsBuffer.getValue())
+        map.addLayer(buffer_from_road_small, getVisParams('#ff6600'), 'Buffer: Roads', visibleLayers.roadSmallBuffer, 0.5);
+      if (enableBuiltUpSmallBuffer.getValue())
+        map.addLayer(buffer_from_built_up_small, getVisParams('#cc00cc'), 'Buffer: Small Built-up', visibleLayers.builtSmallBuffer, 0.5);
+      if (enableBuiltUpLargeBuffer.getValue())
+        map.addLayer(buffer_from_built_up_large, getVisParams('#3333cc'), 'Buffer: Large Built-up', visibleLayers.builtLargeBuffer, 0.5);
+    }
 
-    // Processed binary inputs — what actually feeds the distance transforms
+    // Processed binary inputs — what actually feeds the distance transforms.
+    // Gated on master toggle (computation still happens regardless).
     // Order: agriculture (bottom), roads, small built-up, large built-up (top)
-    map.addLayer(agriculture.selfMask(), getVisParams('#b38f00'), 'Input: Agriculture',   visibleLayers.inputAgriculture, 0.9);
-    map.addLayer(roadsSmall.selfMask(),   getVisParams('#993d00'), 'Input: Roads',         visibleLayers.inputRoads,       0.9);
-    map.addLayer(builtUpSmall.selfMask(), getVisParams('#800080'), 'Input: Small Built-up',visibleLayers.inputBuiltupSmall,0.9);
-    if (builtUpLarge) {
-      map.addLayer(builtUpLarge.selfMask(), getVisParams('#1a1a80'), 'Input: Large Built-up',visibleLayers.inputBuiltupLarge, 0.9);
+    if (addInputLayersToMap.getValue()) {
+      map.addLayer(agriculture.selfMask(), getVisParams('#b38f00'), 'Input: Agriculture',   visibleLayers.inputAgriculture, 0.9);
+      map.addLayer(roadsSmall.selfMask(),   getVisParams('#993d00'), 'Input: Roads',         visibleLayers.inputRoads,       0.9);
+      map.addLayer(builtUpSmall.selfMask(), getVisParams('#800080'), 'Input: Small Built-up',visibleLayers.inputBuiltupSmall,0.9);
+      if (builtUpLarge) {
+        map.addLayer(builtUpLarge.selfMask(), getVisParams('#1a1a80'), 'Input: Large Built-up',visibleLayers.inputBuiltupLarge, 0.9);
+      }
     }
 
   ///////////////
@@ -4615,7 +4646,7 @@ map2.add(createDisclaimerPanel());
       slopeAreasToKeep = cachedState.slopeImage.gt(slopeToKeepValue);
     }
     
-    if (enableSlope.getValue())
+    if (addInputLayersToMap.getValue() && enableSlope.getValue())
       map.addLayer(slopeAreasToKeep.selfMask(), {palette: '#708090'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
     
     // Protected areas analysis (using cached category masks)
@@ -4648,7 +4679,7 @@ map2.add(createDisclaimerPanel());
     
     var wdpaLabel = 'Input: Protected Areas (≤' + wdpaYearCutoff + ', ' +
       (selected_iucn_categories.length === 10 ? 'All' : selected_iucn_categories.join(', ')) + ')';
-    if (enableProtectedAreas.getValue())
+    if (addInputLayersToMap.getValue() && enableProtectedAreas.getValue())
       map.addLayer(wdpa_filt_by_date_image, {palette: '#00cccc'}, wdpaLabel, visibleLayers.protectedAreas, 0.5);
     
     // Add forest layer AFTER slope and WDPA so it appears above them
