@@ -163,7 +163,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         # -- Data inputs --
         self.addParameter(QgsProcessingParameterRasterLayer(
-            self.FOREST_RASTER, "Forest extent raster (binary 1/0)"))
+            self.FOREST_RASTER,
+            "Forest extent raster (binary 1/0). Defines the reference grid "
+            "(extent / resolution / pixel origin) -- all other rasters are "
+            "aligned to it. Typical sources: Hansen GFC thresholded, GLAD "
+            "LULC forest class, national forest map. "
+            "[GEE filename pattern: 1_forest_]"))
         self.addParameter(QgsProcessingParameterVectorLayer(
             self.ROADS, "Roads (vector)", optional=True))
         # Built-up and agriculture vector inputs removed v0.8.33 — in practice
@@ -171,19 +176,28 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # The raster-only inputs below are the ones people actually use.
         # Raster alternatives (e.g. from GEE COG exports) -- override vectors
         self.addParameter(QgsProcessingParameterRasterLayer(
-            self.ROADS_RASTER, "Roads raster (binary) -- overrides vector",
+            self.ROADS_RASTER,
+            "Roads raster (binary 1/0) -- overrides vector. Typical sources: "
+            "OSM, Microsoft Roads, country road network. "
+            "[GEE filename pattern: _roads_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.BUILTUP_SMALL_RASTER,
-            "Built-up small raster (binary) -- overrides vector",
+            "Built-up small raster (binary 1/0) -- overrides vector. Typical "
+            "source: GHS-BUILT (small settlements / villages). "
+            "[GEE filename pattern: _builtup_small_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.BUILTUP_LARGE_RASTER,
-            "Built-up large raster (binary) -- overrides vector",
+            "Built-up large raster (binary 1/0) -- overrides vector. Typical "
+            "source: GHS-BUILT (cities / large urban areas). "
+            "[GEE filename pattern: _builtup_large_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.AGRICULTURE_RASTER,
-            "Agriculture raster (binary) -- overrides vector",
+            "Agriculture raster (binary 1/0) -- overrides vector. Typical "
+            "sources: GLAD LULC cropland class, ESA WorldCover, "
+            "national landcover. [GEE filename pattern: _agriculture_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.DEM,
@@ -200,11 +214,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.PROTECTED_AREAS, "Protected areas (vector)", optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.PROTECTED_RASTER,
-            "OR protected areas raster (binary) -- overrides vector",
+            "OR protected areas raster (binary 1/0) -- overrides vector. "
+            "Typical source: WDPA pre-filtered to a year cutoff (so PAs "
+            "established AFTER the analysis year aren't given retroactive "
+            "credit). [GEE filename pattern: 3_protection_legal_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.PLANTATIONS_RASTER,
-            "Plantations raster (binary) -- optional, paired with 'Exclude plantations'",
+            "Plantations raster (binary 1/0) -- optional, paired with "
+            "'Exclude plantations' tickbox below. Typical sources: Spatial "
+            "Database of Planted Trees (SDPT), national plantation registry. "
+            "When supplied AND 'Exclude plantations' is on, the workflow "
+            "outputs an additional forest_natreg.tif (FRA naturally "
+            "regenerating forest = forest minus plantations).",
             optional=True))
         self.addParameter(QgsProcessingParameterVectorLayer(
             self.AOI, "Area of Interest boundary (vector)", optional=True))
@@ -361,7 +383,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.44"
+    PFF_VERSION = "0.8.45"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
