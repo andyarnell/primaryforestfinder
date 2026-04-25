@@ -298,6 +298,9 @@ def refine_output(input_path, output_path, radius_m=2000, threshold=0.5,
             f"Refine output: radius={radius_m}m ({radius_px}px), "
             f"threshold={threshold}, kernel={mode}, "
             f"raster={x_size}x{y_size}")
+        feedback.pushInfo(
+            "Refine output: density result is masked back to input forest "
+            "(matches GEE pff_4.js — pixels outside input forest are excluded)")
 
     # Determine tiling
     tile_rows = max(_TARGET_TILE_ROWS, 2 * radius_px + 1)
