@@ -1666,8 +1666,8 @@ function exportRastersToDrive() {
   var treecoverHeightThreshold = treecoverHeightThresholdSlider.getValue();
   var useHansenTreecover = (treecoverSourceSelect.getValue() === 'Hansen GFC');
   var useGladLulcForest = (treecoverSourceSelect.getValue() === 'GLAD LULC');
-  var useAgreementForest = (treecoverSourceSelect.getValue() === 'Both datasets (Hansen & GLAD)');
-  var useUnionForest = (treecoverSourceSelect.getValue() === 'Either dataset (Hansen | GLAD)');
+  var useAgreementForest = (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)');
+  var useUnionForest = (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)');
   var timeseriesAnthroModule = require("users/andyarnellgee/apps:modules/timeseriesAnthro.js");
 
   uniqueYears.forEach(function(analysisYear) {
@@ -2349,7 +2349,7 @@ var treecoverHeightPanel = ui.Panel({
 
 // Dropdown for treecover source — Custom Forest is a permanent peer option
 var treecoverSourceSelect = ui.Select({
-  items: ['Hansen GFC', 'GLAD LULC', 'Both datasets (Hansen & GLAD)', 'Either dataset (Hansen | GLAD)', 'Custom Forest'],
+  items: ['Hansen GFC', 'GLAD LULC', 'Agreement (Hansen & GLAD)', 'Combined extent (Hansen | GLAD)', 'Custom Forest'],
   value: 'GLAD LULC',
   onChange: function(value) {
     var isCustom = (value === 'Custom Forest');
@@ -2666,7 +2666,7 @@ var protectedControls = ui.Panel({
   widgets: [
     createCompactRow('IUCN Categories:', wdpaPresetSelect),
     wdpaCategoryLabel, wdpaCategoryCheckboxPanel,
-    createCompactRow('Designated Before:', wdpaYearSlider),
+    createCompactRow('Established before:', wdpaYearSlider),
     nationalProtected.panel
   ],
   layout: ui.Panel.Layout.flow('vertical'),
@@ -3347,11 +3347,11 @@ function collectSettings() {
     // 'Include BuiltUp': includeGHSLCheckbox.getValue(),
   'Use Hansen (GFC) Tree Cover': (treecoverSourceSelect.getValue() === 'Hansen GFC'),
   'Use GLAD LULC Forest': (treecoverSourceSelect.getValue() === 'GLAD LULC'),
-  'Use Both Datasets Forest': (treecoverSourceSelect.getValue() === 'Both datasets (Hansen & GLAD)'),
-  'Use Either Dataset Forest': (treecoverSourceSelect.getValue() === 'Either dataset (Hansen | GLAD)'),
+  'Use Agreement Forest': (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)'),
+  'Use Combined Extent Forest': (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)'),
     'Exclude Plantations': includePlantationsCheckbox.getValue(),
     'WDPA Preset': wdpaPresetSelect.getValue(),
-    'WDPA Designated Before': wdpaYearSlider.getValue(),
+    'WDPA Established Before': wdpaYearSlider.getValue(),
     'WDPA Selected Categories': selected_iucn_categories.join(', '),
     'Custom Roads Mode': nationalRoads.modeSelect.getValue(),
     'Custom BuiltUp Small Mode': nationalBuiltupSmall.modeSelect.getValue(),
@@ -3537,12 +3537,14 @@ function applySettings(settings) {
     treecoverSourceSelect.setValue('Hansen GFC');
   } else if (settings['Use GLAD LULC Forest']) {
     treecoverSourceSelect.setValue('GLAD LULC');
-  } else if (settings['Use Both Datasets Forest']) {
-    treecoverSourceSelect.setValue('Both datasets (Hansen & GLAD)');
-  } else if (settings['Use Either Dataset Forest']) {
-    treecoverSourceSelect.setValue('Either dataset (Hansen | GLAD)');
-  } else if (settings['Use Agreement Forest']) { // backward compat
-    treecoverSourceSelect.setValue('Both datasets (Hansen & GLAD)');
+  } else if (settings['Use Agreement Forest']) {
+    treecoverSourceSelect.setValue('Agreement (Hansen & GLAD)');
+  } else if (settings['Use Combined Extent Forest']) {
+    treecoverSourceSelect.setValue('Combined extent (Hansen | GLAD)');
+  } else if (settings['Use Both Datasets Forest']) { // backward compat (pre-v4.1.6 key)
+    treecoverSourceSelect.setValue('Agreement (Hansen & GLAD)');
+  } else if (settings['Use Either Dataset Forest']) { // backward compat (pre-v4.1.6 key)
+    treecoverSourceSelect.setValue('Combined extent (Hansen | GLAD)');
   }
   
   // Restore custom forest selection: handled by treecoverSourceSelect restore above
@@ -3799,8 +3801,8 @@ function updateMap()  {
   // var includeGHSL = includeGHSLCheckbox.getValue();
   var useHansenTreecover = (treecoverSourceSelect.getValue() === 'Hansen GFC');
   var useGladLulcForest = (treecoverSourceSelect.getValue() === 'GLAD LULC');
-  var useAgreementForest = (treecoverSourceSelect.getValue() === 'Both datasets (Hansen & GLAD)');
-  var useUnionForest = (treecoverSourceSelect.getValue() === 'Either dataset (Hansen | GLAD)');
+  var useAgreementForest = (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)');
+  var useUnionForest = (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)');
   // var fastBuffer = fastBufferCheckbox.getValue();
   var smoothRadiusForest = smoothRadiusForestSlider.getValue();
   var smallPixelThresholdForest = smallPixelThresholdForestSlider.getValue();
