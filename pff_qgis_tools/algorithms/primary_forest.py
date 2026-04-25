@@ -71,11 +71,15 @@ class PrimaryForestAlgorithm(QgsProcessingAlgorithm):
             self.ANTHROPOGENIC_MASK,
             "Anthropogenic mask (from Tool 3b)"))
         self.addParameter(QgsProcessingParameterRasterLayer(
-            self.DEM, "DEM — elevation raster (slope will be computed)",
+            self.DEM,
+            "Natural protection — DEM (elevation, metres). Slope is "
+            "computed from this. [GEE filename pattern: _natural_dem_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.SLOPE_RASTER,
-            "OR pre-computed slope raster (degrees) — overrides DEM",
+            "OR Natural protection — Slope raster (degrees, 0–90). "
+            "Overrides DEM if both supplied. [GEE filename pattern: "
+            "_natural_slope_]",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.PROTECTED_RASTER,

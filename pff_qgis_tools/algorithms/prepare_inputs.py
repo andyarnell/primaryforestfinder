@@ -100,7 +100,10 @@ class PrepareInputsAlgorithm(QgsProcessingAlgorithm):
             "Agriculture raster (binary) — overrides vector",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
-            self.DEM, "Digital Elevation Model (DEM)", optional=True))
+            self.DEM,
+            "Natural protection — DEM (elevation, metres). "
+            "[GEE filename pattern: _natural_dem_]",
+            optional=True))
         self.addParameter(QgsProcessingParameterVectorLayer(
             self.PROTECTED_AREAS, "Protected areas (vector)", optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
