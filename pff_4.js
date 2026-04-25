@@ -1,5 +1,30 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.12";
+var PFF_SCRIPT_VERSION = "4.1.13";
+
+// Changes vs v4.1.12:
+//  - P1.6 + P1.7 (combined): per-run metadata bundle JSON.
+//    Single source of truth for "what was this run?" provenance, since
+//    Export.image.toDrive can't write arbitrary GDAL metadata tags
+//    during export (the original P1.6 plan). Two surfaces:
+//
+//    1. Tickbox in Export-all panel ("Run metadata JSON (config + run
+//       snapshot)", default ON). Queues an Export.table.toDrive (or
+//       Cloud Storage) GeoJSON sidecar per analysis year alongside the
+//       raster batch. Filename:
+//         <iso3>_pff_run_metadata_<year>_<scale>m.geojson
+//
+//    2. New "Download Run Metadata" button in the Save-settings panel.
+//       In-browser download via getDownloadURL -- snapshots current
+//       config + selected year/scale without queueing a Drive task.
+//
+//    Bundle structure: flat dict with config__* keys mirroring
+//    collectSettings() and run__* keys for pff_script_version,
+//    timestamp, country, iso3, year_exported, scale_m,
+//    export_destination, export_folder. Flat-prefixed because EE's
+//    getDownloadURL serialises Feature properties best as flat KV.
+//
+//    Tickbox state persists in saved settings as
+//    'Export Run Metadata JSON'.
 
 // Changes vs v4.1.11:
 //  - P0.8 master toggle: new "Add input + buffer layers to map" checkbox
@@ -1498,6 +1523,7 @@ var exportChk_protVector      = ui.Checkbox({label: 'Protected areas (vector)', 
 var exportChk_aoi             = ui.Checkbox({label: 'AOI boundary (vector)',         value: true,  style: exportChkStyle});
 var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (treecover + loss)', value: false, style: exportChkStyle});
 var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height',              value: false, style: exportChkStyle});
+var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata JSON (config + run snapshot)', value: true,  style: exportChkStyle});
 
 var exportSelectPanel = ui.Panel({
   widgets: [
@@ -1508,12 +1534,35 @@ var exportSelectPanel = ui.Panel({
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
     ui.Panel([exportChk_dem, exportChk_slope, exportChk_protLegal, exportChk_protVector, exportChk_aoi],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_hansenRaw, exportChk_gladHeight],
+    ui.Panel([exportChk_hansenRaw, exportChk_gladHeight, exportChk_runMetadata],
       ui.Panel.Layout.flow('vertical'), {margin: '0'})
   ],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {margin: '0 0 4px 0'}
 });
+
+// Build a per-run metadata bundle for the JSON sidecar export and the
+// in-browser snapshot download. Combines the user's full config (mirrors
+// Save Settings) with run-specifics (timestamp, year exported, scale,
+// destination, version). Keys are flat and prefixed (config__* / run__*)
+// because Earth Engine's getDownloadURL serialises Feature properties
+// best as flat key-value pairs.
+function buildRunBundle(year, scale, iso3, exportFolder, useCloud) {
+  var bundle = {};
+  var settings = collectSettings();
+  Object.keys(settings).forEach(function(k) {
+    bundle['config__' + k] = settings[k];
+  });
+  bundle['run__pff_script_version'] = PFF_SCRIPT_VERSION;
+  bundle['run__timestamp']          = new Date().toISOString();
+  bundle['run__country']            = countrySelector.getValue();
+  bundle['run__iso3']               = iso3;
+  bundle['run__year_exported']      = year;
+  bundle['run__scale_m']            = scale;
+  bundle['run__export_destination'] = useCloud ? 'cloud_storage' : 'google_drive';
+  bundle['run__export_folder']      = exportFolder;
+  return bundle;
+}
 
 function exportRastersToDrive() {
   exportRasterStatusLabel.setValue('');
@@ -1858,6 +1907,37 @@ function exportRastersToDrive() {
         '5_primary_forest_' + analysisYear + '_' + s, folder);
     }
   });
+
+  // Per-run metadata sidecar (one bundle per analysis year so two-year
+  // comparisons get distinct files reflecting the year_exported field).
+  // Exported as GeoJSON because Export.table only emits geo formats and
+  // CSV/SHP would lose the structure -- GeoJSON parses cleanly back to a
+  // flat dict downstream. Filename: <iso3>_pff_run_metadata_<year>_<scale>m.geojson.
+  if (exportChk_runMetadata.getValue()) {
+    uniqueYears.forEach(function(metaYear) {
+      var bundle = buildRunBundle(metaYear, exportScale, iso3, folder, useCloud);
+      var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
+      var bundleDesc = iso3 + '_pff_run_metadata_' + metaYear + '_' + s + 'm' + runTag;
+      var bundlePrefix = iso3 + '_pff_run_metadata_' + metaYear + '_' + s + 'm';
+      if (useCloud) {
+        Export.table.toCloudStorage({
+          collection: bundleFC,
+          description: bundleDesc,
+          bucket: gcsBucket.trim(),
+          fileNamePrefix: folder + '/' + bundlePrefix,
+          fileFormat: 'GeoJSON'
+        });
+      } else {
+        Export.table.toDrive({
+          collection: bundleFC,
+          description: bundleDesc,
+          folder: folder,
+          fileNamePrefix: bundlePrefix,
+          fileFormat: 'GeoJSON'
+        });
+      }
+    });
+  }
 
   var yearStr = uniqueYears.join(' & ');
   var destStr = useCloud ? 'gs://' + gcsBucket.trim() + '/' + folder : 'Google Drive → ' + folder;
@@ -3258,6 +3338,54 @@ var statsPanel = ui.Panel({
 var exportSettingsButton = ui.Button({label: 'Save Settings', onClick: exportSettings, style: {width: '140px', margin: '4px 0px'}});
 var importSettingsButton = ui.Button({label: 'Load Settings', onClick: showTextInput, style: {width: '140px', margin: '4px 0px'}});
 
+// In-browser counterpart of the run metadata sidecar -- downloads the
+// current config + run snapshot without queueing a Drive export. Useful
+// when the user wants the run record before (or instead of) launching
+// the export-all batch. Year reported is yearSelector1 (the primary).
+function downloadRunBundle() {
+  var selectedCountry = countrySelector.getValue();
+  var countryInfo = selectedCountry ? gaulLut.GAUL_LUT[gaulLut.nameToCode(selectedCountry)] : null;
+  var iso3 = countryInfo ? countryInfo.iso3 :
+    (selectedCountry ? cleanCountryName(selectedCountry).substring(0, 3).toUpperCase() : 'XXX');
+  var year = parseInt(yearSelector1.getValue());
+  var scale = exportRasterScaleSlider.getValue();
+  var bundle = buildRunBundle(year, scale, iso3, '<not-yet-exported>', false);
+  var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
+  var url = bundleFC.getDownloadURL({
+    format: 'json',
+    filename: iso3 + '_pff_run_metadata_' + year + '_' + scale + 'm.json'
+  });
+
+  if (downloadLinkPanel) {
+    ui.root.widgets().remove(downloadLinkPanel);
+  }
+  var downloadLink = ui.Label({
+    value: 'Download Run Metadata (' + iso3 + ' ' + year + ' ' + scale + 'm)',
+    style: {color: 'blue', textDecoration: 'underline'},
+    targetUrl: url
+  });
+  var closeButton = ui.Button({
+    label: '✖',
+    style: {margin: '0 0 0 10px'},
+    onClick: function() {
+      ui.root.widgets().remove(downloadLinkPanel);
+      downloadLinkPanel = null;
+    }
+  });
+  downloadLinkPanel = ui.Panel({
+    widgets: [downloadLink, closeButton],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {margin: '10px 0'}
+  });
+  ui.root.widgets().add(downloadLinkPanel);
+}
+
+var downloadRunBundleButton = ui.Button({
+  label: 'Download Run Metadata',
+  onClick: downloadRunBundle,
+  style: {width: '180px', margin: '4px 0px', fontSize: '11px'}
+});
+
 // Reset function to restore all parameters to defaults
 function resetToDefaults() {
   // Tree Cover
@@ -3313,7 +3441,7 @@ function resetToDefaults() {
 var resetSettingsButton = ui.Button({label: 'Reset Defaults', onClick: resetToDefaults, style: {width: '90px', margin: '2px 0px', fontSize: '10px', color: '#888'}});
 
 var settingsContent = ui.Panel({
-  widgets: [exportSettingsButton, importSettingsButton],
+  widgets: [exportSettingsButton, importSettingsButton, downloadRunBundleButton],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {shown: false, padding: '8px', backgroundColor: 'rgba(255,255,255,0.9)'}
 });
@@ -3466,7 +3594,8 @@ function collectSettings() {
     'Enable Slope': enableSlope.getValue(),
     'Enable Protected Areas': enableProtectedAreas.getValue(),
     'Enable Refine Output': enableRefineOutput.getValue(),
-    'Add Input Layers To Map': addInputLayersToMap.getValue()
+    'Add Input Layers To Map': addInputLayersToMap.getValue(),
+    'Export Run Metadata JSON': exportChk_runMetadata.getValue()
   };
 
   // Add custom forest asset inputs if used
@@ -3623,6 +3752,7 @@ function applySettings(settings) {
   if (settings['Enable Protected Areas'] !== undefined) enableProtectedAreas.setValue(settings['Enable Protected Areas']);
   if (settings['Enable Refine Output'] !== undefined) enableRefineOutput.setValue(settings['Enable Refine Output']);
   if (settings['Add Input Layers To Map'] !== undefined) addInputLayersToMap.setValue(settings['Add Input Layers To Map']);
+  if (settings['Export Run Metadata JSON'] !== undefined) exportChk_runMetadata.setValue(settings['Export Run Metadata JSON']);
   slopeToKeepSlider.setValue(settings['Slope to keep (degrees)']);
   // otherNatBufferSlider.setValue(settings['Other Natural Buffer (m)']);
   smoothRadiusForestSlider.setValue(settings['Forest Smoothing Radius (m)']);
