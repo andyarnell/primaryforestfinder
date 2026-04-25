@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+
+# QGIS plugin build artifacts
+pff_qgis_tools/dist/*.zip
+
+# QGIS processing temporary files
+*.tif.aux.xml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Claude Code agent scratch
+.claude/
+
+# Workshop / facilitator internal materials (working notes, dry-run plans)
+planning/
+docs/PFF_QGIS_Workshop_Guide_DRAFT.docx
+docs/QGIS Workflow_Ann_Rotich_V0.docx
+
+# One-off debug comparison scripts (hardcoded local OneDrive paths)
+tests/compare_*.py
+
+# SQLite transient lock files (write-ahead log / shared memory)
+*.gpkg-shm
+*.gpkg-wal
+*.sqlite-shm
+*.sqlite-wal

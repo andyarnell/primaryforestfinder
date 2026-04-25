@@ -1,0 +1,515 @@
+// Primary Forest Finder - GEE App
+// Copy this into GEE Code Editor
+
+// Sample countries dataset
+var countries = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017');
+
+// Maps
+var map = null;
+
+// =============================================================================
+// STATE MANAGEMENT
+// =============================================================================
+
+var appState = {
+  ui: {
+    treeCoverCollapsed: true,
+    anthropogenicCollapsed: true,
+    limitedAccessCollapsed: true,
+    connectivityCollapsed: true,
+    advancedSettingsCollapsed: true,
+    layersPanelCollapsed: true
+  },
+  map: {
+    currentMode: 'single',
+    lastCenter: null,
+    lastZoom: null,
+    previousCountry: null
+  }
+};
+
+var updateLeftPanelWidth = function() {
+  var allCollapsed = appState.ui.treeCoverCollapsed && 
+                     appState.ui.anthropogenicCollapsed && 
+                     appState.ui.limitedAccessCollapsed && 
+                     appState.ui.connectivityCollapsed && 
+                     appState.ui.advancedSettingsCollapsed;
+  
+  if (allCollapsed) {
+    leftPanel.style().set({width: '160px'});
+    leftPanel.widgets().reset([treeCoverPanel, anthropogenicPanel, limitedAccessPanel, connectivityPanel, advancedSettingsPanel]);
+  } else {
+    leftPanel.style().set({width: '280px'});
+    leftPanel.widgets().reset([treeCoverPanel, anthropogenicPanel, limitedAccessPanel, connectivityPanel, advancedSettingsPanel]);
+  }
+};
+
+// =============================================================================
+// UI COMPONENTS
+// =============================================================================
+
+// TOP BAR
+var countrySelector = ui.Select({
+  items: ['Brazil', 'Indonesia', 'Colombia', 'Peru', 'DRC', "Cote d'Ivoire"],
+  value: 'Brazil',
+  onChange: updateMap,
+  style: {width: '150px', margin: '4px 8px'}
+});
+
+var zoomToCountryCheckbox = ui.Checkbox({
+  label: 'Zoom to Country',
+  value: true,
+  style: {margin: '4px 8px'}
+});
+
+var yearSelector1Label = ui.Label('Year 1:', {margin: '4px 0px'});
+
+var yearSelector1 = ui.Select({
+  items: ['2024', '2023', '2022', '2021', '2020', '2019', '2018'],
+  value: '2020',
+  onChange: updateMap,
+  style: {width: '100px', margin: '4px 8px'}
+});
+
+var yearSelector2Label = ui.Label('Year 2:', {margin: '4px 0px'});
+yearSelector2Label.style().set({shown: false});
+
+var yearSelector2 = ui.Select({
+  items: ['2024', '2023', '2022', '2021', '2020', '2019', '2018'],
+  value: '2024',
+  onChange: updateMap,
+  style: {width: '100px', margin: '4px 8px'}
+});
+yearSelector2.style().set({shown: false});
+
+var enableSplitScreenCheckbox = ui.Checkbox({
+  label: 'Split Screen',
+  value: false,
+  onChange: function(checked) {
+    yearSelector2Label.style().set({shown: checked});
+    yearSelector2.style().set({shown: checked});
+    updateMap();
+  },
+  style: {margin: '4px 8px'}
+});
+
+var appTitle = ui.Label('Primary Forest Finder', {
+  fontWeight: 'bold',
+  fontSize: '18px',
+  margin: '4px 8px',
+  textAlign: 'center'
+});
+
+var titleSpacer = ui.Panel({style: {stretch: 'horizontal'}});
+
+var topBar = ui.Panel({
+  widgets: [countrySelector, zoomToCountryCheckbox, yearSelector1Label, yearSelector1, yearSelector2Label, yearSelector2, enableSplitScreenCheckbox, appTitle, titleSpacer],
+  layout: ui.Panel.Layout.flow('horizontal'),
+  style: {
+    stretch: 'horizontal',
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: '4px',
+    border: '1px solid #ccc'
+  }
+});
+
+// TREE COVER PANEL
+var treecoverThresholdSlider = ui.Slider({min: 0, max: 100, value: 10, step: 5, onChange: updateMap});
+var treecoverHeightThresholdSlider = ui.Slider({min: 0, max: 50, value: 10, step: 1, onChange: updateMap});
+
+var treecoverPanel = ui.Panel({
+  widgets: [ui.Label('GFC Treecover Threshold (%)'), treecoverThresholdSlider],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+treecoverPanel.style().set('shown', false);
+
+var treecoverHeightPanel = ui.Panel({
+  widgets: [ui.Label('GLAD Treecover Height (m)'), treecoverHeightThresholdSlider],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+var treecoverSourceSelect = ui.Select({
+  items: ['Hansen GFC', 'GLAD LULC', 'Agreement (Hansen + GLAD)'],
+  value: 'GLAD LULC',
+  onChange: function(value) {
+    if (value === 'Hansen GFC') {
+      treecoverPanel.style().set('shown', true);
+      treecoverHeightPanel.style().set('shown', false);
+    } else if (value === 'GLAD LULC') {
+      treecoverPanel.style().set('shown', false);
+      treecoverHeightPanel.style().set('shown', true);
+    } else {
+      treecoverPanel.style().set('shown', true);
+      treecoverHeightPanel.style().set('shown', true);
+    }
+    updateMap();
+  }
+});
+
+var treeCoverContent = ui.Panel({
+  widgets: [
+    ui.Label('Treecover Source:'),
+    treecoverSourceSelect,
+    treecoverPanel,
+    treecoverHeightPanel
+  ],
+  style: {shown: false, padding: '8px'}
+});
+
+var treeCoverToggle = ui.Button({
+  label: '+ Tree Cover',
+  onClick: function() {
+    appState.ui.treeCoverCollapsed = !appState.ui.treeCoverCollapsed;
+    treeCoverContent.style().set({shown: !appState.ui.treeCoverCollapsed});
+    treeCoverToggle.setLabel(appState.ui.treeCoverCollapsed ? '+ Tree Cover' : '- Tree Cover');
+    updateLeftPanelWidth();
+  },
+  style: {width: '100px', padding: '4px', margin: '2px'}
+});
+
+var treeCoverPanel = ui.Panel({
+  widgets: [treeCoverToggle, treeCoverContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// ANTHROPOGENIC PANEL
+var roadSmallBufferSlider = ui.Slider({min: 0, max: 5000, value: 750, step: 250, onChange: updateMap});
+var roadLargeBufferSlider = ui.Slider({min: 0, max: 5000, value: 1500, step: 250, onChange: updateMap});
+var builtUpSmallBufferSlider = ui.Slider({min: 0, max: 5000, value: 500, step: 250, onChange: updateMap});
+var builtUpLargeBufferSlider = ui.Slider({min: 0, max: 5000, value: 1000, step: 250, onChange: updateMap});
+var agriBufferSlider = ui.Slider({min: 0, max: 5000, value: 1500, step: 250, onChange: updateMap});
+
+var anthropogenicContent = ui.Panel({
+  widgets: [
+    ui.Label('Road Small Buffer (m):'), roadSmallBufferSlider,
+    ui.Label('Road Large Buffer (m):'), roadLargeBufferSlider,
+    ui.Label('Built-Up Small Buffer (m):'), builtUpSmallBufferSlider,
+    ui.Label('Built-Up Large Buffer (m):'), builtUpLargeBufferSlider,
+    ui.Label('Agriculture Buffer (m):'), agriBufferSlider
+  ],
+  style: {shown: false, padding: '8px'}
+});
+
+var anthropogenicToggle = ui.Button({
+  label: '+ Anthropogenic',
+  onClick: function() {
+    appState.ui.anthropogenicCollapsed = !appState.ui.anthropogenicCollapsed;
+    anthropogenicContent.style().set({shown: !appState.ui.anthropogenicCollapsed});
+    anthropogenicToggle.setLabel(appState.ui.anthropogenicCollapsed ? '+ Anthropogenic' : '- Anthropogenic');
+    updateLeftPanelWidth();
+  },
+  style: {width: '120px', padding: '4px', margin: '2px'}
+});
+
+var anthropogenicPanel = ui.Panel({
+  widgets: [anthropogenicToggle, anthropogenicContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// LIMITED ACCESS PANEL
+var slopeToKeepSlider = ui.Slider({min: 0, max: 90, value: 45, step: 5, onChange: updateMap});
+var wdpaYearSlider = ui.Slider({min: 1900, max: 2025, value: 1995, step: 5, onChange: updateMap});
+
+var wdpaPresetSelect = ui.Select({
+  items: ['No Filter', 'Strict Only (Ia, Ib, II)', 'Custom Selection'],
+  value: 'Strict Only (Ia, Ib, II)',
+  onChange: updateMap
+});
+
+var limitedAccessContent = ui.Panel({
+  widgets: [
+    ui.Label('Slope to Keep (degrees):'),
+    slopeToKeepSlider,
+    ui.Label(''),
+    ui.Label('IUCN Status Category:'),
+    wdpaPresetSelect,
+    ui.Label('Established By Year:'),
+    wdpaYearSlider
+  ],
+  style: {shown: false, padding: '8px'}
+});
+
+var limitedAccessToggle = ui.Button({
+  label: '+ Limited Access',
+  onClick: function() {
+    appState.ui.limitedAccessCollapsed = !appState.ui.limitedAccessCollapsed;
+    limitedAccessContent.style().set({shown: !appState.ui.limitedAccessCollapsed});
+    limitedAccessToggle.setLabel(appState.ui.limitedAccessCollapsed ? '+ Limited Access' : '- Limited Access');
+    updateLeftPanelWidth();
+  },
+  style: {width: '120px', padding: '4px', margin: '2px'}
+});
+
+var limitedAccessPanel = ui.Panel({
+  widgets: [limitedAccessToggle, limitedAccessContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// CONNECTIVITY PANEL
+var smoothRadiusForestSlider = ui.Slider({min: 0, max: 5000, value: 2000, step: 500, onChange: updateMap});
+var smallPixelThresholdForestSlider = ui.Slider({min: 0, max: 1, value: 0.5, step: 0.1, onChange: updateMap});
+
+var connectivityContent = ui.Panel({
+  widgets: [
+    ui.Label('Forest Smoothing Radius (m):'),
+    smoothRadiusForestSlider,
+    ui.Label('Forest Smoothing Threshold:'),
+    smallPixelThresholdForestSlider
+  ],
+  style: {shown: false, padding: '8px'}
+});
+
+var connectivityToggle = ui.Button({
+  label: '+ Connectivity',
+  onClick: function() {
+    appState.ui.connectivityCollapsed = !appState.ui.connectivityCollapsed;
+    connectivityContent.style().set({shown: !appState.ui.connectivityCollapsed});
+    connectivityToggle.setLabel(appState.ui.connectivityCollapsed ? '+ Connectivity' : '- Connectivity');
+    updateLeftPanelWidth();
+  },
+  style: {width: '110px', padding: '4px', margin: '2px'}
+});
+
+var connectivityPanel = ui.Panel({
+  widgets: [connectivityToggle, connectivityContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// ADVANCED SETTINGS PANEL
+var useCustomAssetsCheckbox = ui.Checkbox({
+  label: 'Use Custom Forest Assets',
+  value: false,
+  onChange: updateMap
+});
+
+var customAssetInput = ui.Textbox({
+  placeholder: 'Enter GEE asset path...',
+  value: '',
+  onChange: updateMap,
+  style: {width: '260px'}
+});
+
+var advancedSettingsContent = ui.Panel({
+  widgets: [
+    ui.Label('Custom Assets:'),
+    useCustomAssetsCheckbox,
+    ui.Label(''),
+    ui.Label('Forest Asset Path:'),
+    customAssetInput,
+    ui.Label(''),
+    ui.Label('User Data:'),
+    ui.Textbox({
+      placeholder: 'Enter custom data or notes...',
+      value: '',
+      style: {width: '260px', height: '80px'}
+    })
+  ],
+  style: {shown: false, padding: '8px'}
+});
+
+var advancedSettingsToggle = ui.Button({
+  label: '+ Advanced Settings',
+  onClick: function() {
+    appState.ui.advancedSettingsCollapsed = !appState.ui.advancedSettingsCollapsed;
+    advancedSettingsContent.style().set({shown: !appState.ui.advancedSettingsCollapsed});
+    advancedSettingsToggle.setLabel(appState.ui.advancedSettingsCollapsed ? '+ Advanced Settings' : '- Advanced Settings');
+    updateLeftPanelWidth();
+  },
+  style: {width: '140px', padding: '4px', margin: '2px'}
+});
+
+var advancedSettingsPanel = ui.Panel({
+  widgets: [advancedSettingsToggle, advancedSettingsContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// LAYER PANEL (Floating)
+var layerScrollPanel = ui.Panel({
+  widgets: [
+    ui.Label('Layer Visibility', {fontWeight: 'bold', fontSize: '14px'}),
+    ui.Label('─────────────────', {color: 'gray'}),
+    ui.Checkbox({label: 'Primary Forest', value: true, onChange: updateMap}),
+    ui.Checkbox({label: 'Forest Outside Anthro', value: true, onChange: updateMap}),
+    ui.Checkbox({label: 'Treecover', value: true, onChange: updateMap}),
+    ui.Label(''),
+    ui.Label('Anthropogenic:'),
+    ui.Checkbox({label: 'Roads', value: false, onChange: updateMap}),
+    ui.Checkbox({label: 'Built-Up Areas', value: false, onChange: updateMap}),
+    ui.Checkbox({label: 'Agriculture', value: false, onChange: updateMap}),
+    ui.Label(''),
+    ui.Label('Access & Protection:'),
+    ui.Checkbox({label: 'WDPA Protected Areas', value: false, onChange: updateMap}),
+    ui.Checkbox({label: 'High Slope', value: false, onChange: updateMap})
+  ],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {padding: '8px'}
+});
+
+var layerControlContent = ui.Panel({
+  widgets: [layerScrollPanel],
+  style: {shown: false, width: '220px', maxHeight: '400px', border: '1px solid #ccc', backgroundColor: 'rgba(255, 255, 255, 0.95)'}
+});
+
+var toggleButton = ui.Button({
+  label: '+ Layers',
+  onClick: function() {
+    appState.ui.layersPanelCollapsed = !appState.ui.layersPanelCollapsed;
+    layerControlContent.style().set({shown: !appState.ui.layersPanelCollapsed});
+    toggleButton.setLabel(appState.ui.layersPanelCollapsed ? '+ Layers' : '- Layers');
+  },
+  style: {width: '80px', padding: '4px', margin: '4px'}
+});
+
+var layerPanel = ui.Panel({
+  widgets: [toggleButton, layerControlContent],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {position: 'top-left', margin: '8px 0px 0px 8px', padding: '0px', backgroundColor: 'rgba(255, 255, 255, 0.95)', border: '2px solid #ccc'}
+});
+
+// COUNTRY LABEL (Top Center)
+var countryLabel = ui.Label('', {
+  position: 'top-center',
+  backgroundColor: 'rgba(255, 255, 255, 0.8)',
+  padding: '8px',
+  fontSize: '16px',
+  fontWeight: 'bold'
+});
+
+// LAYOUT
+var leftPanel = ui.Panel({
+  widgets: [treeCoverPanel, anthropogenicPanel, limitedAccessPanel, connectivityPanel, advancedSettingsPanel],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {width: '280px', backgroundColor: '00000000'}
+});
+
+map = ui.Map();
+map.add(layerPanel);
+map.add(countryLabel);
+
+// STATISTICS PANEL
+var statsContent = ui.Panel({
+  widgets: [
+    ui.Label('Area Statistics', {fontWeight: 'bold', fontSize: '14px'}),
+    ui.Label('═════════════════════════════════════════'),
+    ui.Label(''),
+    ui.Label('Total Treecover:', {fontWeight: 'bold', fontSize: '12px'}),
+    ui.Label('------ sq km (------ x 1,000 ha)', {fontSize: '11px', color: '2d8659'}),
+    ui.Label(''),
+    ui.Label('Primary Forest:', {fontWeight: 'bold', fontSize: '12px'}),
+    ui.Label('------ sq km (------ x 1,000 ha)', {fontSize: '11px', color: '228B22'}),
+    ui.Label(''),
+    ui.Label('Forest Loss:', {fontWeight: 'bold', fontSize: '12px'}),
+    ui.Label('------ sq km (------ x 1,000 ha)', {fontSize: '11px', color: 'cc0000'}),
+    ui.Label(''),
+    ui.Label('Results estimated at 900m resolution', {fontSize: '10px', color: 'gray', fontStyle: 'italic'}),
+    ui.Label('═════════════════════════════════════════')
+  ],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {shown: false, padding: '8px', backgroundColor: 'rgba(255,255,255,0.9)'}
+});
+
+var statsToggle = ui.Button({
+  label: '+ Stats',
+  onClick: function() {
+    var isShown = statsContent.style().get('shown');
+    statsContent.style().set({shown: !isShown});
+    statsToggle.setLabel(isShown ? '+ Stats' : '- Stats');
+  },
+  style: {width: '60px', padding: '4px', margin: '2px'}
+});
+
+var statsPanel = ui.Panel({
+  widgets: [statsToggle, statsContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// SETTINGS PANEL - Save Progress / Settings section
+var settingsContent = ui.Panel({
+  widgets: [
+    ui.Label('Save Progress / Settings', {fontWeight: 'bold', fontSize: '14px'}),
+    ui.Label(''),
+    ui.Button({
+      label: 'Export Settings',
+      onClick: function() {
+        print('Export Settings triggered');
+        print('Downloading settings as JSON file...');
+      },
+      style: {width: '140px'}
+    }),
+    ui.Button({
+      label: 'Import Settings',
+      onClick: function() {
+        print('Import Settings triggered');
+        print('Paste settings JSON in console below');
+      },
+      style: {width: '140px', margin: '4px 0px'}
+    })
+  ],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {shown: false, padding: '8px', backgroundColor: 'rgba(255,255,255,0.9)'}
+});
+
+var settingsToggle = ui.Button({
+  label: '+ Settings',
+  onClick: function() {
+    var isShown = settingsContent.style().get('shown');
+    settingsContent.style().set({shown: !isShown});
+    settingsToggle.setLabel(isShown ? '+ Settings' : '- Settings');
+  },
+  style: {width: '80px', padding: '4px', margin: '2px'}
+});
+
+var settingsPanel = ui.Panel({
+  widgets: [settingsToggle, settingsContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// Right panel with scrollable content
+var rightPanelContent = ui.Panel({
+  widgets: [statsPanel, settingsPanel],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {padding: '0px'}
+});
+
+var rightPanel = ui.Panel({
+  widgets: [rightPanelContent],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {width: '160px', backgroundColor: '00000000', maxHeight: '500px'}
+});
+
+var mainContainer = ui.Panel({
+  layout: ui.Panel.Layout.flow('horizontal'),
+  style: {stretch: 'both', backgroundColor: '00000000'}
+});
+
+mainContainer.add(leftPanel);
+mainContainer.add(map);
+mainContainer.add(rightPanel);
+
+var rootContainer = ui.Panel({
+  widgets: [topBar, mainContainer],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {stretch: 'both'}
+});
+
+ui.root.widgets().reset([rootContainer]);
+
+updateLeftPanelWidth();
+
+// UPDATE MAP
+function updateMap() {
+  var selectedCountry = countrySelector.getValue();
+  print('Country: ' + selectedCountry);
+  print('Year 1: ' + yearSelector1.getValue() + ' | Year 2: ' + yearSelector2.getValue());
+  print('Split Screen: ' + enableSplitScreenCheckbox.getValue());
+  
+  var country = countries.filter(ee.Filter.eq('country_na', selectedCountry));
+  
+  map.layers().reset();
+  countryLabel.setValue(selectedCountry);
+  
+  if (zoomToCountryCheckbox.getValue()) {
+    var centroid = country.geometry().centroid().coordinates().getInfo();
+    map.setCenter(centroid[0], centroid[1], 6);
+  }
+}

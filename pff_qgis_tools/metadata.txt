@@ -1,0 +1,17 @@
+[general]
+name=Primary Forest Finder
+qgisMinimumVersion=3.38
+description=Processing tools for delineating primary forest candidate areas using anthropogenic influence, slope and protected area tiers.
+version=0.8.40
+author=Andy Arnell
+email=
+about=Replicates the PFF Google Earth Engine app workflow using local data with GDAL and native QGIS Processing algorithms. Includes validate, prepare, distance, anthropogenic mask, primary forest, refine output, and zonal statistics tools — plus a one-click full workflow runner with selective exports, auto UTM, and combined coded raster output.
+tracker=https://github.com/andyarnell/primaryforestfinder/issues
+repository=https://github.com/andyarnell/primaryforestfinder
+tags=forest,conservation,primary forest,raster,analysis
+homepage=https://github.com/andyarnell/primaryforestfinder
+category=Analysis
+icon=
+experimental=True
+deprecated=False
+hasProcessingProvider=yes
