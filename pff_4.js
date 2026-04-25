@@ -1,5 +1,13 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.10";
+var PFF_SCRIPT_VERSION = "4.1.11";
+
+// Changes vs v4.1.10:
+//  - P0.8: Default visible layers expanded to include the input forest
+//    layer ("Forest") and the supporting pre-connectivity output
+//    ("Forest outside buffers"), in addition to "Primary Forest" which
+//    was already on. Anthro/buffer/exception inputs remain off by
+//    default. Mirrors the user-facing intent: see the headline output,
+//    its supporting layer, and the input it derives from at first paint.
 
 // Changes vs v4.1.9:
 //  - P2.16: Both export-panel "Options" toggles renamed to "Advanced".
@@ -803,9 +811,9 @@ var _legendRefreshFns = [];  // legend refresh callbacks
 
 var visibleLayers = {
   // Analysis outputs
-  primaryForest: true,       // Default on
-  forestOutsideBuffers: false,
-  forest: false,
+  primaryForest: true,         // Headline output (default on)
+  forestOutsideBuffers: true,  // Supporting output: pre-connectivity (default on)
+  forest: true,                // Input forest (default on so users can compare)
   // Processed binary inputs (what feeds the distance transforms)
   inputRoads: false,
   inputBuiltupSmall: false,
@@ -825,11 +833,12 @@ var visibleLayers = {
   countryOutline: true
 };
 
-// Reset layer visibility to defaults (primary forest on, everything else off)
+// Reset layer visibility to defaults (primary forest + supporting outputs +
+// forest input on, anthro/buffer/exception inputs off).
 function resetVisibleLayers() {
   visibleLayers.primaryForest = true;
-  visibleLayers.forestOutsideBuffers = false;
-  visibleLayers.forest = false;
+  visibleLayers.forestOutsideBuffers = true;
+  visibleLayers.forest = true;
   visibleLayers.inputRoads = false;
   visibleLayers.inputBuiltupSmall = false;
   visibleLayers.inputBuiltupLarge = false;
