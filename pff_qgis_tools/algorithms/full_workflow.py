@@ -543,7 +543,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.66"
+    PFF_VERSION = "0.8.67"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1800,12 +1800,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # simplification and optional CEO-style nesting (cut primary
         # out of forest so the two layers don't overlap).
         #
-        # Filename convention follows the underlying raster:
-        #   primary_forest.tif  -> primary_forest_polygons.gpkg
+        # Filename convention follows the underlying raster (Option D):
+        #   primary_forest.tif  -> primary_forest_vector.gpkg
         #                        + primary_forest_dissolved.gpkg
-        #   forest_natreg.tif   -> forest_natreg_polygons.gpkg
+        #   forest_natreg.tif   -> forest_natreg_vector.gpkg
         #                        + forest_natreg_dissolved.gpkg
-        #   forest.tif          -> forest_polygons.gpkg
+        #   forest.tif          -> forest_vector.gpkg
         #                        + forest_dissolved.gpkg
         # Whether forest_natreg or forest is used is determined by
         # whether plantations refinement actually ran (forest_natreg_path
@@ -1819,7 +1819,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             def _do_polygonise(src_raster_path, name_base):
                 """Mask + polygonise + optional simplify. Returns polys path."""
                 polys_path = os.path.join(
-                    out_dir, f"{name_base}_polygons.gpkg")
+                    out_dir, f"{name_base}_vector.gpkg")
                 # Build mask raster with nodata=0 so polygonize skips
                 # background efficiently. Source rasters are already
                 # binary 0/1, so the mask is just (arr == 1).

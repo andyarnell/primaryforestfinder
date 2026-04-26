@@ -115,9 +115,9 @@ OUT/                                     (OUT = your chosen output folder)
   zonal_statistics.shp (+sidecars)
   run_metadata.json                      ← HEADLINE (run parameters + stage timings)
 
-  primary_forest_polygons.gpkg           ← HEADLINE (Stage 7 vectorise, if ticked)
+  primary_forest_vector.gpkg           ← HEADLINE (Stage 7 vectorise, if ticked)
   primary_forest_dissolved.gpkg          ← HEADLINE (Stage 7, sampling boundary)
-  forest_natreg_polygons.gpkg            ← HEADLINE (Stage 7, if forest also ticked)
+  forest_natreg_vector.gpkg            ← HEADLINE (Stage 7, if forest also ticked)
   forest_natreg_dissolved.gpkg           ← HEADLINE (Stage 7, if forest also ticked)
 
   intermediates/
@@ -146,7 +146,7 @@ OUT/                                     (OUT = your chosen output folder)
 ```
 
 Tier raster names match the canonical `pff_4.js` naming: `tier1_undisturbed`,
-`tier2_steep`, `tier3_protected`. Vector outputs use `_polygons` / `_dissolved`
+`tier2_steep`, `tier3_protected`. Vector outputs use `_vector` / `_dissolved`
 suffixes. Forest vector naming carries the plantation-refinement state
 (`forest_natreg_*` if refined, `forest_*` otherwise).
 
