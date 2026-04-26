@@ -42,6 +42,8 @@ from ..utils import (
     clip_raster_by_mask,
     proximity,
     raster_resolution,
+    generate_layer_name,
+    PLATFORM_QGIS,
 )
 
 # numpy / GDAL for the fast raster-algebra steps
@@ -57,6 +59,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     BUILTUP_SMALL_RASTER = "BUILTUP_SMALL_RASTER"
     BUILTUP_LARGE_RASTER = "BUILTUP_LARGE_RASTER"
     AGRICULTURE_RASTER = "AGRICULTURE_RASTER"
+    # ISO3 country code prefix for output filenames (Option D / P1.13).
+    # Optional; when blank, the prefix is omitted from filenames.
+    ISO3_PREFIX = "ISO3_PREFIX"
     # Custom human-use disturbance slots (3, all optional, all FlagAdvanced).
     # Each slot has a raster input, a user-editable label (shown in logs +
     # metadata), and a per-slot buffer distance. Plumbed through prepare /
@@ -175,11 +180,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "If road buffers matter for your analysis, export at 30m or "
             "finer. If you only care about built-up / agriculture / "
             "protection, 60-100m is usually fine and much faster.\n\n"
-            "Output folder layout (OUT = your chosen output folder):\n"
-            "  OUT/primary_forest.tif, pre_connectivity_forest.tif,\n"
-            "      forest_natreg.tif (if plantations), anthropogenic_mask.tif,\n"
-            "      combined_coded_raster.tif (if ticked),\n"
-            "      zonal_statistics.csv/.shp, run_metadata.json\n"
+            "Output folder layout (OUT = your chosen output folder; ISO3 prefix when set):\n"
+            "  OUT/[ISO3_]qgis_04a_primary_forest.tif\n"
+            "  OUT/[ISO3_]qgis_04b_pre_connectivity_primary_forest.tif\n"
+            "  OUT/[ISO3_]qgis_04c_combined_coded_raster.tif (if ticked)\n"
+            "  OUT/[ISO3_]qgis_04d_forest_naturally_regenerating.tif (if plantations)\n"
+            "  OUT/[ISO3_]qgis_04e_anthropogenic_mask.tif\n"
+            "  OUT/[ISO3_]qgis_05a_area_statistics.csv (if zonal stats ticked)\n"
+            "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.shp (if zonal stats ticked)\n"
+            "  OUT/[ISO3_]qgis_06a_primary_forest_vector.gpkg (if vectorise ticked)\n"
+            "  OUT/[ISO3_]qgis_06b_primary_forest_dissolved.gpkg\n"
+            "  OUT/[ISO3_]qgis_06c_<forest>_vector.gpkg (if forest also vectorised)\n"
+            "  OUT/[ISO3_]qgis_06d_<forest>_dissolved.gpkg\n"
+            "  OUT/[ISO3_]qgis_run_metadata.json\n"
             "  OUT/intermediates/tier1_undisturbed.tif, tier2_steep.tif,\n"
             "      tier3_protected.tif, forest_inside_buffers.tif,\n"
             "      steep_slope.tif, gentle_slope.tif\n"
@@ -321,6 +334,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             optional=True))
         self.addParameter(QgsProcessingParameterVectorLayer(
             self.AOI, "Area of Interest boundary (vector)", optional=True))
+
+        # -- Country / context (P1.13) --
+        # Optional ISO3 code prefixed onto every output filename per the
+        # Option D naming convention (see docs/specs/PFF_NAMING_CONVENTION.md).
+        # Leave blank to skip the prefix entirely. Cased uppercase.
+        self.addParameter(QgsProcessingParameterString(
+            self.ISO3_PREFIX,
+            "ISO3 country code prefix for output filenames (optional, e.g. 'KEN'; leave blank to omit)",
+            defaultValue="",
+            optional=True))
 
         # -- CRS / AOI --
         self.addParameter(QgsProcessingParameterBoolean(
@@ -543,10 +566,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.67"
+    PFF_VERSION = "0.9.0"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
+
+        # ── P1.13 ISO3 prefix ──
+        # Read the optional ISO3 prefix once; the _out() closure that
+        # uses it is defined further down (after out_dir is set).
+        _iso3_raw = (self.parameterAsString(
+            parameters, self.ISO3_PREFIX, context) or "").strip()
+        _iso3 = _iso3_raw.upper() if _iso3_raw else None
+        if _iso3:
+            feedback.pushInfo(f"Output filename ISO3 prefix: {_iso3}")
 
         # Per-stage timing. _stage() closes the previous stage timer and
         # opens a new one; _close_last_stage() flushes the final stage
@@ -586,6 +618,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         out_dir = ensure_dir(
             self.parameterAsString(parameters, self.OUTPUT_FOLDER, context))
+
+        # Output filename helper: builds top-level paths per Option D
+        # naming. Uses _iso3 from above; closes over out_dir.
+        def _out(step, name, ext="tif"):
+            return os.path.join(
+                out_dir,
+                generate_layer_name(_iso3, PLATFORM_QGIS, step, name, ext))
+
         save_combined = self.parameterAsBool(
             parameters, self.SAVE_COMBINED_RASTER, context)
         reuse_distances = self.parameterAsBool(
@@ -798,9 +838,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"Target CRS: {target_crs_str} (source: {crs_source})")
 
         # All non-headline outputs (caches + tier rasters) nest under intermediates/.
-        # Headlines (primary_forest, pre_connectivity_forest, forest_natreg,
-        # anthropogenic_mask, combined_coded_raster, zonal_statistics, run_metadata)
-        # stay at out_dir top level.
+        # Headlines (per Option D: 04a primary_forest, 04b pre_connectivity,
+        # 04c combined_coded, 04d forest_natreg, 04e anthropogenic_mask,
+        # 05a area_statistics, 06a/b/c/d vectors, qgis_run_metadata.json)
+        # stay at out_dir top level with ISO3+platform+step prefixes via _out().
         intermediates_dir = ensure_dir(os.path.join(out_dir, "intermediates"))
         prepared_dir = ensure_dir(os.path.join(intermediates_dir, "prepared"))
         dist_dir = ensure_dir(os.path.join(intermediates_dir, "distances"))
@@ -814,18 +855,22 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # when an output file is open in QGIS. Check upfront.
         _run_zonal = self.parameterAsBool(
             parameters, self.RUN_ZONAL_STATS, context)
+        # Likely outputs use the Option D filenames computed via _out().
         _likely_outputs = [
-            os.path.join(out_dir, "primary_forest.tif"),
-            os.path.join(out_dir, "pre_connectivity_forest.tif"),
-            os.path.join(out_dir, "anthropogenic_mask.tif"),
-            os.path.join(out_dir, "forest_natreg.tif"),
-            os.path.join(out_dir, "run_metadata.json"),
+            _out("04a", "primary_forest"),
+            _out("04b", "pre_connectivity_primary_forest"),
+            _out("04e", "anthropogenic_mask"),
+            _out("04d", "forest_naturally_regenerating"),
+            os.path.join(
+                out_dir,
+                (f"{_iso3}_qgis_run_metadata.json" if _iso3
+                 else "qgis_run_metadata.json")),
         ]
         if save_combined:
-            _likely_outputs.append(os.path.join(out_dir, "combined_coded_raster.tif"))
+            _likely_outputs.append(_out("04c", "combined_coded_raster"))
         if _run_zonal:
-            _likely_outputs.append(os.path.join(out_dir, "zonal_statistics.csv"))
-            _likely_outputs.append(os.path.join(out_dir, "zonal_statistics.shp"))
+            _likely_outputs.append(_out("05a", "area_statistics", ext="csv"))
+            _likely_outputs.append(_out("05b", "area_statistics_by_zone", ext="shp"))
 
         _locked = []
         for _p in _likely_outputs:
@@ -1207,8 +1252,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _pds = None
                 _natreg = ((_farr == 1) & (_parr != 1)).astype(np.uint8)
                 # Headline output (FRA naturally regenerating forest), lives at top level.
-                forest_natreg_path = os.path.join(
-                    out_dir, "forest_natreg.tif")
+                # P1.13: 04d_forest_naturally_regenerating.tif
+                forest_natreg_path = _out("04d", "forest_naturally_regenerating")
                 _drv = gdal.GetDriverByName("GTiff")
                 # Remove first so locked file gives a clear error.
                 if os.path.exists(forest_natreg_path):
@@ -1462,7 +1507,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             combined_mask = np.maximum(
                 combined_mask, (arr <= thresh).astype(np.uint8))
 
-        anthro_path = os.path.join(out_dir, "anthropogenic_mask.tif")
+        anthro_path = _out("04e", "anthropogenic_mask")
         _write(anthro_path, combined_mask, gt, proj, x_size, y_size)
         feedback.setProgress(55)
 
@@ -1571,7 +1616,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             tier3_protected,
         )
         # Aligned naming: pre_connectivity_forest (matches pFF_4)
-        candidate_path = os.path.join(out_dir, "pre_connectivity_forest.tif")
+        candidate_path = _out("04b", "pre_connectivity_primary_forest")
         _write(candidate_path, primary_candidate, gt, proj, x_size, y_size)
         feedback.setProgress(80)
 
@@ -1583,7 +1628,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         #  is just a copy of pre_connectivity_forest.tif.
         # ================================================================
         # Aligned naming: primary_forest (matches pFF_4 GEE export name)
-        final_path = os.path.join(out_dir, "primary_forest.tif")
+        final_path = _out("04a", "primary_forest")
         step_a_on = enable_refine_output and smooth_radius > 0
         step_b_on = enable_refine_output and refine_min_patch_area_ha > 0
 
@@ -1689,7 +1734,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             if not enable_refine_output:
                 feedback.pushInfo(
                     "Skipping Refine Output (master tickbox off) -- "
-                    "primary_forest.tif = pre_connectivity_forest.tif.")
+                    "04a_primary_forest.tif copied from "
+                    "04b_pre_connectivity_primary_forest.tif.")
             else:
                 feedback.pushInfo(
                     "Skipping Refine Output (both Step (a) radius and "
@@ -1711,7 +1757,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             combined[primary_candidate == 1] = 2
             combined[final_arr == 1] = 3
 
-            combined_path = os.path.join(out_dir, "combined_coded_raster.tif")
+            combined_path = _out("04c", "combined_coded_raster")
             _write(combined_path, combined, gt, proj, x_size, y_size)
             feedback.pushInfo(
                 "Combined coded raster: 0=none, 1=forest, "
@@ -1780,14 +1826,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
             # CSV
             if results:
-                zonal_csv = os.path.join(out_dir, "zonal_statistics.csv")
+                zonal_csv = _out("05a", "area_statistics", ext="csv")
                 write_zonal_csv(results, totals, zonal_csv, feedback)
 
             # Join to vector (if zones provided)
             if results and zone_path:
                 zone_with_id = os.path.join(
                     zonal_work, "zones_with_id.shp")
-                zonal_vec = os.path.join(out_dir, "zonal_statistics.shp")
+                zonal_vec = _out("05b", "area_statistics_by_zone", ext="shp")
                 join_stats_to_vector(
                     results, zone_with_id, zonal_vec,
                     target_crs_str, context, feedback)
@@ -1800,26 +1846,31 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # simplification and optional CEO-style nesting (cut primary
         # out of forest so the two layers don't overlap).
         #
-        # Filename convention follows the underlying raster (Option D):
-        #   primary_forest.tif  -> primary_forest_vector.gpkg
-        #                        + primary_forest_dissolved.gpkg
-        #   forest_natreg.tif   -> forest_natreg_vector.gpkg
-        #                        + forest_natreg_dissolved.gpkg
-        #   forest.tif          -> forest_vector.gpkg
-        #                        + forest_dissolved.gpkg
-        # Whether forest_natreg or forest is used is determined by
-        # whether plantations refinement actually ran (forest_natreg_path
-        # is non-None when it did).
+        # P1.13 filenames (Option D):
+        #   primary forest -> 06a_primary_forest_vector.gpkg
+        #                   + 06b_primary_forest_dissolved.gpkg
+        #   forest input   -> 06c_<forest_layer_name>_vector.gpkg
+        #                   + 06d_<forest_layer_name>_dissolved.gpkg
+        # Whether forest_naturally_regenerating or forest is used is
+        # determined by whether plantations refinement ran
+        # (forest_natreg_path is non-None when it did).
         # ================================================================
         if run_vectorize and (vectorize_primary or vectorize_forest):
             _stage("STAGE 7: Vectorise outputs")
             vector_scratch = ensure_dir(
                 os.path.join(intermediates_dir, "_vectorize"))
 
-            def _do_polygonise(src_raster_path, name_base):
-                """Mask + polygonise + optional simplify. Returns polys path."""
-                polys_path = os.path.join(
-                    out_dir, f"{name_base}_vector.gpkg")
+            def _do_polygonise(src_raster_path, step, layer_name):
+                """Mask + polygonise + optional simplify. Returns polys path.
+
+                Args:
+                    src_raster_path: source raster (binary 0/1).
+                    step: Option D step substring e.g. '06a'.
+                    layer_name: snake-case descriptor without _vector
+                                suffix or extension (e.g. 'primary_forest').
+                                The function appends '_vector' and '.gpkg'.
+                """
+                polys_path = _out(step, f"{layer_name}_vector", ext="gpkg")
                 # Build mask raster with nodata=0 so polygonize skips
                 # background efficiently. Source rasters are already
                 # binary 0/1, so the mask is just (arr == 1).
@@ -1832,7 +1883,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_v = None
                 _v_mask = (_v_arr == 1).astype(np.uint8)
                 _v_masked_tif = os.path.join(
-                    vector_scratch, f"{name_base}_masked.tif")
+                    vector_scratch, f"{layer_name}_masked.tif")
                 if os.path.exists(_v_masked_tif):
                     try:
                         os.remove(_v_masked_tif)
@@ -1853,12 +1904,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
                 if vectorize_simplify_m > 0:
                     polys_tmp = os.path.join(
-                        vector_scratch, f"{name_base}_polys_raw.gpkg")
+                        vector_scratch, f"{layer_name}_polys_raw.gpkg")
                 else:
                     polys_tmp = polys_path
 
                 feedback.pushInfo(
-                    f"  Polygonising {name_base} (gdal:polygonize, "
+                    f"  Polygonising {layer_name} (gdal:polygonize, "
                     "4-connected)...")
                 run_processing("gdal:polygonize", {
                     "INPUT": _v_masked_tif,
@@ -1871,7 +1922,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
                 if vectorize_simplify_m > 0:
                     feedback.pushInfo(
-                        f"  Simplifying {name_base} (Douglas-Peucker, "
+                        f"  Simplifying {layer_name} (Douglas-Peucker, "
                         f"tolerance={vectorize_simplify_m:g} m)...")
                     feedback.pushWarning(
                         "Simplify can introduce geometry artefacts; "
@@ -1890,7 +1941,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             primary_polys_path = None
             if vectorize_primary:
                 primary_polys_path = _do_polygonise(
-                    final_path, "primary_forest")
+                    final_path, "06a", "primary_forest")
 
             if feedback.isCanceled():
                 from qgis.core import QgsProcessingException
@@ -1906,12 +1957,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             if vectorize_forest:
                 if forest_natreg_path is not None:
                     forest_src_path = forest_natreg_path
-                    forest_name_base = "forest_natreg"
+                    forest_name_base = "forest_naturally_regenerating"
                 else:
                     forest_src_path = prepared_forest_path
                     forest_name_base = "forest"
                 forest_polys_path = _do_polygonise(
-                    forest_src_path, forest_name_base)
+                    forest_src_path, "06c", forest_name_base)
 
             if feedback.isCanceled():
                 from qgis.core import QgsProcessingException
@@ -1968,8 +2019,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # Dissolve happens after potential nesting so the dissolved
             # output reflects the final (possibly differenced) geometry.
             if vectorize_primary:
-                _primary_dissolved = os.path.join(
-                    out_dir, "primary_forest_dissolved.gpkg")
+                _primary_dissolved = _out(
+                    "06b", "primary_forest_dissolved", ext="gpkg")
                 feedback.pushInfo(
                     "  Dissolving primary_forest to multipart...")
                 run_processing("native:dissolve", {
@@ -1979,8 +2030,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 }, context=context, feedback=feedback)
 
             if vectorize_forest:
-                _forest_dissolved = os.path.join(
-                    out_dir, f"{forest_name_base}_dissolved.gpkg")
+                _forest_dissolved = _out(
+                    "06d", f"{forest_name_base}_dissolved", ext="gpkg")
                 feedback.pushInfo(
                     f"  Dissolving {forest_name_base} to multipart...")
                 run_processing("native:dissolve", {
@@ -2053,7 +2104,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "resolution_m": abs(gt[1]),
             },
         }
-        meta_path = os.path.join(out_dir, "run_metadata.json")
+        # P1.13: run metadata sidecar gets ISO3 prefix when set; otherwise
+        # plain run_metadata.json. No step number — it's a contextual sidecar,
+        # not a per-stage layer.
+        meta_path = os.path.join(
+            out_dir,
+            (f"{_iso3}_qgis_run_metadata.json" if _iso3
+             else "qgis_run_metadata.json"))
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         feedback.pushInfo(f"Metadata: {meta_path}")
@@ -2107,7 +2164,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # Combined anthropogenic mask (the union of all buffered zones).
             _hi_candidates.append(
                 ("Anthropogenic mask (combined buffers)",
-                 os.path.join(out_dir, "anthropogenic_mask.tif")))
+                 _out("04e", "anthropogenic_mask")))
             for _name, _path in _hi_candidates:
                 if os.path.exists(_path):
                     _layers_to_load.append((_name, _path))
