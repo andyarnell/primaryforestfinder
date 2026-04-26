@@ -17,6 +17,84 @@ def ensure_dir(path: str) -> str:
     return path
 
 
+# ---------------------------------------------------------------------------
+# Canonical PFF output filename builder (Option D, decided 2026-04-26)
+# ---------------------------------------------------------------------------
+
+# Stable platform tags. Use these exact strings -- not 'app' / 'plugin'.
+PLATFORM_GEE = "gee"
+PLATFORM_QGIS = "qgis"
+
+# Stable step prefixes. Production stage of the file (where in the pipeline
+# it was made), not the action that saves it. Sortable alphabetically =
+# workflow order.
+STEP_CONTEXT = "00"          # supplies ISO3 prefix; no files of its own
+STEP_TIME_PERIOD = "01"      # supplies year; no files of its own
+STEP_FOREST_INPUTS = "02"    # raw forest layers (when user opts to save)
+STEP_HUMAN_INFLUENCE = "03"  # raw anthro layers (when user opts to save)
+STEP_REFINE = "04"           # final refined rasters, pre-conn, combined
+STEP_STATISTICS = "05"       # stats CSV / per-zone shapefile
+STEP_VALIDATION = "06"       # vectorised + dissolved CEO outputs
+
+
+def generate_layer_name(iso3, platform: str, step: str, name: str,
+                        ext: str = "tif") -> str:
+    """Build a canonical PFF output filename per the Option D schema.
+
+    Format: ``{iso3}_{platform}_{step}_{name}.{ext}``  (ISO3 optional;
+    omitted when no country selected).
+
+    Args:
+      iso3:     ISO3 country code (e.g. 'KEN'). Pass None / empty to omit.
+                Cased uppercase if supplied.
+      platform: 'gee' or 'qgis'. Use the PLATFORM_* constants in this
+                module.
+      step:     '00'-'06' with optional substep letter ('04a', '05b').
+                Use the STEP_* constants for the base.
+      name:     Snake-case layer name without step prefix or extension
+                (e.g. 'primary_forest', 'area_statistics',
+                'primary_forest_vector'). The step number already
+                encodes the production stage, so no need to repeat
+                'results_' / 'refined_' / 'validation_' qualifiers.
+      ext:      Extension without leading dot (default 'tif'). Use
+                'gpkg' for vectors, 'csv' for stats, 'shp' for
+                shapefile-zone outputs, 'json' for metadata sidecars.
+
+    Examples:
+      >>> generate_layer_name('KEN', PLATFORM_QGIS, '04a',
+      ...                     'primary_forest')
+      'KEN_qgis_04a_primary_forest.tif'
+      >>> generate_layer_name(None, PLATFORM_QGIS, '06b',
+      ...                     'primary_forest_dissolved', ext='gpkg')
+      'qgis_06b_primary_forest_dissolved.gpkg'
+      >>> generate_layer_name('KEN', PLATFORM_GEE, '05a',
+      ...                     'area_statistics', ext='csv')
+      'KEN_gee_05a_area_statistics.csv'
+
+    Foundation utility for P1.13 (full filename rename across both
+    tools). Existing call sites currently use ad-hoc filenames; future
+    work migrates them to call this helper for a single source of
+    truth.
+    """
+    parts = []
+    if iso3:
+        parts.append(str(iso3).strip().upper())
+    if platform not in (PLATFORM_GEE, PLATFORM_QGIS):
+        raise ValueError(
+            f"platform must be 'gee' or 'qgis' (got {platform!r}). "
+            "Use the PLATFORM_GEE / PLATFORM_QGIS constants.")
+    parts.append(platform)
+    if not step:
+        raise ValueError("step is required (e.g. '04a').")
+    parts.append(str(step).strip())
+    if not name:
+        raise ValueError("name is required (e.g. 'primary_forest').")
+    parts.append(str(name).strip())
+    base = "_".join(parts)
+    ext_clean = str(ext).strip().lstrip(".") if ext else ""
+    return f"{base}.{ext_clean}" if ext_clean else base
+
+
 def validate_crs_projected(layer, feedback: QgsProcessingFeedback):
     """Warn (via feedback) if *layer* uses a geographic CRS."""
     crs = layer.crs()
