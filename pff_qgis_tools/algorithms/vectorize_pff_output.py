@@ -80,10 +80,18 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
             "the combined coded raster -- useful for a broader sampling "
             "area than primary forest alone.\n"
             "  - Simplify tolerance in metres (default 0 = no "
-            "simplification). Applied via native:simplifygeometries; "
-            "PFF rasters are in projected metres-CRS so the tolerance "
-            "is in metres directly. Typical values: 30-100 m for "
-            "national-scale outputs to remove pixel-edge zigzag.\n\n"
+            "simplification). Applied via native:simplifygeometries "
+            "(Douglas-Peucker); PFF rasters are in projected metres-CRS "
+            "so the tolerance is in metres directly. Typical values: "
+            "30-100 m for national-scale outputs to remove pixel-edge "
+            "zigzag.\n"
+            "    USE WITH CAUTION: simplification can introduce "
+            "geometry artefacts (self-intersections, removed slivers, "
+            "snapped vertices) -- especially when small patches are "
+            "present in the input raster. If downstream tools throw "
+            "geometry errors, reduce the tolerance. For sensitive "
+            "patch-level analyses, run small-patch removal first via "
+            "Refine Output Step (b) before vectorising.\n\n"
             "Outputs:\n"
             "  1. Vector -- polygonisation of the selected pixel "
             "values, optionally simplified.\n"
@@ -123,10 +131,13 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
         # Simplify tolerance in metres. 0 = no simplification.
         # PFF vectors are in projected metres-CRS so $tolerance is in
         # metres directly. Typical values: 30-100 m for national-scale
-        # outputs to remove pixel-edge zigzag.
+        # outputs to remove pixel-edge zigzag. CAUTION: simplification
+        # can introduce self-intersections and other geometry artefacts,
+        # especially when small patches are present.
         self.addParameter(QgsProcessingParameterNumber(
             self.SIMPLIFY_TOLERANCE_M,
-            "Simplify tolerance, metres (0 = no simplification)",
+            "Simplify tolerance, metres (0 = no simplification; use "
+            "with caution -- can introduce geometry artefacts, see help)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=0.0,
             minValue=0.0))
@@ -257,6 +268,13 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(
                 f"Simplifying geometries (Douglas-Peucker, "
                 f"tolerance={simplify_tol_m:g} m)...")
+            feedback.pushWarning(
+                "Simplify can introduce geometry artefacts (self-"
+                "intersections, removed slivers, snapped vertices), "
+                "especially with small patches. If downstream tools "
+                "throw geometry errors, reduce the tolerance or run "
+                "Refine Output Step (b) first to remove small patches "
+                "before vectorising.")
             run_processing("native:simplifygeometries", {
                 "INPUT": polygonised_tmp,
                 "METHOD": 0,  # 0 = Distance (Douglas-Peucker)
