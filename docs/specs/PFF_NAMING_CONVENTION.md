@@ -28,7 +28,7 @@ Step prefix encodes the **production stage** (where in the pipeline the file was
 | `03` | Human Influence Inputs | `03a_human_influence_roads.tif` (when user opts to save raw) | Human Influence Layers |
 | `04` | Refine | `04a_primary_forest.tif`, `04b_pre_connectivity_primary_forest.tif`, `04c_combined_coded_raster.tif`, `04d_forest_naturally_regenerating.tif` | Refine Output |
 | `05` | Statistics | `05a_area_statistics.csv`, `05b_area_statistics_by_admin1.shp` | (right-panel in GEE; standard form section in QGIS) |
-| `06` | Validation / Export | `06a_primary_forest_vector.gpkg`, `06b_primary_forest_dissolved.gpkg` | (right-panel in GEE; standard form section in QGIS) |
+| `06` | Validation / Export | `06a_primary_forest.gpkg`, `06b_primary_forest_dissolved.gpkg` | (right-panel in GEE; standard form section in QGIS) |
 
 ## Substeps
 
@@ -123,7 +123,7 @@ my-output-folder/
   qgis_04c_combined_coded_raster.tif         ← (when ticked)
   qgis_04d_forest_naturally_regenerating.tif ← (when plantations refined)
   qgis_05a_area_statistics.csv
-  qgis_06a_primary_forest_vector.gpkg        ← (when Stage 7 ticked)
+  qgis_06a_primary_forest.gpkg        ← (when Stage 7 ticked)
   qgis_06b_primary_forest_dissolved.gpkg     ← (when Stage 7 ticked)
   run_metadata.json
   intermediates/
@@ -140,7 +140,7 @@ my-output-folder/
   KEN_qgis_04b_pre_connectivity_primary_forest.tif
   KEN_qgis_05a_area_statistics.csv
   KEN_qgis_05b_area_statistics_by_admin1.shp ← (when zonal stats ticked)
-  KEN_qgis_06a_primary_forest_vector.gpkg
+  KEN_qgis_06a_primary_forest.gpkg
   KEN_qgis_06b_primary_forest_dissolved.gpkg
   KEN_run_metadata.json
   intermediates/...
