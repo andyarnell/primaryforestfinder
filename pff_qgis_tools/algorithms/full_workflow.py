@@ -97,6 +97,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     SAVE_COMBINED_RASTER = "SAVE_COMBINED_RASTER"
     EXCLUDE_PLANTATIONS = "EXCLUDE_PLANTATIONS"
     REUSE_DISTANCE_SURFACES = "REUSE_DISTANCE_SURFACES"
+    REUSE_PREPARED = "REUSE_PREPARED"
     ADD_MAIN_OUTPUTS_TO_MAP = "ADD_MAIN_OUTPUTS_TO_MAP"
     # -- Per-stage enable tickboxes (skip stages for faster runs) --
     ENABLE_ROADS_BUFFER = "ENABLE_ROADS_BUFFER"
@@ -433,6 +434,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "Reuse cached distance surfaces (faster re-runs; only safe when anthro inputs and grid are unchanged)",
             defaultValue=False))
         self.addParameter(QgsProcessingParameterBoolean(
+            self.REUSE_PREPARED,
+            "Reuse prepared/*.tif cache (skip reprojection of anthro inputs when an aligned cache exists with matching grid). Default ON; flip OFF if you've changed an input source raster.",
+            defaultValue=True))
+        self.addParameter(QgsProcessingParameterBoolean(
             self.ADD_MAIN_OUTPUTS_TO_MAP,
             "Add main outputs to map after run (primary forest, pre-connectivity forest, forest input)",
             defaultValue=True))
@@ -500,7 +505,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.60"
+    PFF_VERSION = "0.8.61"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -547,6 +552,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.SAVE_COMBINED_RASTER, context)
         reuse_distances = self.parameterAsBool(
             parameters, self.REUSE_DISTANCE_SURFACES, context)
+        reuse_prepared = self.parameterAsBool(
+            parameters, self.REUSE_PREPARED, context)
         auto_utm = self.parameterAsBool(
             parameters, self.AUTO_UTM, context)
         aoi_buffer_dist = self.parameterAsDouble(
@@ -970,6 +977,37 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     f"Raster {filename} is already prepared/{filename}.tif "
                     "— using as-is (re-run path).")
                 return aligned
+            # P0.3 REUSE_PREPARED: when the user toggle is on AND a cached
+            # prepared/<filename>.tif exists AND its grid (x_size, y_size,
+            # pixel size) matches the reference, skip the whole reproject +
+            # clip + warp pipeline. The user's source raster is intentionally
+            # NOT re-checked -- if they swapped sources, they're expected to
+            # untick this option to force re-prep. Surfaces a clear log line
+            # so the user can spot when reuse fired.
+            if reuse_prepared and os.path.exists(aligned):
+                try:
+                    _, _ag_gt, _ag_x, _ag_y = get_raster_info(aligned)
+                    _, _rf_gt, _rf_x, _rf_y = get_raster_info(reference)
+                    _grid_match = (
+                        _ag_x == _rf_x and _ag_y == _rf_y
+                        and abs(abs(_ag_gt[1]) - abs(_rf_gt[1])) < 1e-6
+                        and abs(abs(_ag_gt[5]) - abs(_rf_gt[5])) < 1e-6
+                    )
+                    if _grid_match:
+                        feedback.pushInfo(
+                            f"Reused cached: prepared/{filename}.tif "
+                            "(matches reference grid; reproject skipped). "
+                            "Untick 'Reuse prepared/*.tif cache' to force "
+                            "re-prep if your source raster changed.")
+                        return aligned
+                    else:
+                        feedback.pushInfo(
+                            f"Cached prepared/{filename}.tif has mismatched "
+                            "grid -- recomputing.")
+                except Exception as _e:
+                    feedback.pushDebugInfo(
+                        f"Could not verify cached prepared/{filename}.tif: "
+                        f"{_e}; recomputing to be safe.")
             feedback.pushInfo(f"Aligning raster {filename}...")
             reproj = os.path.join(scratch_dir, f"{filename}_reproj.tif")
             reproject_raster(layer.source(), target_crs_str, reproj,
@@ -1900,6 +1938,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "use_single_buffer_distance": use_single,
                 "single_buffer_distance_m": single_dist if use_single else None,
                 "reuse_cached_distances": reuse_distances,
+                "reuse_prepared": reuse_prepared,
                 "roads_dist_m": thresholds["roads"],
                 "builtup_dist_m": thresholds["builtup"],
                 "builtup_large_dist_m": thresholds["builtup_large"],
