@@ -10,7 +10,7 @@ from .algorithms.primary_forest import PrimaryForestAlgorithm
 from .algorithms.connectivity_filter import ConnectivityFilterAlgorithm
 from .algorithms.full_workflow import FullWorkflowAlgorithm
 from .algorithms.zonal_statistics import ZonalStatisticsAlgorithm
-from .algorithms.vectorize_for_ceo import VectorizeForCeoAlgorithm
+from .algorithms.vectorize_pff_output import VectorizePffOutputAlgorithm
 # from .algorithms.generate_ceo_plots import GenerateCeoPlotsAlgorithm  # draft, not shipped yet
 
 
@@ -38,5 +38,5 @@ class PffProvider(QgsProcessingProvider):
         self.addAlgorithm(ConnectivityFilterAlgorithm())
         self.addAlgorithm(FullWorkflowAlgorithm())
         self.addAlgorithm(ZonalStatisticsAlgorithm())
-        self.addAlgorithm(VectorizeForCeoAlgorithm())
+        self.addAlgorithm(VectorizePffOutputAlgorithm())
         # self.addAlgorithm(GenerateCeoPlotsAlgorithm())  # draft, not shipped yet
