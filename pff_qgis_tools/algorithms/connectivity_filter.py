@@ -130,6 +130,9 @@ class ConnectivityFilterAlgorithm(QgsProcessingAlgorithm):
         import os
         import tempfile
 
+        import numpy as np
+        from osgeo import gdal as _gdal
+
         from qgis.core import QgsProcessingException
         from ..utils import ensure_dir, run_processing
 
@@ -200,12 +203,52 @@ class ConnectivityFilterAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(
                 f"Step (b) Minimum patch size: removing connected groups < "
                 f"{threshold_px} px (~{min_patch_area_ha:g} ha) via gdal:sieve...")
+
+            # Sieve to a scratch tif first; then mask back to input forest
+            # (gdal:sieve fills small "0-holes" inside larger "1" regions
+            # by replacing them with the surrounding value, which would
+            # introduce pixels outside the input forest extent. The mask-
+            # back step matches the principle Step (a)'s neighbourhood
+            # filter already applies internally).
+            sieve_tmp = os.path.join(scratch_dir, "step_b_sieved.tif")
             run_processing("gdal:sieve", {
                 "INPUT": step_b_in,
                 "THRESHOLD": threshold_px,
                 "EIGHT_CONNECTEDNESS": False,
-                "OUTPUT": step_b_out,
+                "OUTPUT": sieve_tmp,
             }, context=context, feedback=feedback)
+
+            feedback.pushInfo(
+                "Step (b) masking sieve result back to input forest "
+                "(prevents hole-fill from creating pixels outside the "
+                "input extent)...")
+            _ds_sv = _gdal.Open(sieve_tmp, _gdal.GA_ReadOnly)
+            sv_arr = _ds_sv.GetRasterBand(1).ReadAsArray()
+            sv_gt = _ds_sv.GetGeoTransform()
+            sv_proj = _ds_sv.GetProjection()
+            sv_xsz = _ds_sv.RasterXSize
+            sv_ysz = _ds_sv.RasterYSize
+            _ds_sv = None
+            _ds_in = _gdal.Open(step_b_in, _gdal.GA_ReadOnly)
+            in_arr = _ds_in.GetRasterBand(1).ReadAsArray()
+            _ds_in = None
+            masked = ((sv_arr == 1) & (in_arr == 1)).astype(np.uint8)
+            drv = _gdal.GetDriverByName("GTiff")
+            if os.path.exists(step_b_out):
+                try:
+                    os.remove(step_b_out)
+                except OSError:
+                    pass
+            _ds_out = drv.Create(step_b_out, sv_xsz, sv_ysz, 1,
+                                 _gdal.GDT_Byte,
+                                 ["COMPRESS=LZW", "TILED=YES"])
+            _ds_out.SetGeoTransform(sv_gt)
+            _ds_out.SetProjection(sv_proj)
+            _ob = _ds_out.GetRasterBand(1)
+            _ob.WriteArray(masked)
+            _ob.SetNoDataValue(0)
+            _ob.FlushCache()
+            _ds_out = None
 
         feedback.pushInfo("Refine output complete.")
         return {self.OUTPUT: out_path}

@@ -401,7 +401,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.55"
+    PFF_VERSION = "0.8.56"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1363,12 +1363,55 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     f"Step (b) Minimum patch size: removing connected "
                     f"groups < {_threshold_px} px "
                     f"(~{refine_min_patch_area_ha:g} ha) via gdal:sieve...")
+
+                # Sieve to scratch first, then mask back to step_b_in
+                # (the input to step b). gdal:sieve fills small "0-holes"
+                # inside larger "1" regions by replacing them with the
+                # surrounding value -- without the mask-back, the final
+                # output would include pixels that were never forest.
+                # Mirrors the mask-back-to-input principle Step (a)'s
+                # neighbourhood filter already applies internally.
+                _sieve_tmp = os.path.join(
+                    intermediates_dir, "refine_step_b_sieve_unmasked.tif")
                 run_processing("gdal:sieve", {
                     "INPUT": step_b_in,
                     "THRESHOLD": _threshold_px,
                     "EIGHT_CONNECTEDNESS": False,
-                    "OUTPUT": final_path,
+                    "OUTPUT": _sieve_tmp,
                 }, context=context, feedback=feedback)
+
+                feedback.pushInfo(
+                    "Step (b) masking sieve result back to step (b) input "
+                    "(prevents hole-fill from creating pixels outside the "
+                    "input forest extent)...")
+                _ds_sv = gdal.Open(_sieve_tmp, gdal.GA_ReadOnly)
+                _sv_arr = _ds_sv.GetRasterBand(1).ReadAsArray()
+                _sv_gt = _ds_sv.GetGeoTransform()
+                _sv_proj = _ds_sv.GetProjection()
+                _sv_xsz = _ds_sv.RasterXSize
+                _sv_ysz = _ds_sv.RasterYSize
+                _ds_sv = None
+                _ds_in = gdal.Open(step_b_in, gdal.GA_ReadOnly)
+                _in_arr = _ds_in.GetRasterBand(1).ReadAsArray()
+                _ds_in = None
+                _masked = (
+                    (_sv_arr == 1) & (_in_arr == 1)).astype(np.uint8)
+                if os.path.exists(final_path):
+                    try:
+                        os.remove(final_path)
+                    except OSError:
+                        pass
+                _drv = gdal.GetDriverByName("GTiff")
+                _ds_out = _drv.Create(final_path, _sv_xsz, _sv_ysz, 1,
+                                      gdal.GDT_Byte,
+                                      ["COMPRESS=LZW", "TILED=YES"])
+                _ds_out.SetGeoTransform(_sv_gt)
+                _ds_out.SetProjection(_sv_proj)
+                _ob = _ds_out.GetRasterBand(1)
+                _ob.WriteArray(_masked)
+                _ob.SetNoDataValue(0)
+                _ob.FlushCache()
+                _ds_out = None
         else:
             if not enable_refine_output:
                 feedback.pushInfo(
