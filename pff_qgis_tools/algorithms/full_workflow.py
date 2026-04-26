@@ -79,6 +79,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     SMOOTH_RADIUS = "SMOOTH_RADIUS"
     DENSITY_THRESHOLD = "DENSITY_THRESHOLD"
     FAST_APPROXIMATION = "FAST_APPROXIMATION"
+    REFINE_MIN_PATCH_AREA_HA = "REFINE_MIN_PATCH_AREA_HA"
     SAVE_COMBINED_RASTER = "SAVE_COMBINED_RASTER"
     EXCLUDE_PLANTATIONS = "EXCLUDE_PLANTATIONS"
     REUSE_DISTANCE_SURFACES = "REUSE_DISTANCE_SURFACES"
@@ -340,23 +341,29 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=SLOPE_THRESHOLD, minValue=0, maxValue=90))
         self.addParameter(QgsProcessingParameterBoolean(
             self.ENABLE_REFINE_OUTPUT,
-            "Refine Output (neighbourhood density filter)",
+            "Refine Output (two optional steps: neighbourhood density + minimum patch size)",
             defaultValue=True))
+        # Step (a) -- neighbourhood density
         self.addParameter(QgsProcessingParameterNumber(
             self.SMOOTH_RADIUS,
-            "    Refine output: neighbourhood radius (m)",
+            "    Refine Step (a): neighbourhood radius (m); 0 = skip step (a)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=SMOOTH_RADIUS, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterNumber(
             self.DENSITY_THRESHOLD,
-            "    Refine output: minimum density to keep (0-1)",
+            "    Refine Step (a): minimum density to keep (0-1)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=DENSITY_THRESHOLD, minValue=0, maxValue=1))
-
         self.addParameter(QgsProcessingParameterBoolean(
             self.FAST_APPROXIMATION,
-            "    Refine output: fast approximation (square kernel — faster, slight shape difference)",
+            "    Refine Step (a): fast approximation (square kernel — faster, slight shape difference)",
             defaultValue=False))
+        # Step (b) -- minimum patch size (raster sieve)
+        self.addParameter(QgsProcessingParameterNumber(
+            self.REFINE_MIN_PATCH_AREA_HA,
+            "    Refine Step (b): minimum patch area, hectares (0 = skip step (b))",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0, minValue=0.0))
 
         # -- Options --
         self.addParameter(QgsProcessingParameterBoolean(
@@ -394,7 +401,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.54"
+    PFF_VERSION = "0.8.55"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -453,6 +460,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.SMOOTH_RADIUS, context)
         density_thresh = self.parameterAsDouble(
             parameters, self.DENSITY_THRESHOLD, context)
+        refine_min_patch_area_ha = self.parameterAsDouble(
+            parameters, self.REFINE_MIN_PATCH_AREA_HA, context)
 
         use_single = self.parameterAsBool(
             parameters, self.USE_SINGLE_DISTANCE, context)
@@ -1294,25 +1303,81 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         feedback.setProgress(80)
 
         # ================================================================
-        #  STAGE 5 -- Refine output (neighbourhood density filter)
+        #  STAGE 5 -- Refine output: two optional steps
+        #    (a) Neighbourhood density filter
+        #    (b) Minimum patch size filter (raster sieve)
+        #  Both off (or master tickbox unticked) -> primary_forest.tif
+        #  is just a copy of pre_connectivity_forest.tif.
         # ================================================================
         # Aligned naming: primary_forest (matches pFF_4 GEE export name)
         final_path = os.path.join(out_dir, "primary_forest.tif")
-        if enable_refine_output and smooth_radius > 0:
+        step_a_on = enable_refine_output and smooth_radius > 0
+        step_b_on = enable_refine_output and refine_min_patch_area_ha > 0
+
+        if step_a_on or step_b_on:
             _stage("STAGE 5: Refine Output")
-            from .connectivity_filter import refine_output
             fast_approx = self.parameterAsBool(
                 parameters, self.FAST_APPROXIMATION, context)
-            refine_output(candidate_path, final_path,
-                          radius_m=smooth_radius,
-                          threshold=density_thresh,
-                          fast_approximation=fast_approx,
-                          feedback=feedback)
+
+            # Decide intermediate path layout:
+            #  both steps -> step (a) writes to scratch, step (b) -> final
+            #  only (a)   -> step (a) writes to final
+            #  only (b)   -> step (b) reads candidate, writes final
+            if step_a_on and step_b_on:
+                step_a_out = os.path.join(
+                    intermediates_dir, "refine_step_a_neighbourhood.tif")
+                step_b_in = step_a_out
+            elif step_a_on:
+                step_a_out = final_path
+                step_b_in = None
+            else:
+                step_a_out = None
+                step_b_in = candidate_path
+
+            if step_a_on:
+                feedback.pushInfo(
+                    f"Step (a) Neighbourhood density "
+                    f"(radius={smooth_radius:g} m, "
+                    f"density>={density_thresh:g}, fast={fast_approx})...")
+                from .connectivity_filter import refine_output
+                refine_output(candidate_path, step_a_out,
+                              radius_m=smooth_radius,
+                              threshold=density_thresh,
+                              fast_approximation=fast_approx,
+                              feedback=feedback)
+
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (between Refine Output steps).")
+
+            if step_b_on:
+                # Compute pixel-count threshold from hectares + pixel area.
+                _res = abs(gt[1])
+                _pixel_area_m2 = _res * _res
+                import math as _math
+                _min_area_m2 = refine_min_patch_area_ha * 10000.0
+                _threshold_px = max(
+                    1, _math.ceil(_min_area_m2 / _pixel_area_m2))
+                feedback.pushInfo(
+                    f"Step (b) Minimum patch size: removing connected "
+                    f"groups < {_threshold_px} px "
+                    f"(~{refine_min_patch_area_ha:g} ha) via gdal:sieve...")
+                run_processing("gdal:sieve", {
+                    "INPUT": step_b_in,
+                    "THRESHOLD": _threshold_px,
+                    "EIGHT_CONNECTEDNESS": False,
+                    "OUTPUT": final_path,
+                }, context=context, feedback=feedback)
         else:
             if not enable_refine_output:
-                feedback.pushInfo("Skipping Refine Output (unticked) — primary_forest.tif = pre_connectivity_forest.tif.")
+                feedback.pushInfo(
+                    "Skipping Refine Output (master tickbox off) -- "
+                    "primary_forest.tif = pre_connectivity_forest.tif.")
             else:
-                feedback.pushInfo("Skipping refine output (radius = 0).")
+                feedback.pushInfo(
+                    "Skipping Refine Output (both Step (a) radius and "
+                    "Step (b) min patch area are 0).")
             run_processing("gdal:translate", {
                 "INPUT": candidate_path, "OUTPUT": final_path,
             }, context=context, feedback=feedback)
@@ -1439,6 +1504,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "slope_threshold_deg": slope_thresh,
                 "smooth_radius_m": smooth_radius,
                 "density_threshold": density_thresh,
+                "refine_min_patch_area_ha": refine_min_patch_area_ha,
                 "auto_utm": auto_utm,
                 "exclude_plantations": exclude_plantations,
                 "plantations_applied": forest_natreg_path is not None,

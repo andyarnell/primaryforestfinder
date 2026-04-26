@@ -2,16 +2,14 @@
 PFF Tool 7 -- Vectorize PFF Output
 ====================================
 Post-processing tool: takes a binary or coded PFF raster and produces
-a vectorised version, with optional minimum-patch-size filtering done
-at the raster stage (so the filtered raster is also returned and can
-feed zonal statistics downstream).
+a vectorised version (polygons), with optional geometry simplification,
+plus a dissolved-multipart version suitable as a sampling-area
+boundary for validation workflows.
 
-Outputs (up to three in one run):
-  1. Filtered raster -- only when minimum patch area is set above 0.
-     The mask raster after small connected groups have been sieved
-     out. Feeds naturally into the existing Zonal Statistics tool.
-  2. Vector -- polygonisation of the (possibly filtered) mask.
-  3. Dissolved multipart vector -- single feature suitable as a
+Outputs:
+  1. Vector -- polygonisation of the selected pixel value(s),
+     optionally simplified.
+  2. Dissolved multipart vector -- single feature suitable as a
      sampling-area boundary for validation tools (e.g. Collect Earth
      Online; see https://collect.earth/).
 
@@ -19,14 +17,18 @@ Pixel value selector: comma-separated list, default '1'. Use '1,2,3'
 to vectorise multiple classes from the combined coded raster (e.g.
 for a broader sampling area than primary forest alone).
 
-Filtering happens at raster level via gdal:sieve so the result
-is consistent across raster + vector outputs and the filtered raster
-is available for downstream zonal stats. No GRASS dependency.
+Patch-size filtering is NOT done here -- use the Refine Output stage
+(in Full Workflow) or the standalone Refine Output tool, which has a
+"minimum patch size" option that runs at raster level. Sieving at
+raster level keeps a refined raster + vector pair consistent and
+feeds zonal stats cleanly.
+
+No GRASS dependency -- uses gdal:polygonize + native:simplifygeometries
++ native:dissolve, all QGIS core.
 
 Compatible with QGIS >= 3.38.
 """
 
-import math
 import os
 import tempfile
 
@@ -40,19 +42,17 @@ from qgis.core import (
     QgsProcessingParameterString,
     QgsProcessingParameterNumber,
     QgsProcessingParameterFileDestination,
-    QgsProcessingParameterRasterDestination,
 )
 
 from ..utils import ensure_dir, run_processing
 
 
 class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
-    """Polygonise + optional raster-level patch-size filter + dissolve."""
+    """Polygonise + optional simplify + dissolve."""
 
     INPUT_RASTER = "INPUT_RASTER"
     PIXEL_VALUES = "PIXEL_VALUES"
-    MIN_PATCH_AREA_HA = "MIN_PATCH_AREA_HA"
-    OUTPUT_FILTERED_RASTER = "OUTPUT_FILTERED_RASTER"
+    SIMPLIFY_TOLERANCE_M = "SIMPLIFY_TOLERANCE_M"
     OUTPUT_VECTOR = "OUTPUT_VECTOR"
     OUTPUT_DISSOLVED = "OUTPUT_DISSOLVED"
 
@@ -70,36 +70,35 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            "Polygonise a binary or coded PFF raster, with optional "
-            "minimum-patch-size filtering done at the raster stage so "
-            "the filtered raster is also returned (and can feed Zonal "
-            "Statistics downstream).\n\n"
+            "Polygonise a binary or coded PFF raster and (optionally) "
+            "simplify the geometries, then produce a dissolved-multipart "
+            "version for validation sampling.\n\n"
             "Inputs:\n"
             "  - Source raster (binary or coded).\n"
             "  - Pixel value(s) to vectorise (comma-separated, default "
             "'1'). Use e.g. '1,2,3' to vectorise multiple classes from "
             "the combined coded raster -- useful for a broader sampling "
             "area than primary forest alone.\n"
-            "  - Minimum patch area in hectares (default 0 = no "
-            "filtering). When > 0, gdal:sieve removes connected "
-            "raster groups smaller than the threshold before "
-            "polygonisation.\n\n"
+            "  - Simplify tolerance in metres (default 0 = no "
+            "simplification). Applied via native:simplifygeometries; "
+            "PFF rasters are in projected metres-CRS so the tolerance "
+            "is in metres directly. Typical values: 30-100 m for "
+            "national-scale outputs to remove pixel-edge zigzag.\n\n"
             "Outputs:\n"
-            "  1. Filtered raster -- only written when minimum patch "
-            "area > 0. The mask raster after sieving. Plug into "
-            "Zonal Statistics for area numbers that match the vector.\n"
-            "  2. Vector -- polygonisation of the (possibly filtered) "
-            "mask.\n"
-            "  3. Dissolved multipart -- single feature suitable as a "
-            "sampling-area boundary for validation workflows. Built "
-            "from the filtered mask when filtering is on, otherwise "
-            "from the raw mask.\n\n"
+            "  1. Vector -- polygonisation of the selected pixel "
+            "values, optionally simplified.\n"
+            "  2. Dissolved multipart -- single feature, suitable as a "
+            "sampling-area boundary for validation workflows.\n\n"
             "The dissolved multipart format is compatible with sampling "
             "inputs for validation tools such as Collect Earth Online "
             "(CEO): https://collect.earth/\n\n"
             "Background (0 / nodata) is masked before polygonisation so "
             "the tool doesn't waste cycles on country-wide background "
             "pixels.\n\n"
+            "Patch-size filtering is NOT done here -- use Refine Output "
+            "(Step b: minimum patch size) for that. Filtering at raster "
+            "level keeps the refined raster + vector pair consistent "
+            "and feeds Zonal Statistics cleanly.\n\n"
             "Typical use cases (rerun with different class selections):\n"
             "  - default '1' on primary_forest.tif -> strict primary-"
             "forest sampling area.\n"
@@ -121,25 +120,20 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
             "'1,2,3' for multi-class from combined raster)",
             defaultValue="1"))
 
-        # Min patch area in hectares. 0 = no filtering. Hectares chosen
-        # for human-readable workshop scale ("10 ha" reads better than
-        # "100,000 m^2"). Sieve threshold (in pixels) is computed from
-        # this and the raster pixel area at run time.
+        # Simplify tolerance in metres. 0 = no simplification.
+        # PFF vectors are in projected metres-CRS so $tolerance is in
+        # metres directly. Typical values: 30-100 m for national-scale
+        # outputs to remove pixel-edge zigzag.
         self.addParameter(QgsProcessingParameterNumber(
-            self.MIN_PATCH_AREA_HA,
-            "Minimum patch area, hectares (0 = no filtering)",
+            self.SIMPLIFY_TOLERANCE_M,
+            "Simplify tolerance, metres (0 = no simplification)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=0.0,
             minValue=0.0))
 
-        self.addParameter(QgsProcessingParameterRasterDestination(
-            self.OUTPUT_FILTERED_RASTER,
-            "Output: filtered raster (only written when min area > 0)",
-            optional=True))
-
         self.addParameter(QgsProcessingParameterFileDestination(
             self.OUTPUT_VECTOR,
-            "Output: vector (polygonisation of filtered mask)",
+            "Output: vector (polygonised, optionally simplified)",
             fileFilter="GeoPackage (*.gpkg);;Shapefile (*.shp)"))
 
         self.addParameter(QgsProcessingParameterFileDestination(
@@ -156,10 +150,8 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
 
         pixel_values_str = self.parameterAsString(
             parameters, self.PIXEL_VALUES, context) or "1"
-        min_area_ha = self.parameterAsDouble(
-            parameters, self.MIN_PATCH_AREA_HA, context)
-        out_filtered_raster = self.parameterAsOutputLayer(
-            parameters, self.OUTPUT_FILTERED_RASTER, context)
+        simplify_tol_m = self.parameterAsDouble(
+            parameters, self.SIMPLIFY_TOLERANCE_M, context)
         out_vector = self.parameterAsString(
             parameters, self.OUTPUT_VECTOR, context)
         out_dissolved = self.parameterAsString(
@@ -182,11 +174,10 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
 
         feedback.pushInfo(f"Pixel values to vectorise: {pixel_values}")
 
-        # ── Build the keep-mask raster ──
-        # mask = 1 where input pixel is in pixel_values, else 0.
-        # NO nodata flag here -- we need 0 to be a real value so sieve
-        # has something to merge small "1" islands into. The nodata=0
-        # flag gets re-applied later, just before polygonisation.
+        # ── Build masked raster ──
+        # mask = 1 where input pixel is in pixel_values, else nodata.
+        # nodata=0 set on output band -> gdal:polygonize skips background
+        # automatically (avoids country-wide background-sweep trap).
         src_path = input_layer.source()
         ds = gdal.Open(src_path, gdal.GA_ReadOnly)
         if ds is None:
@@ -219,99 +210,67 @@ class VectorizePffOutputAlgorithm(QgsProcessingAlgorithm):
                 f"(~{n_kept_px * pixel_area_m2 / 10000:,.0f} ha total)")
 
         scratch_dir = ensure_dir(tempfile.mkdtemp(prefix="pff_vectorize_"))
-
-        def _write_mask(path, with_nodata):
-            """Write the current `mask` array to `path` as Byte GTIFF."""
-            drv = gdal.GetDriverByName("GTiff")
-            ds_out = drv.Create(path, x_size, y_size, 1, gdal.GDT_Byte,
-                                ["COMPRESS=LZW", "TILED=YES"])
-            ds_out.SetGeoTransform(gt)
-            ds_out.SetProjection(proj)
-            b = ds_out.GetRasterBand(1)
-            b.WriteArray(mask)
-            if with_nodata:
-                b.SetNoDataValue(0)
-            b.FlushCache()
-            ds_out = None
-
-        # Initial mask raster (no nodata) -- input for sieve when filtering.
-        mask_tif = os.path.join(scratch_dir, "mask.tif")
-        _write_mask(mask_tif, with_nodata=False)
-        del arr  # free memory; mask still needed if we skip sieve
-
-        # ── Optional raster-level sieve ──
-        # Convert hectares -> pixel-count threshold. ceil() so a 10ha
-        # threshold rounds UP to whole pixels (a 99-pixel patch when
-        # threshold == 99.something gets dropped, not kept).
-        outputs = {}
-        sieved_tif = mask_tif  # default: skip sieve, polygonise raw mask
-        if min_area_ha > 0:
-            min_area_m2 = min_area_ha * 10000.0
-            threshold_px = max(1, math.ceil(min_area_m2 / pixel_area_m2))
-            feedback.pushInfo(
-                f"Sieving: removing connected groups < {threshold_px} px "
-                f"(~{min_area_ha:g} ha) via gdal:sieve...")
-
-            # Decide where the sieved raster lands. If the user gave an
-            # explicit OUTPUT_FILTERED_RASTER path, use it (so it lives
-            # alongside the vector outputs as a real deliverable).
-            # Otherwise drop a copy in the scratch dir for internal use.
-            if out_filtered_raster:
-                sieved_tif = out_filtered_raster
-            else:
-                sieved_tif = os.path.join(scratch_dir, "mask_sieved.tif")
-
-            # 4-connectivity matches the gdal:polygonize call below, so
-            # the sieve and vectorise stages agree on patch grouping.
-            run_processing("gdal:sieve", {
-                "INPUT": mask_tif,
-                "THRESHOLD": threshold_px,
-                "EIGHT_CONNECTEDNESS": False,
-                "OUTPUT": sieved_tif,
-            }, context=context, feedback=feedback)
-            feedback.pushInfo(f"Filtered raster: {sieved_tif}")
-            if out_filtered_raster:
-                outputs[self.OUTPUT_FILTERED_RASTER] = sieved_tif
-        else:
-            if out_filtered_raster:
-                feedback.pushInfo(
-                    "Min patch area is 0 -- filtered raster output "
-                    "skipped (use the source raster directly).")
-
-        if feedback.isCanceled():
-            raise QgsProcessingException("Cancelled by user.")
-
-        # ── Re-stamp nodata=0 for polygonisation efficiency ──
-        # gdal:polygonize honours the nodata flag and skips background
-        # pixels -- avoids the country-wide background-sweep trap.
-        # Re-write the (possibly sieved) raster with nodata=0 set.
-        polygonize_input = os.path.join(scratch_dir, "polygonize_input.tif")
-        _ds_in = gdal.Open(sieved_tif, gdal.GA_ReadOnly)
-        mask = _ds_in.GetRasterBand(1).ReadAsArray()
-        _ds_in = None
-        _write_mask(polygonize_input, with_nodata=True)
-        del mask
+        masked_tif = os.path.join(scratch_dir, "input_masked.tif")
+        drv = gdal.GetDriverByName("GTiff")
+        ds_out = drv.Create(masked_tif, x_size, y_size, 1, gdal.GDT_Byte,
+                            ["COMPRESS=LZW", "TILED=YES"])
+        ds_out.SetGeoTransform(gt)
+        ds_out.SetProjection(proj)
+        b = ds_out.GetRasterBand(1)
+        b.WriteArray(mask)
+        b.SetNoDataValue(0)
+        b.FlushCache()
+        ds_out = None
+        del arr, mask  # free before polygonize re-reads
 
         if feedback.isCanceled():
             raise QgsProcessingException("Cancelled by user.")
 
         # ── Polygonise ──
+        # 4-connectivity matches sieve in Refine Output Step (b) so
+        # patch grouping is consistent across the two tools.
+        if simplify_tol_m > 0:
+            # Polygonise to a scratch path, then simplify into the user
+            # output. Two steps so simplify and polygonise outputs are
+            # independently inspectable.
+            polygonised_tmp = os.path.join(scratch_dir, "polygonised.gpkg")
+        else:
+            polygonised_tmp = out_vector
+
         feedback.pushInfo("Polygonising (gdal:polygonize, 4-connected)...")
         run_processing("gdal:polygonize", {
-            "INPUT": polygonize_input,
+            "INPUT": masked_tif,
             "BAND": 1,
             "FIELD": "value",
             "EIGHT_CONNECTEDNESS": False,
             "EXTRA": "",
-            "OUTPUT": out_vector,
+            "OUTPUT": polygonised_tmp,
         }, context=context, feedback=feedback)
+
+        if feedback.isCanceled():
+            raise QgsProcessingException("Cancelled by user.")
+
+        # ── Optional simplify (Douglas-Peucker via native:simplifygeometries) ──
+        # tolerance is in CRS units; PFF rasters validate to projected
+        # metres-CRS upstream, so this is metres directly.
+        if simplify_tol_m > 0:
+            feedback.pushInfo(
+                f"Simplifying geometries (Douglas-Peucker, "
+                f"tolerance={simplify_tol_m:g} m)...")
+            run_processing("native:simplifygeometries", {
+                "INPUT": polygonised_tmp,
+                "METHOD": 0,  # 0 = Distance (Douglas-Peucker)
+                "TOLERANCE": simplify_tol_m,
+                "OUTPUT": out_vector,
+            }, context=context, feedback=feedback)
         feedback.pushInfo(f"Vector: {out_vector}")
-        outputs[self.OUTPUT_VECTOR] = out_vector
+        outputs = {self.OUTPUT_VECTOR: out_vector}
 
         if feedback.isCanceled():
             raise QgsProcessingException("Cancelled by user.")
 
         # ── Dissolve to multipart ──
+        # Empty FIELD list -> all features collapse into one multipart.
         feedback.pushInfo("Dissolving to multipart...")
         run_processing("native:dissolve", {
             "INPUT": out_vector,

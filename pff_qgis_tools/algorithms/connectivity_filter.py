@@ -55,9 +55,12 @@ from ..utils import raster_resolution
 
 class ConnectivityFilterAlgorithm(QgsProcessingAlgorithm):
     INPUT = "INPUT"
+    # Step (a) -- neighbourhood density filter
     SMOOTH_RADIUS = "SMOOTH_RADIUS"
     DENSITY_THRESHOLD = "DENSITY_THRESHOLD"
     FAST_APPROXIMATION = "FAST_APPROXIMATION"
+    # Step (b) -- minimum patch size (raster sieve)
+    MIN_PATCH_AREA_HA = "MIN_PATCH_AREA_HA"
     OUTPUT = "OUTPUT"
 
     def name(self):
@@ -74,15 +77,21 @@ class ConnectivityFilterAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            "Removes isolated forest patches using neighbourhood density "
-            "filtering.\n\n"
-            "A circular kernel computes the proportion of forest pixels "
+            "Refines the primary-forest candidate raster via two "
+            "optional steps. Each can run independently or together "
+            "(neighbourhood first, then sieve).\n\n"
+            "Step (a) -- Neighbourhood density filter:\n"
+            "  Circular kernel computes the proportion of forest pixels "
             "around each pixel. Pixels below the density threshold are "
             "removed. For radii above 5000 m a faster square kernel is "
-            "used (approximate).\n\n"
-            "Defaults:\n"
-            "  Neighbourhood radius = 2000 m\n"
-            "  Density threshold    = 0.5 (50%)\n\n"
+            "used (approximate). Set radius = 0 to skip this step.\n"
+            "  Defaults: radius = 2000 m, density threshold = 0.5.\n\n"
+            "Step (b) -- Minimum patch size filter (raster sieve):\n"
+            "  Removes connected raster groups smaller than the chosen "
+            "patch area (hectares) via gdal:sieve. Threshold is "
+            "computed from the raster pixel area at run time. Set to 0 "
+            "to skip this step.\n\n"
+            "Both steps off -> the input is copied to the output as-is.\n\n"
             "Output: primary_forest.tif"
         )
 
@@ -92,22 +101,38 @@ class ConnectivityFilterAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.INPUT, "Primary forest candidate raster"))
+        # Step (a)
         self.addParameter(QgsProcessingParameterNumber(
-            self.SMOOTH_RADIUS, "Neighbourhood radius (m)",
+            self.SMOOTH_RADIUS,
+            "Step (a) Neighbourhood radius (m); 0 = skip step (a)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=2000, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterNumber(
-            self.DENSITY_THRESHOLD, "Minimum density to keep (0-1)",
+            self.DENSITY_THRESHOLD,
+            "Step (a) Minimum density to keep (0-1)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=0.5, minValue=0, maxValue=1))
         self.addParameter(QgsProcessingParameterBoolean(
             self.FAST_APPROXIMATION,
-            "Fast approximation (square kernel — ~100x faster, ~27% shape difference at edges)",
+            "Step (a) Fast approximation (square kernel — ~100x faster, ~27% shape difference at edges)",
             defaultValue=False))
+        # Step (b)
+        self.addParameter(QgsProcessingParameterNumber(
+            self.MIN_PATCH_AREA_HA,
+            "Step (b) Minimum patch area, hectares (0 = skip step (b))",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0, minValue=0.0))
         self.addParameter(QgsProcessingParameterRasterDestination(
             self.OUTPUT, "Primary forest (refined) output"))
 
     def processAlgorithm(self, parameters, context, feedback):
+        import math
+        import os
+        import tempfile
+
+        from qgis.core import QgsProcessingException
+        from ..utils import ensure_dir, run_processing
+
         input_layer = self.parameterAsRasterLayer(
             parameters, self.INPUT, context)
         radius_m = self.parameterAsDouble(
@@ -116,14 +141,71 @@ class ConnectivityFilterAlgorithm(QgsProcessingAlgorithm):
             parameters, self.DENSITY_THRESHOLD, context)
         fast = self.parameterAsBool(
             parameters, self.FAST_APPROXIMATION, context)
+        min_patch_area_ha = self.parameterAsDouble(
+            parameters, self.MIN_PATCH_AREA_HA, context)
         out_path = self.parameterAsOutputLayer(
             parameters, self.OUTPUT, context)
 
-        refine_output(
-            input_layer.source(), out_path,
-            radius_m=radius_m, threshold=threshold,
-            fast_approximation=fast,
-            feedback=feedback)
+        step_a_on = radius_m > 0
+        step_b_on = min_patch_area_ha > 0
+
+        if not step_a_on and not step_b_on:
+            feedback.pushInfo(
+                "Both refine steps off (radius=0, min_patch_area_ha=0) -- "
+                "copying input to output unchanged.")
+            run_processing("gdal:translate", {
+                "INPUT": input_layer.source(),
+                "OUTPUT": out_path,
+            }, context=context, feedback=feedback)
+            return {self.OUTPUT: out_path}
+
+        # Decide intermediate path: if both steps run, step (a) writes to
+        # a scratch tif and step (b) reads it; if only one runs, it writes
+        # straight to out_path.
+        scratch_dir = ensure_dir(tempfile.mkdtemp(prefix="pff_refine_"))
+        if step_a_on and step_b_on:
+            step_a_out = os.path.join(scratch_dir, "step_a_neighbourhood.tif")
+            step_b_in = step_a_out
+            step_b_out = out_path
+        elif step_a_on:
+            step_a_out = out_path
+            step_b_in = None
+            step_b_out = None
+        else:
+            step_a_out = None
+            step_b_in = input_layer.source()
+            step_b_out = out_path
+
+        if step_a_on:
+            feedback.pushInfo(
+                f"Step (a) Neighbourhood density (radius={radius_m:g} m, "
+                f"density>={threshold:g}, fast={fast})...")
+            refine_output(
+                input_layer.source(), step_a_out,
+                radius_m=radius_m, threshold=threshold,
+                fast_approximation=fast,
+                feedback=feedback)
+
+        if feedback.isCanceled():
+            raise QgsProcessingException(
+                "Cancelled by user (between Refine Output steps).")
+
+        if step_b_on:
+            # Compute pixel-count threshold from hectares + pixel area.
+            from ..utils import raster_resolution
+            res = raster_resolution(step_b_in)
+            pixel_area_m2 = res * res
+            min_area_m2 = min_patch_area_ha * 10000.0
+            threshold_px = max(1, math.ceil(min_area_m2 / pixel_area_m2))
+            feedback.pushInfo(
+                f"Step (b) Minimum patch size: removing connected groups < "
+                f"{threshold_px} px (~{min_patch_area_ha:g} ha) via gdal:sieve...")
+            run_processing("gdal:sieve", {
+                "INPUT": step_b_in,
+                "THRESHOLD": threshold_px,
+                "EIGHT_CONNECTEDNESS": False,
+                "OUTPUT": step_b_out,
+            }, context=context, feedback=feedback)
 
         feedback.pushInfo("Refine output complete.")
         return {self.OUTPUT: out_path}
