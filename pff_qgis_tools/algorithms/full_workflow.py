@@ -428,10 +428,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "    Refine Step (a): minimum density to keep (0-1)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=DENSITY_THRESHOLD, minValue=0, maxValue=1))
-        self.addParameter(QgsProcessingParameterBoolean(
+        # Fast-approximation (square kernel) is a power-user knob -- most
+        # workshop runs leave it off and the default circular kernel is
+        # already fast enough for typical national radii. Hidden under
+        # Advanced parameters per UX hybrid decision (2026-04-26).
+        _fast_approx_param = QgsProcessingParameterBoolean(
             self.FAST_APPROXIMATION,
-            "    Refine Step (a): fast approximation (square kernel — faster, slight shape difference)",
-            defaultValue=False))
+            "Refine Step (a): fast approximation (square kernel — faster, slight shape difference)",
+            defaultValue=False)
+        _fast_approx_param.setFlags(
+            _fast_approx_param.flags()
+            | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_fast_approx_param)
         # Step (b) -- minimum patch size (raster sieve)
         self.addParameter(QgsProcessingParameterNumber(
             self.REFINE_MIN_PATCH_AREA_HA,
@@ -528,7 +536,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.64"
+    PFF_VERSION = "0.8.65"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
