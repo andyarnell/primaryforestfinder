@@ -97,6 +97,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     SAVE_COMBINED_RASTER = "SAVE_COMBINED_RASTER"
     EXCLUDE_PLANTATIONS = "EXCLUDE_PLANTATIONS"
     REUSE_DISTANCE_SURFACES = "REUSE_DISTANCE_SURFACES"
+    ADD_MAIN_OUTPUTS_TO_MAP = "ADD_MAIN_OUTPUTS_TO_MAP"
     # -- Per-stage enable tickboxes (skip stages for faster runs) --
     ENABLE_ROADS_BUFFER = "ENABLE_ROADS_BUFFER"
     ENABLE_BUILTUP_SMALL_BUFFER = "ENABLE_BUILTUP_SMALL_BUFFER"
@@ -431,6 +432,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.REUSE_DISTANCE_SURFACES,
             "Reuse cached distance surfaces (faster re-runs; only safe when anthro inputs and grid are unchanged)",
             defaultValue=False))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.ADD_MAIN_OUTPUTS_TO_MAP,
+            "Add main outputs to map after run (primary forest, pre-connectivity forest, forest input)",
+            defaultValue=True))
 
         # -- Zonal statistics (optional) --
         self.addParameter(QgsProcessingParameterBoolean(
@@ -495,7 +500,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.59"
+    PFF_VERSION = "0.8.60"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -572,6 +577,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         }
         enable_refine_output = self.parameterAsBool(
             parameters, self.ENABLE_REFINE_OUTPUT, context)
+
+        add_main_outputs_to_map = self.parameterAsBool(
+            parameters, self.ADD_MAIN_OUTPUTS_TO_MAP, context)
 
         # Vectorise stage params (advanced).
         run_vectorize = self.parameterAsBool(
@@ -1939,6 +1947,34 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         feedback.pushInfo(f"Metadata: {meta_path}")
+
+        # ── Auto-load main outputs into the QGIS project (P0.5 partial) ──
+        # Uses the standard Processing pattern -- works in GUI mode, no-ops
+        # cleanly in headless mode. Layer styling defaults; QML preload is
+        # a separate task (deferred -- needs a colour scheme decision).
+        if add_main_outputs_to_map:
+            from qgis.core import QgsProcessingContext
+            _layers_to_load = [
+                ("Primary forest", final_path),
+            ]
+            if os.path.exists(candidate_path):
+                _layers_to_load.append(
+                    ("Pre-connectivity forest", candidate_path))
+            # Forest INPUT: forest_natreg if plantations refined, else
+            # the AOI-clipped forest input.
+            if forest_natreg_path is not None and os.path.exists(forest_natreg_path):
+                _layers_to_load.append(
+                    ("Forest (naturally regenerating)", forest_natreg_path))
+            elif os.path.exists(prepared_forest_path):
+                _layers_to_load.append(
+                    ("Forest input", prepared_forest_path))
+            for _name, _path in _layers_to_load:
+                _details = QgsProcessingContext.LayerDetails(
+                    _name, context.project(), _name)
+                context.addLayerToLoadOnCompletion(_path, _details)
+            feedback.pushInfo(
+                f"Auto-loading {len(_layers_to_load)} main output(s) on "
+                "completion: " + ", ".join(n for n, _ in _layers_to_load))
 
         feedback.setProgress(100)
         feedback.pushInfo("Done. Full PFF workflow complete.")
