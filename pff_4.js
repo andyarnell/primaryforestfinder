@@ -1,5 +1,14 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.14";
+var PFF_SCRIPT_VERSION = "4.1.15";
+
+// Changes vs v4.1.14:
+//  - JS mirror of Python pff_qgis_tools.utils.generate_layer_name(): adds
+//    PLATFORM_GEE / PLATFORM_QGIS + STEP_* constants and a
+//    generateLayerName(iso3, platform, step, name, ext='tif') helper.
+//    Foundation for P1.13 (full filename rename across both tools to
+//    Option D schema). No consumers in pff_4.js yet -- existing
+//    Export.image.toDrive description / fileNamePrefix call sites
+//    migrate later.
 
 // Changes vs v4.1.13:
 //  - P0.10 stats button hygiene:
@@ -466,6 +475,88 @@ function generateOutcomeMaps(input_layer, mask_layer) {
 function cleanCountryName(name) {
   return name.replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9 ]/g, "")
     .trim().replace(/\s+/g, "_");
+}
+
+// ---------------------------------------------------------------------------
+// Canonical PFF output filename builder (Option D, decided 2026-04-26)
+// JS mirror of pff_qgis_tools/utils.py generate_layer_name(). Same signature,
+// same constants. Foundation for P1.13 (full filename rename across both
+// tools) -- no consumers in pff_4.js yet; existing Export.image.toDrive
+// description / fileNamePrefix calls migrate later.
+// ---------------------------------------------------------------------------
+
+// Stable platform tags. Use these exact strings -- not 'app' / 'plugin'.
+var PLATFORM_GEE = "gee";
+var PLATFORM_QGIS = "qgis";
+
+// Stable step prefixes. Production stage of the file (where in the pipeline
+// it was made), not the action that saves it. Sortable alphabetically =
+// workflow order.
+var STEP_CONTEXT          = "00";  // supplies ISO3 prefix; no files of its own
+var STEP_TIME_PERIOD      = "01";  // supplies year; no files of its own
+var STEP_FOREST_INPUTS    = "02";  // raw forest layers
+var STEP_HUMAN_INFLUENCE  = "03";  // raw anthro layers
+var STEP_REFINE           = "04";  // final refined rasters, pre-conn, combined
+var STEP_STATISTICS       = "05";  // stats CSV / per-zone shapefile
+var STEP_VALIDATION       = "06";  // vectorised + dissolved CEO outputs
+
+/**
+ * Build a canonical PFF output filename per the Option D schema.
+ * Format: {iso3}_{platform}_{step}_{name}.{ext}  (ISO3 optional;
+ * omitted when no country selected).
+ *
+ * @param {string|null|undefined} iso3
+ *        ISO3 country code (e.g. 'KEN'). Pass null/undefined/'' to omit.
+ *        Cased uppercase if supplied.
+ * @param {string} platform
+ *        'gee' or 'qgis'. Use the PLATFORM_* constants in this module.
+ * @param {string} step
+ *        '00'-'06' with optional substep letter ('04a', '05b').
+ *        Use the STEP_* constants for the base.
+ * @param {string} name
+ *        Snake-case layer name without step prefix or extension
+ *        (e.g. 'primary_forest', 'area_statistics',
+ *        'primary_forest_vector'). The step number already encodes
+ *        the production stage, so no need to repeat 'results_' /
+ *        'refined_' / 'validation_' qualifiers.
+ * @param {string} [ext='tif']
+ *        Extension without leading dot. Use 'gpkg' for vectors,
+ *        'csv' for stats, 'shp' for shapefile-zone outputs, 'json'
+ *        for metadata sidecars.
+ * @return {string} Constructed filename.
+ *
+ * Examples:
+ *   generateLayerName('KEN', PLATFORM_GEE, '04a', 'primary_forest')
+ *     -> 'KEN_gee_04a_primary_forest.tif'
+ *   generateLayerName(null, PLATFORM_GEE, '06b',
+ *                     'primary_forest_dissolved', 'gpkg')
+ *     -> 'gee_06b_primary_forest_dissolved.gpkg'
+ *   generateLayerName('KEN', PLATFORM_GEE, '05a',
+ *                     'area_statistics', 'csv')
+ *     -> 'KEN_gee_05a_area_statistics.csv'
+ */
+function generateLayerName(iso3, platform, step, name, ext) {
+  var parts = [];
+  if (iso3) {
+    parts.push(String(iso3).trim().toUpperCase());
+  }
+  if (platform !== PLATFORM_GEE && platform !== PLATFORM_QGIS) {
+    throw new Error(
+      "platform must be 'gee' or 'qgis' (got " + JSON.stringify(platform) +
+      "). Use the PLATFORM_GEE / PLATFORM_QGIS constants.");
+  }
+  parts.push(platform);
+  if (!step) {
+    throw new Error("step is required (e.g. '04a').");
+  }
+  parts.push(String(step).trim());
+  if (!name) {
+    throw new Error("name is required (e.g. 'primary_forest').");
+  }
+  parts.push(String(name).trim());
+  var base = parts.join("_");
+  var extClean = (ext === undefined || ext === null) ? "tif" : String(ext).trim().replace(/^\./, "");
+  return extClean ? base + "." + extClean : base;
 }
 
 // function tmfUndisturbedForestPrep(year) {
