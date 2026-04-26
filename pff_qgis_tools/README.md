@@ -18,8 +18,10 @@ All tools appear under **Processing Toolbox → Primary Forest Finder**.
 | 3a | **Distance Surfaces** | Compute proximity rasters (cached — run once) |
 | 3b | **Build Anthropogenic Mask** | Apply distance thresholds → combined mask (re‑run with different thresholds instantly) |
 | 4 | **Run Primary Forest Finder** | Three‑tier logic (undisturbed / steep / protected) → candidate layer |
-| 5 | **Refine Output** | Neighbourhood density filter (matches GEE tool) |
-| — | **Run Full Workflow** | Chains all steps in one click with all parameters exposed |
+| 5 | **Refine Output** | Two optional steps: (a) neighbourhood density filter (matches GEE tool); (b) minimum patch size filter via `gdal:sieve`. Either or both. |
+| 6 | **Zonal Statistics** | Per-zone area totals (kha) for primary / pre-connectivity / forest input rasters. Optional integer YEAR column for time-series stitching. |
+| 7 | **Vectorize PFF output** | Polygonise binary/coded raster + optional Douglas-Peucker simplify + dissolved multipart. Pixel-value selector accepts comma-separated list (e.g. `1,2,3` for combined coded raster). Dissolved-multipart output is suitable as a sampling-area boundary for validation tools such as [Collect Earth Online](https://collect.earth/). |
+| — | **Run Full Workflow** | Chains all steps in one click with all parameters exposed. Also includes optional vectorise stage (Stage 7) under Advanced parameters with primary / forest selection + nesting (cut primary out of forest, ideal CEO stratification format). |
 
 ### Typical workflow
 
@@ -29,10 +31,16 @@ All tools appear under **Processing Toolbox → Primary Forest Finder**.
 3a. Distance Surfaces            ← expensive, cached
 3b. Build Anthropogenic Mask     ← fast, re‑run with new thresholds
 4. Run Primary Forest Finder
-5. Refine Output
+5. Refine Output                  ← (a) neighbourhood density, (b) min patch size
+6. Zonal Statistics               ← optional area totals (kha) per zone
+7. Vectorize PFF output           ← optional polygonise / dissolve for CEO sampling
 ```
 
-Or use **Run Full Workflow** to execute everything at once.
+Or use **Run Full Workflow** to execute everything (Stages 1-7) in one click.
+
+For repeated runs while tuning thresholds, leave **Reuse prepared/*.tif cache**
+ticked (default) — anthro reprojection is skipped when an aligned cache from
+a prior run exists, saving minutes per re-run on national-scale data.
 
 ---
 
@@ -47,8 +55,10 @@ Or use **Run Full Workflow** to execute everything at once.
 | Agriculture buffer | 1 000 m |
 | Slope threshold | 45° |
 | Max distance compute | 5 100 m |
-| Refine: neighbourhood radius | 2 000 m |
-| Refine: density threshold | 0.5 |
+| Refine Step (a): neighbourhood radius | 2 000 m (0 = skip step) |
+| Refine Step (a): density threshold | 0.5 |
+| Refine Step (b): minimum patch area | 0 ha (set > 0 to enable raster sieve) |
+| Vectorize: simplify tolerance | 0 m (0 = no simplify) |
 
 All buffer thresholds are adjustable via sliders. Distance surfaces are
 cached so that changing thresholds does **not** recompute them.
@@ -67,6 +77,7 @@ cached so that changing thresholds does **not** recompute them.
 | DEM | Raster | Used to derive slope |
 | Protected areas | Vector | WDPA or national equivalent |
 | AOI boundary | Vector | Defines area of interest |
+| Custom disturbance 1/2/3 | Raster (binary) | Optional, FlagAdvanced. User-labelled human-use layers (e.g. pipelines, mines, lights at night). Each slot has its own buffer distance. |
 
 All inputs are optional except the forest raster. The tool will skip
 layers that are not provided.
@@ -93,37 +104,55 @@ layers that are not provided.
 The Full Workflow produces this folder layout (headlines at top, everything else nested in `intermediates/`):
 
 ```
-<out>/
-  primary_forest.tif           ← HEADLINE (final result)
-  pre_connectivity_forest.tif  ← HEADLINE (combined tiers, before refine)
-  forest_natreg.tif            ← HEADLINE (FRA naturally regenerating forest,
-                                  if plantations input supplied)
-  anthropogenic_mask.tif       ← HEADLINE (combined buffered disturbance)
-  combined_coded_raster.tif    ← HEADLINE (only if ticked)
-  zonal_statistics.csv         ← HEADLINE (if zonal stats ticked)
+OUT/                                     (OUT = your chosen output folder)
+  primary_forest.tif                     ← HEADLINE (final result)
+  pre_connectivity_forest.tif            ← HEADLINE (combined tiers, before refine)
+  forest_natreg.tif                      ← HEADLINE (FRA naturally regenerating
+                                            forest, if plantations input supplied)
+  anthropogenic_mask.tif                 ← HEADLINE (combined buffered disturbance)
+  combined_coded_raster.tif              ← HEADLINE (only if ticked)
+  zonal_statistics.csv                   ← HEADLINE (if zonal stats ticked)
   zonal_statistics.shp (+sidecars)
-  run_metadata.json            ← HEADLINE (run parameters record)
+  run_metadata.json                      ← HEADLINE (run parameters + stage timings)
+
+  primary_forest_polygons.gpkg           ← HEADLINE (Stage 7 vectorise, if ticked)
+  primary_forest_dissolved.gpkg          ← HEADLINE (Stage 7, sampling boundary)
+  forest_natreg_polygons.gpkg            ← HEADLINE (Stage 7, if forest also ticked)
+  forest_natreg_dissolved.gpkg           ← HEADLINE (Stage 7, if forest also ticked)
 
   intermediates/
-    tier1_undisturbed.tif         ← tier logic byproducts
+    tier1_undisturbed.tif                ← tier logic byproducts
     tier2_steep.tif
     tier3_protected.tif
     forest_inside_buffers.tif
     steep_slope.tif, gentle_slope.tif
+    refine_step_a_neighbourhood.tif      ← (only when both refine steps run)
+    refine_step_b_sieve_unmasked.tif     ← (only when refine step b runs)
 
-    prepared/                     ← reprojected + aligned inputs (reusable)
+    prepared/                            ← reprojected + aligned inputs (reusable)
       forest.tif
       roads.tif, builtup_small.tif, builtup_large.tif, agriculture.tif
       plantations.tif, protected.tif
       dem.tif, slope.tif
+      custom_1.tif, custom_2.tif, custom_3.tif  ← (if custom slots provided)
 
-    distances/                    ← cached distance surfaces
-      dist_roads.tif, dist_builtup.tif, dist_builtup_large.tif, dist_agriculture.tif
+    distances/                           ← cached distance surfaces
+      dist_roads.tif, dist_builtup.tif, dist_builtup_large.tif,
+      dist_agriculture.tif
+      dist_custom_1.tif, ...             ← (if custom slots provided)
 
-    zonal_work/                   ← zonal stats temporary workspace
+    _vectorize/                          ← vectorise stage scratch
+    zonal_work/                          ← zonal stats temporary workspace
 ```
 
-Tier raster names match the canonical pff_4.js naming: `tier1_undisturbed`, `tier2_steep`, `tier3_protected`.
+Tier raster names match the canonical `pff_4.js` naming: `tier1_undisturbed`,
+`tier2_steep`, `tier3_protected`. Vector outputs use `_polygons` / `_dissolved`
+suffixes. Forest vector naming carries the plantation-refinement state
+(`forest_natreg_*` if refined, `forest_*` otherwise).
+
+When the **Add main outputs to map** option is ticked (default ON), Primary
+forest, Pre-connectivity forest, and Forest input are auto-loaded into the
+QGIS Layers panel after the run completes.
 
 ---
 
