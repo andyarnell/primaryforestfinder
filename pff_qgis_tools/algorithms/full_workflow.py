@@ -57,6 +57,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     BUILTUP_SMALL_RASTER = "BUILTUP_SMALL_RASTER"
     BUILTUP_LARGE_RASTER = "BUILTUP_LARGE_RASTER"
     AGRICULTURE_RASTER = "AGRICULTURE_RASTER"
+    # Custom human-use disturbance slots (3, all optional, all FlagAdvanced).
+    # Each slot has a raster input, a user-editable label (shown in logs +
+    # metadata), and a per-slot buffer distance. Plumbed through prepare /
+    # distance / anthro-mask stages alongside the built-in roads / builtup /
+    # agriculture inputs.
+    CUSTOM_1_RASTER = "CUSTOM_1_RASTER"
+    CUSTOM_1_LABEL = "CUSTOM_1_LABEL"
+    CUSTOM_1_DIST = "CUSTOM_1_DIST"
+    CUSTOM_2_RASTER = "CUSTOM_2_RASTER"
+    CUSTOM_2_LABEL = "CUSTOM_2_LABEL"
+    CUSTOM_2_DIST = "CUSTOM_2_DIST"
+    CUSTOM_3_RASTER = "CUSTOM_3_RASTER"
+    CUSTOM_3_LABEL = "CUSTOM_3_LABEL"
+    CUSTOM_3_DIST = "CUSTOM_3_DIST"
     DEM = "DEM"
     SLOPE_RASTER = "SLOPE_RASTER"
     PROTECTED_AREAS = "PROTECTED_AREAS"
@@ -216,6 +230,39 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "sources: GLAD LULC cropland class, ESA WorldCover, "
             "national landcover. [GEE filename pattern: _agriculture_]",
             optional=True))
+
+        # Custom human-use slots (3, all FlagAdvanced). Each slot bundles a
+        # raster + a user-editable label (shown in logs and metadata) + a
+        # per-slot buffer distance. Use cases: pipelines, mines, lights at
+        # night, navigable waterways, country-specific disturbance layers.
+        for _i in range(1, 4):
+            _r_const = getattr(self, f"CUSTOM_{_i}_RASTER")
+            _l_const = getattr(self, f"CUSTOM_{_i}_LABEL")
+            _d_const = getattr(self, f"CUSTOM_{_i}_DIST")
+            _r_param = QgsProcessingParameterRasterLayer(
+                _r_const,
+                f"Custom disturbance {_i}: raster (binary 1/0) -- optional",
+                optional=True)
+            _r_param.setFlags(_r_param.flags()
+                              | QgsProcessingParameterDefinition.FlagAdvanced)
+            self.addParameter(_r_param)
+            _l_param = QgsProcessingParameterString(
+                _l_const,
+                f"    Custom disturbance {_i}: label (used in logs + metadata)",
+                defaultValue=f"Custom disturbance {_i}",
+                optional=True)
+            _l_param.setFlags(_l_param.flags()
+                              | QgsProcessingParameterDefinition.FlagAdvanced)
+            self.addParameter(_l_param)
+            _d_param = QgsProcessingParameterNumber(
+                _d_const,
+                f"    Custom disturbance {_i}: buffer distance (m)",
+                type=QgsProcessingParameterNumber.Double,
+                defaultValue=1000.0, minValue=0.0)
+            _d_param.setFlags(_d_param.flags()
+                              | QgsProcessingParameterDefinition.FlagAdvanced)
+            self.addParameter(_d_param)
+
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.DEM,
             "Natural protection — DEM (elevation, metres). Slope is "
@@ -448,7 +495,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.58"
+    PFF_VERSION = "0.8.59"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -552,6 +599,27 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 parameters, self.AGRICULTURE_DIST, context),
         }
 
+        # Custom human-use slots: only included when the user provided a
+        # raster for the slot. Each slot gets its own per-slot label and
+        # buffer distance. Keys are custom_1 / custom_2 / custom_3 so they
+        # slot cleanly into the existing rasters / thresholds / enable_buffers
+        # dicts.
+        custom_slot_labels = {}  # key -> user label (for logs / metadata)
+        for _i in range(1, 4):
+            _key = f"custom_{_i}"
+            _r = self.parameterAsRasterLayer(
+                parameters, getattr(self, f"CUSTOM_{_i}_RASTER"), context)
+            if _r is None:
+                continue
+            _label = (self.parameterAsString(
+                parameters, getattr(self, f"CUSTOM_{_i}_LABEL"), context)
+                      or f"Custom disturbance {_i}").strip()
+            _dist = self.parameterAsDouble(
+                parameters, getattr(self, f"CUSTOM_{_i}_DIST"), context)
+            individual_thresholds[_key] = _dist
+            enable_buffers[_key] = True
+            custom_slot_labels[_key] = _label
+
         if use_single and single_dist > 0:
             thresholds = {k: single_dist for k in individual_thresholds}
         else:
@@ -581,10 +649,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "builtup_large": BUILTUP_LARGE_DIST,
                 "agriculture": AGRICULTURE_DIST,
             }
+            # Custom slots default to 1000m; treat that as the "default" so
+            # we don't false-trigger the warning when the user just leaves
+            # them at the slot default while using single-mode.
             customised = [
                 f"{name}={individual_thresholds[name]:g}"
                 for name in individual_thresholds
-                if individual_thresholds[name] != defaults_map[name]
+                if individual_thresholds[name] != defaults_map.get(name, 1000.0)
             ]
             if customised:
                 feedback.pushWarning(
@@ -604,10 +675,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         else:
             feedback.pushInfo("  INDIVIDUAL-DISTANCE mode:")
             for name, dist in thresholds.items():
+                # Custom slots get their user label appended for clarity.
+                _suffix = (f"  ('{custom_slot_labels[name]}')"
+                           if name in custom_slot_labels else "")
                 if enable_buffers.get(name, True):
-                    feedback.pushInfo(f"    {name:<14} {dist:g} m")
+                    feedback.pushInfo(f"    {name:<14} {dist:g} m{_suffix}")
                 else:
-                    feedback.pushInfo(f"    {name:<14} SKIPPED (Include-X-buffer is unticked)")
+                    feedback.pushInfo(f"    {name:<14} SKIPPED (Include-X-buffer is unticked){_suffix}")
         feedback.pushInfo("")
 
         # -- Resolve target CRS (auto UTM or manual) --
@@ -977,11 +1051,34 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         agri_raster = _prep_raster(self.AGRICULTURE_RASTER, "agriculture")
         gc.collect()
 
+        # Custom human-use slots (P2.3): prep each provided raster the same
+        # way as the built-in anthro inputs. Skipped slots stay None.
+        custom_rasters = {}  # custom_1/2/3 -> prepped path or None
+        for _i in range(1, 4):
+            _key = f"custom_{_i}"
+            _const = getattr(self, f"CUSTOM_{_i}_RASTER")
+            _layer = self.parameterAsRasterLayer(parameters, _const, context)
+            if _layer is None:
+                custom_rasters[_key] = None
+                continue
+            _label_for_log = custom_slot_labels.get(_key, _key)
+            feedback.pushInfo(
+                f"Preparing custom slot {_i} ('{_label_for_log}')...")
+            custom_rasters[_key] = _prep_raster(_const, _key)
+            gc.collect()
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    f"Cancelled by user (after custom_{_i} prep).")
+
         rasters = {
             "roads": roads_raster if roads_raster else _prep_vector(self.ROADS, "roads"),
             "builtup": builtup_small_raster,
             "builtup_large": builtup_large_raster,
             "agriculture": agri_raster,
+            "custom_1": custom_rasters["custom_1"],
+            "custom_2": custom_rasters["custom_2"],
+            "custom_3": custom_rasters["custom_3"],
         }
         # Protected areas: raster overrides vector if both provided
         pa_raster_layer = self.parameterAsRasterLayer(
@@ -1812,6 +1909,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "auto_utm": auto_utm,
                 "exclude_plantations": exclude_plantations,
                 "plantations_applied": forest_natreg_path is not None,
+                "custom_slots": {
+                    key: {
+                        "label": custom_slot_labels.get(key, key),
+                        "buffer_dist_m": thresholds.get(key),
+                    } for key in custom_slot_labels
+                },
             },
             "inputs": {
                 "forest_raster": forest_layer.source(),
