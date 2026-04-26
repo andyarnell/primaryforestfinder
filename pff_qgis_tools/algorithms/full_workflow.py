@@ -99,6 +99,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     REUSE_DISTANCE_SURFACES = "REUSE_DISTANCE_SURFACES"
     REUSE_PREPARED = "REUSE_PREPARED"
     ADD_MAIN_OUTPUTS_TO_MAP = "ADD_MAIN_OUTPUTS_TO_MAP"
+    ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP = "ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP"
     # -- Per-stage enable tickboxes (skip stages for faster runs) --
     ENABLE_ROADS_BUFFER = "ENABLE_ROADS_BUFFER"
     ENABLE_BUILTUP_SMALL_BUFFER = "ENABLE_BUILTUP_SMALL_BUFFER"
@@ -459,6 +460,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.ADD_MAIN_OUTPUTS_TO_MAP,
             "Add main outputs to map after run (primary forest, pre-connectivity forest, forest input)",
             defaultValue=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP,
+            "Add human-influence input + buffer layers to map after run (default OFF -- mirrors the GEE app's master toggle)",
+            defaultValue=False))
 
         # -- Zonal statistics (optional) --
         self.addParameter(QgsProcessingParameterBoolean(
@@ -523,7 +528,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.62"
+    PFF_VERSION = "0.8.63"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -605,6 +610,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         add_main_outputs_to_map = self.parameterAsBool(
             parameters, self.ADD_MAIN_OUTPUTS_TO_MAP, context)
+        add_human_influence_layers_to_map = self.parameterAsBool(
+            parameters, self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP, context)
 
         # Vectorise stage params (advanced).
         run_vectorize = self.parameterAsBool(
@@ -2009,11 +2016,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Uses the standard Processing pattern -- works in GUI mode, no-ops
         # cleanly in headless mode. Layer styling defaults; QML preload is
         # a separate task (deferred -- needs a colour scheme decision).
+        from qgis.core import QgsProcessingContext
+        _layers_to_load = []  # list of (display_name, path) tuples
+
         if add_main_outputs_to_map:
-            from qgis.core import QgsProcessingContext
-            _layers_to_load = [
-                ("Primary forest", final_path),
-            ]
+            _layers_to_load.append(("Primary forest", final_path))
             if os.path.exists(candidate_path):
                 _layers_to_load.append(
                     ("Pre-connectivity forest", candidate_path))
@@ -2025,12 +2032,47 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             elif os.path.exists(prepared_forest_path):
                 _layers_to_load.append(
                     ("Forest input", prepared_forest_path))
+
+        # P0.14: optional human-influence + buffer layers. Default OFF
+        # (matches GEE master toggle). Adds the prepared anthro inputs +
+        # protection inputs + plantations + custom slots + the combined
+        # anthropogenic mask. Distance-surface intermediates are
+        # deliberately skipped -- they're internal continuous-value
+        # rasters that aren't useful as visual review layers without
+        # styling.
+        if add_human_influence_layers_to_map:
+            _hi_candidates = [
+                ("Input: Roads",            os.path.join(prepared_dir, "roads.tif")),
+                ("Input: Built-up small",   os.path.join(prepared_dir, "builtup_small.tif")),
+                ("Input: Built-up large",   os.path.join(prepared_dir, "builtup_large.tif")),
+                ("Input: Agriculture",      os.path.join(prepared_dir, "agriculture.tif")),
+                ("Input: Plantations",      os.path.join(prepared_dir, "plantations.tif")),
+                ("Input: Protected areas",  os.path.join(prepared_dir, "protected.tif")),
+                ("Input: Slope (degrees)",  os.path.join(prepared_dir, "slope.tif")),
+            ]
+            # Custom human-use slots get their user-editable label.
+            for _i in (1, 2, 3):
+                _key = f"custom_{_i}"
+                _label = custom_slot_labels.get(
+                    _key, f"Custom disturbance {_i}")
+                _hi_candidates.append(
+                    (f"Input: {_label}",
+                     os.path.join(prepared_dir, f"{_key}.tif")))
+            # Combined anthropogenic mask (the union of all buffered zones).
+            _hi_candidates.append(
+                ("Anthropogenic mask (combined buffers)",
+                 os.path.join(out_dir, "anthropogenic_mask.tif")))
+            for _name, _path in _hi_candidates:
+                if os.path.exists(_path):
+                    _layers_to_load.append((_name, _path))
+
+        if _layers_to_load:
             for _name, _path in _layers_to_load:
                 _details = QgsProcessingContext.LayerDetails(
                     _name, context.project(), _name)
                 context.addLayerToLoadOnCompletion(_path, _details)
             feedback.pushInfo(
-                f"Auto-loading {len(_layers_to_load)} main output(s) on "
+                f"Auto-loading {len(_layers_to_load)} layer(s) on "
                 "completion: " + ", ".join(n for n, _ in _layers_to_load))
 
         feedback.setProgress(100)
