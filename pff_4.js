@@ -1,5 +1,15 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.15";
+var PFF_SCRIPT_VERSION = "4.1.16";
+
+// Changes vs v4.1.15:
+//  - P0.15 (zero-buffer rule) verified for GEE side: existing
+//    applyDistanceThreshold(dist, threshold) already produces the
+//    correct footprint-only result when threshold == 0 (because
+//    .lte(0) keeps only the source pixels at distance 0). No code
+//    change needed -- just an explanatory comment block on the
+//    function so future maintainers don't accidentally regress it
+//    (e.g. by switching to .lt() or adding a misguided special case).
+//    Plugin shipped the equivalent change in batch 9 (v0.8.66).
 
 // Changes vs v4.1.14:
 //  - JS mirror of Python pff_qgis_tools.utils.generate_layer_name(): adds
@@ -388,7 +398,20 @@ var makeDistanceSurface = function(sourceImage, fastBuffer) {
   }
 };
 
-//thresholding function
+// Distance-image thresholding function.
+//
+// P0.15 (zero-buffer rule, 2026-04-26): when threshold == 0, only the
+// source pixels themselves (distance = 0) survive the .lte() filter --
+// so applyDistanceThreshold(dist, 0) returns the input footprint
+// directly with no buffer expansion. This matches the QGIS plugin's
+// P0.15 semantics: enable-tickbox ON + buffer = 0 means "include the
+// input pixels as anthropogenic but don't expand". To skip the input
+// entirely instead, untick its enable* checkbox -- the buffer then
+// doesn't enter activeBuffers below.
+//
+// DO NOT change this to .lt(threshold) or add a special case for
+// threshold==0; the current .lte() correctly handles the zero-buffer
+// rule by returning the source-pixel footprint.
 var applyDistanceThreshold = function(distanceImage, threshold) {
   return distanceImage.lte(threshold).selfMask();
 };
