@@ -137,10 +137,28 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "1. Prepare datasets (reproject, rasterise, align)\n"
             "2. Compute distance surfaces\n"
             "3. Build anthropogenic mask (threshold adjustable)\n"
-            "4. Three-tier primary forest logic\n"
-            "5. Refine output (neighbourhood density filter)\n\n"
+            "4. Three-tier primary forest logic (undisturbed/steep/protected)\n"
+            "5. Refine Output -- two optional steps:\n"
+            "   (a) Neighbourhood density filter (set radius=0 to skip)\n"
+            "   (b) Minimum patch size filter via gdal:sieve (set 0 to skip)\n"
+            "6. Zonal Statistics (optional)\n"
+            "7. Vectorise outputs (optional, ADVANCED) -- polygonise primary "
+            "and/or forest input, with optional simplify and CEO-style "
+            "nesting (cuts primary out of forest so they don't overlap)\n\n"
             "Auto UTM: when enabled, the plugin detects the appropriate "
             "UTM zone from the AOI or forest raster centroid.\n\n"
+            "Custom human-use slots (3, ADVANCED): bring your own disturbance "
+            "rasters with user-editable labels and per-slot buffer distances. "
+            "Use cases: pipelines, mines, lights at night, navigable "
+            "waterways, country-specific disturbance layers.\n\n"
+            "Add main outputs to map (default ON): after the run, the headline "
+            "outputs (Primary forest, Pre-connectivity forest, Forest input or "
+            "Forest naturally regenerating) auto-load into the QGIS Layers "
+            "panel.\n\n"
+            "Reuse prepared/*.tif cache (default ON): on re-runs, anthro "
+            "reprojection is skipped when the cached aligned raster matches "
+            "the reference grid -- saves minutes per re-run on national-scale "
+            "data. Untick if you swapped a source raster.\n\n"
             "Speed vs detail:\n"
             "  Workflow runtime scales roughly linearly with raster pixel "
             "count -- doubling resolution (e.g. 60m -> 30m) ~quadruples "
@@ -505,7 +523,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.61"
+    PFF_VERSION = "0.8.62"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
