@@ -93,6 +93,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     RUN_ZONAL_STATS = "RUN_ZONAL_STATS"
     ZONE_LAYER = "ZONE_LAYER"
     ZONE_FIELD = "ZONE_FIELD"
+    # -- Vectorisation (optional, advanced) --
+    RUN_VECTORIZE = "RUN_VECTORIZE"
+    VECTORIZE_PRIMARY = "VECTORIZE_PRIMARY"
+    VECTORIZE_FOREST = "VECTORIZE_FOREST"
+    VECTORIZE_NEST = "VECTORIZE_NEST"
+    VECTORIZE_SIMPLIFY_M = "VECTORIZE_SIMPLIFY_M"
     # -- Output --
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
@@ -394,6 +400,47 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parentLayerParameterName=self.ZONE_LAYER,
             optional=True))
 
+        # -- Vectorisation (optional, advanced) --
+        # Tucked under FlagAdvanced so the default parameter sheet isn't
+        # cluttered. Same pipeline as the standalone "Vectorize PFF
+        # output" tool, integrated into the workflow so users get
+        # CEO-friendly polygon outputs in one run.
+        _v_run = QgsProcessingParameterBoolean(
+            self.RUN_VECTORIZE,
+            "Vectorise selected outputs (creates polygon + dissolved-multipart .gpkg files)",
+            defaultValue=False)
+        _v_run.setFlags(_v_run.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_run)
+
+        _v_primary = QgsProcessingParameterBoolean(
+            self.VECTORIZE_PRIMARY,
+            "    Vectorise: primary forest",
+            defaultValue=True)
+        _v_primary.setFlags(_v_primary.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_primary)
+
+        _v_forest = QgsProcessingParameterBoolean(
+            self.VECTORIZE_FOREST,
+            "    Vectorise: forest input (uses forest_natreg if plantations refined)",
+            defaultValue=False)
+        _v_forest.setFlags(_v_forest.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_forest)
+
+        _v_nest = QgsProcessingParameterBoolean(
+            self.VECTORIZE_NEST,
+            "    Vectorise: nest outputs (when both selected, cut primary out of forest so they don't overlap -- ideal CEO stratification)",
+            defaultValue=False)
+        _v_nest.setFlags(_v_nest.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_nest)
+
+        _v_simplify = QgsProcessingParameterNumber(
+            self.VECTORIZE_SIMPLIFY_M,
+            "    Vectorise: simplify tolerance, metres (0 = no simplification; use with caution -- can introduce geometry artefacts)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0, minValue=0.0)
+        _v_simplify.setFlags(_v_simplify.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_simplify)
+
         self.addParameter(QgsProcessingParameterFolderDestination(
             self.OUTPUT_FOLDER, "Output folder"))
 
@@ -401,7 +448,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.57"
+    PFF_VERSION = "0.8.58"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -478,6 +525,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         }
         enable_refine_output = self.parameterAsBool(
             parameters, self.ENABLE_REFINE_OUTPUT, context)
+
+        # Vectorise stage params (advanced).
+        run_vectorize = self.parameterAsBool(
+            parameters, self.RUN_VECTORIZE, context)
+        vectorize_primary = self.parameterAsBool(
+            parameters, self.VECTORIZE_PRIMARY, context)
+        vectorize_forest = self.parameterAsBool(
+            parameters, self.VECTORIZE_FOREST, context)
+        vectorize_nest = self.parameterAsBool(
+            parameters, self.VECTORIZE_NEST, context)
+        vectorize_simplify_m = self.parameterAsDouble(
+            parameters, self.VECTORIZE_SIMPLIFY_M, context)
 
         # Read individual distances even when single-mode is on, so we can
         # warn the user if they've customised them but ticked the single-mode
@@ -1520,6 +1579,203 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     target_crs_str, context, feedback)
 
         # ================================================================
+        #  STAGE 7 -- Vectorise (optional, advanced)
+        # ================================================================
+        # Polygonises selected outputs (primary forest and/or forest
+        # input) into .gpkg files, with optional Douglas-Peucker
+        # simplification and optional CEO-style nesting (cut primary
+        # out of forest so the two layers don't overlap).
+        #
+        # Filename convention follows the underlying raster:
+        #   primary_forest.tif  -> primary_forest_polygons.gpkg
+        #                        + primary_forest_dissolved.gpkg
+        #   forest_natreg.tif   -> forest_natreg_polygons.gpkg
+        #                        + forest_natreg_dissolved.gpkg
+        #   forest.tif          -> forest_polygons.gpkg
+        #                        + forest_dissolved.gpkg
+        # Whether forest_natreg or forest is used is determined by
+        # whether plantations refinement actually ran (forest_natreg_path
+        # is non-None when it did).
+        # ================================================================
+        if run_vectorize and (vectorize_primary or vectorize_forest):
+            _stage("STAGE 7: Vectorise outputs")
+            vector_scratch = ensure_dir(
+                os.path.join(intermediates_dir, "_vectorize"))
+
+            def _do_polygonise(src_raster_path, name_base):
+                """Mask + polygonise + optional simplify. Returns polys path."""
+                polys_path = os.path.join(
+                    out_dir, f"{name_base}_polygons.gpkg")
+                # Build mask raster with nodata=0 so polygonize skips
+                # background efficiently. Source rasters are already
+                # binary 0/1, so the mask is just (arr == 1).
+                _ds_v = gdal.Open(src_raster_path, gdal.GA_ReadOnly)
+                _v_arr = _ds_v.GetRasterBand(1).ReadAsArray()
+                _v_gt = _ds_v.GetGeoTransform()
+                _v_proj = _ds_v.GetProjection()
+                _v_xsz = _ds_v.RasterXSize
+                _v_ysz = _ds_v.RasterYSize
+                _ds_v = None
+                _v_mask = (_v_arr == 1).astype(np.uint8)
+                _v_masked_tif = os.path.join(
+                    vector_scratch, f"{name_base}_masked.tif")
+                if os.path.exists(_v_masked_tif):
+                    try:
+                        os.remove(_v_masked_tif)
+                    except OSError:
+                        pass
+                _drv_v = gdal.GetDriverByName("GTiff")
+                _ds_o = _drv_v.Create(_v_masked_tif, _v_xsz, _v_ysz, 1,
+                                      gdal.GDT_Byte,
+                                      ["COMPRESS=LZW", "TILED=YES"])
+                _ds_o.SetGeoTransform(_v_gt)
+                _ds_o.SetProjection(_v_proj)
+                _ob = _ds_o.GetRasterBand(1)
+                _ob.WriteArray(_v_mask)
+                _ob.SetNoDataValue(0)
+                _ob.FlushCache()
+                _ds_o = None
+                del _v_arr, _v_mask
+
+                if vectorize_simplify_m > 0:
+                    polys_tmp = os.path.join(
+                        vector_scratch, f"{name_base}_polys_raw.gpkg")
+                else:
+                    polys_tmp = polys_path
+
+                feedback.pushInfo(
+                    f"  Polygonising {name_base} (gdal:polygonize, "
+                    "4-connected)...")
+                run_processing("gdal:polygonize", {
+                    "INPUT": _v_masked_tif,
+                    "BAND": 1,
+                    "FIELD": "value",
+                    "EIGHT_CONNECTEDNESS": False,
+                    "EXTRA": "",
+                    "OUTPUT": polys_tmp,
+                }, context=context, feedback=feedback)
+
+                if vectorize_simplify_m > 0:
+                    feedback.pushInfo(
+                        f"  Simplifying {name_base} (Douglas-Peucker, "
+                        f"tolerance={vectorize_simplify_m:g} m)...")
+                    feedback.pushWarning(
+                        "Simplify can introduce geometry artefacts; "
+                        "reduce tolerance if downstream tools throw "
+                        "errors.")
+                    run_processing("native:simplifygeometries", {
+                        "INPUT": polys_tmp,
+                        "METHOD": 0,
+                        "TOLERANCE": vectorize_simplify_m,
+                        "OUTPUT": polys_path,
+                    }, context=context, feedback=feedback)
+
+                return polys_path
+
+            # ── Vectorise primary forest ──
+            primary_polys_path = None
+            if vectorize_primary:
+                primary_polys_path = _do_polygonise(
+                    final_path, "primary_forest")
+
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (during vectorise stage).")
+
+            # ── Vectorise forest input ──
+            # Use forest_natreg if plantations refinement produced one,
+            # else the AOI-clipped forest input. Naming carries to the
+            # output filenames so the user can tell which they got.
+            forest_polys_path = None
+            forest_name_base = None
+            if vectorize_forest:
+                if forest_natreg_path is not None:
+                    forest_src_path = forest_natreg_path
+                    forest_name_base = "forest_natreg"
+                else:
+                    forest_src_path = prepared_forest_path
+                    forest_name_base = "forest"
+                forest_polys_path = _do_polygonise(
+                    forest_src_path, forest_name_base)
+
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (during vectorise stage).")
+
+            # ── Optional nesting: cut primary out of forest ──
+            # Only meaningful when both are vectorised. Result: primary
+            # polygons are unchanged, forest polygons have primary
+            # subtracted -- the two layers tile the forest extent
+            # without overlap, which is the standard CEO stratified-
+            # sampling layout (sample primary plots + non-primary
+            # plots independently with no double-counting).
+            if vectorize_nest:
+                if vectorize_primary and vectorize_forest:
+                    feedback.pushInfo(
+                        f"  Nesting: cutting primary_forest out of "
+                        f"{forest_name_base} so the two layers don't "
+                        "overlap (CEO stratification)...")
+                    _diff_tmp = os.path.join(
+                        vector_scratch,
+                        f"{forest_name_base}_minus_primary.gpkg")
+                    if os.path.exists(_diff_tmp):
+                        try:
+                            os.remove(_diff_tmp)
+                        except OSError:
+                            pass
+                    run_processing("native:difference", {
+                        "INPUT": forest_polys_path,
+                        "OVERLAY": primary_polys_path,
+                        "OUTPUT": _diff_tmp,
+                    }, context=context, feedback=feedback)
+                    # Replace forest polygons with the differenced
+                    # version. .gpkg can't be overwritten in-place, so
+                    # delete + rename.
+                    if os.path.exists(forest_polys_path):
+                        try:
+                            os.remove(forest_polys_path)
+                        except OSError:
+                            pass
+                    os.rename(_diff_tmp, forest_polys_path)
+                else:
+                    feedback.pushWarning(
+                        "Vectorise nesting is on but only one of "
+                        "primary / forest was selected -- nesting "
+                        "skipped (needs both).")
+
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (during vectorise stage).")
+
+            # ── Dissolve each to multipart ──
+            # Dissolve happens after potential nesting so the dissolved
+            # output reflects the final (possibly differenced) geometry.
+            if vectorize_primary:
+                _primary_dissolved = os.path.join(
+                    out_dir, "primary_forest_dissolved.gpkg")
+                feedback.pushInfo(
+                    "  Dissolving primary_forest to multipart...")
+                run_processing("native:dissolve", {
+                    "INPUT": primary_polys_path,
+                    "FIELD": [],
+                    "OUTPUT": _primary_dissolved,
+                }, context=context, feedback=feedback)
+
+            if vectorize_forest:
+                _forest_dissolved = os.path.join(
+                    out_dir, f"{forest_name_base}_dissolved.gpkg")
+                feedback.pushInfo(
+                    f"  Dissolving {forest_name_base} to multipart...")
+                run_processing("native:dissolve", {
+                    "INPUT": forest_polys_path,
+                    "FIELD": [],
+                    "OUTPUT": _forest_dissolved,
+                }, context=context, feedback=feedback)
+
+        # ================================================================
         #  Write run metadata
         # ================================================================
         _close_last_stage()
@@ -1548,6 +1804,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "smooth_radius_m": smooth_radius,
                 "density_threshold": density_thresh,
                 "refine_min_patch_area_ha": refine_min_patch_area_ha,
+                "run_vectorize": run_vectorize,
+                "vectorize_primary": vectorize_primary if run_vectorize else None,
+                "vectorize_forest": vectorize_forest if run_vectorize else None,
+                "vectorize_nest": vectorize_nest if run_vectorize else None,
+                "vectorize_simplify_m": vectorize_simplify_m if run_vectorize else None,
                 "auto_utm": auto_utm,
                 "exclude_plantations": exclude_plantations,
                 "plantations_applied": forest_natreg_path is not None,
