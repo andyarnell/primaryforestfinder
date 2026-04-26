@@ -148,6 +148,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "nesting (cuts primary out of forest so they don't overlap)\n\n"
             "Auto UTM: when enabled, the plugin detects the appropriate "
             "UTM zone from the AOI or forest raster centroid.\n\n"
+            "Buffer = 0 rule (P0.15): if a per-input buffer distance is "
+            "set to 0 AND that input's 'Include ... buffer' tickbox is "
+            "ticked, the input footprint is applied DIRECTLY to the "
+            "anthropogenic mask (no buffer expansion). To skip an input "
+            "entirely instead, untick its 'Include ... buffer' checkbox.\n\n"
             "Custom human-use slots (3, ADVANCED): bring your own disturbance "
             "rasters with user-editable labels and per-slot buffer distances. "
             "Use cases: pipelines, mines, lights at night, navigable "
@@ -277,7 +282,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(_l_param)
             _d_param = QgsProcessingParameterNumber(
                 _d_const,
-                f"    Custom disturbance {_i}: buffer distance (m)",
+                f"    Custom disturbance {_i}: buffer distance (m) "
+                "[0 = apply input directly, no buffer]",
                 type=QgsProcessingParameterNumber.Double,
                 defaultValue=1000.0, minValue=0.0)
             _d_param.setFlags(_d_param.flags()
@@ -352,7 +358,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=False))
         self.addParameter(QgsProcessingParameterNumber(
             self.ALL_BUFFERS_DIST,
-            "Single buffer distance (m) — overrides individual values when ticked",
+            "Single buffer distance (m) — overrides individual values when ticked. "
+            "0 = apply each input footprint directly (no buffer expansion).",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=1000, minValue=0, maxValue=10000))
 
@@ -367,7 +374,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.ROADS_DIST,
-            "    Roads buffer distance (m)  [ignored when single-distance is ticked]",
+            "    Roads buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=ROADS_DIST, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterBoolean(
@@ -376,7 +383,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.BUILTUP_DIST,
-            "    Built-up (small) buffer distance (m)  [ignored when single-distance is ticked]",
+            "    Built-up (small) buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=BUILTUP_DIST, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterBoolean(
@@ -385,7 +392,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.BUILTUP_LARGE_DIST,
-            "    Built-up (large) buffer distance (m)  [ignored when single-distance is ticked]",
+            "    Built-up (large) buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=BUILTUP_LARGE_DIST, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterBoolean(
@@ -394,7 +401,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.AGRICULTURE_DIST,
-            "    Agriculture buffer distance (m)  [ignored when single-distance is ticked]",
+            "    Agriculture buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=AGRICULTURE_DIST, minValue=0, maxValue=10000))
         # Max distance — technical cap for speed. Rarely needs tuning;
@@ -536,7 +543,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.8.65"
+    PFF_VERSION = "0.8.66"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1415,7 +1422,38 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     f"Cancelled by user (during anthropogenic mask, "
                     f"before applying '{name}' threshold).")
             thresh = thresholds.get(name, 0)
-            if thresh <= 0:
+            if thresh < 0:
+                # Negative is invalid -- skip with a warning.
+                feedback.pushWarning(
+                    f"  Negative buffer ({thresh:g} m) for {name} -- skipping.")
+                continue
+            if thresh == 0:
+                # P0.15 (zero-buffer rule, decided 2026-04-26): when input
+                # is enabled AND buffer = 0, apply the input footprint
+                # directly -- forest pixels coinciding with the input
+                # become anthropogenic, but no buffer expansion. This is
+                # the user's explicit "I want this layer to count but
+                # without distance buffering" semantic.
+                #
+                # If thresh == 0 AND user didn't want the input at all,
+                # they should untick the per-input enable_buffers checkbox
+                # (which prevents the input ever entering rasters / dist_paths).
+                input_path = rasters.get(name)
+                if input_path is None or not os.path.exists(input_path):
+                    feedback.pushInfo(
+                        f"  Buffer = 0 for {name}, but no input raster "
+                        "found in rasters dict -- skipping.")
+                    continue
+                feedback.pushInfo(
+                    f"Buffer = 0 for {name}: applying input footprint "
+                    "directly (no buffer expansion). To skip the input "
+                    "entirely instead, untick its 'Include ... buffer' "
+                    "checkbox.")
+                ds = gdal.Open(input_path, gdal.GA_ReadOnly)
+                arr = ds.GetRasterBand(1).ReadAsArray()
+                ds = None
+                combined_mask = np.maximum(
+                    combined_mask, (arr == 1).astype(np.uint8))
                 continue
             feedback.pushInfo(f"Thresholding {name} at {thresh} m...")
             ds = gdal.Open(dp, gdal.GA_ReadOnly)
