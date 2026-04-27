@@ -107,6 +107,78 @@ User declares what their forest input represents via the Step 02 dropdown (P1.19
 
 Files only exist when actually computed. `run_metadata.json` records which layers were produced, which were skipped, and why.
 
+## FRA mapping reference
+
+Final state after P1.16 + P1.18 + P1.20 land. "Today" deltas noted in caveats column.
+
+### FRA mapping by schema slot
+
+| Slot | FRA name | Built from | What's removed at this step | Caveats |
+|---|---|---|---|---|
+| `02a_hansen_treecover2000_raw` | Tree cover (canopy %) | Hansen GFC treecover2000 | — (raw data) | Year-2000 baseline; doesn't account for subsequent loss/gain |
+| `02a_hansen_lossyear_raw` | Tree-cover loss year | Hansen GFC lossyear | — (raw data) | Encodes year of detected loss 2001-2024; not absence at year 2000 |
+| `02a_glad_tree_height_m` | Tree canopy height | GLAD tree height (per year) | — (raw data) | Per-year snapshot; height-only — no land-use info |
+| `02b_forest` | ≈ Forest (FRA) | Tree cover (canopy ≥ X% AND height ≥ Y m) | **After P1.18**: agriculture pixels removed (cropland + pasture + oil palm + SDPT class 2 tree crops). **Today (pre-P1.18)**: nothing removed at this step — agriculture filtering only happens at the disturbance-buffer stage on the way to primary | "≈" because: (a) thresholds are biophysical proxies for FRA's land-use definition; (b) without P1.18, agricultural tree cover stays in baseline; (c) FRA's 0.5 ha minimum patch size not enforced here |
+| `02c_natural_forest` | ≈ Natural forest (FRA) | `02b_forest` MINUS `02d_plantations` | Planted forest (SDPT class 1 — timber, eucalyptus, pine, national overrides) subtracted | "≈" because: (a) SDPT misses smallholders → some planted areas remain in "natural"; (b) SDPT misclassifications → some real natural forest wrongly excluded; (c) **today (pre-P1.20)** also subtracts SDPT class 2 + Descals oil palm via wrong-bucket — area is smaller-but-mislabelled today, will rebalance after P1.18+P1.20 |
+| `02d_plantations` | ≈ Planted forest (FRA) | SDPT class 1 (Planted Forests) ∪ national plantations override | — (this IS the planted forest layer, not derived by subtraction) | "≈" because: (a) SDPT incomplete; (b) **today (pre-P1.20)** also includes SDPT class 2 (tree crops) + Descals oil palm — stat is inflated for FRA Planted Forest comparison; (c) FDAP commodity layers stay disabled (commission errors in primary forest) |
+| `04a_primary_forest` | ≈ Primary forest (PFF target) | `02c_natural_forest` MINUS disturbance buffers MINUS ecological viability fails | Distance-to-roads + builtup + agriculture buffers (radii user-tunable). Hansen `lossyear` pixels in the analysis period. Patch geometry too small (sieve) or too thin (neighbourhood density). **Protection exceptions** (WDPA legal + steep slope) override removal | "≈" because: (a) "naturalness" inferred from disturbance proximity — not species/origin data; (b) buffer distances are heuristics, not field-validated; (c) viability thresholds (min hectare, density radius) are global defaults not country-tuned; (d) inherits all upstream `02c` caveats |
+| (stats only) Naturally regenerating forest | ≈ Naturally regenerating forest (FRA) | `02c_natural_forest` MINUS `04a_primary_forest` | Primary forest pixels subtracted from natural forest | (a) Not a saved file — area only, computed inline in stats panel; (b) inherits all upstream caveats; (c) FRA defines this by ORIGIN (regrowth after disturbance), tool defines by ELIMINATION (natural minus primary) — different semantic, similar pixel set |
+
+### Step 03 inputs — not FRA categories themselves
+
+These are inputs *to* the primary forest computation, not FRA forest categories. No FRA name applies.
+
+| Slot | What it is | Source | Role |
+|---|---|---|---|
+| `03a_roads` | Roads raster | OSM / Microsoft Roads | Disturbance — buffered, removes nearby pixels |
+| `03a_builtup_small` / `03a_builtup_large` | Built-up areas | GHSL / WSF / GISD / GISA | Disturbance — buffered |
+| `03a_agriculture` | Agricultural land | GLAD croplands ∪ pasture ∪ Descals oil palm ∪ SDPT class 2 (post-P1.20) | Disturbance — buffered |
+| `03a_custom_<userlabel>` | User-supplied | User raster | Disturbance — buffered |
+| `03b_protection_legal` | WDPA protected areas | WDPA filtered by status + designation date | Protection exception — preserves forest from disturbance buffer |
+| `03b_protection_legal_unfiltered_vector` | WDPA raw | WDPA all features | Reference vector |
+| `03b_protection_natural_dem` | Elevation | ALOS DSM | Source for slope computation |
+| `03b_protection_natural_slope` | Steep slope | Slope ≥ threshold from DEM | Protection exception — naturally protected |
+
+### Cross-step caveats (apply throughout)
+
+These limitations propagate down the hierarchy and are worth surfacing once on the About page rather than repeating per layer:
+
+| Caveat | Affects | Why it matters |
+|---|---|---|
+| Hansen tree cover only counts canopy ≥ 5m at maturity | `02a`, all downstream | Misses regenerating forest under 5m; misses sparse woodland canopies |
+| Hansen tree cover thresholds (10-30%) are user-tunable | `02b`, all downstream | Different runs use different thresholds; comparisons need to match |
+| FRA's 0.5 ha minimum patch size not enforced at `02b` | `02b`, `02c` | Tiny tree clusters that wouldn't be FRA Forest still count |
+| FRA's land-use definition not strictly captured | `02b`, `02c` | Even with P1.18, agriculture detection is dataset-limited; agroforestry edge cases hard to classify |
+| SDPT v2 incomplete | `02c`, `02d` | Smallholder plantations missing; older plantings underrepresented in some regions |
+| Descals oil palm time series only | `03a_agriculture` | Pre-2010 oil palm may be missed; uncertainty in recent years |
+| FDAP commodity layers DISABLED | `03a_agriculture` | Smallholder rubber, cocoa, palm not captured outside SDPT — commission errors in primary forest too high to enable (see memory `project_fdap_commission_errors.md`) |
+| Disturbance buffer distances are global defaults | `04a` | Country-specific tuning would improve accuracy but isn't workflow default |
+| FRA submission numbers come from country reports | All comparator rows | Tool numbers compared in spirit, not as ground truth — country submissions include local context the tool can't replicate |
+
+### Pixel flow for a single forest area
+
+```
+Tree cover pixel exists? (Hansen + GLAD thresholds)
+   │
+   ├─ NO  → not in any layer
+   │
+   └─ YES → enters 02b_forest
+              │
+              │   [P1.18 if shipped:]
+              │   Is it agriculture (cropland/pasture/oil palm/tree crops)?
+              │      ├─ YES → removed from 02b_forest, stays only in 03a_agriculture
+              │      └─ NO  → stays in 02b_forest
+              │
+              ├─ Is it planted forest (SDPT class 1)?
+              │      ├─ YES → in 02d_plantations, NOT in 02c_natural_forest
+              │      └─ NO  → in 02c_natural_forest
+              │
+              └─ [for 02c pixels:]
+                  Is it within disturbance buffer (and not under protection)?
+                      ├─ YES → removed → counted in "naturally regenerating" stat
+                      └─ NO  → in 04a_primary_forest
+```
+
 ## Step 03 — Human Influence Inputs
 
 Two semantic categories under Step 03; substep letter encodes the category.
