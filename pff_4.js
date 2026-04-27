@@ -1,5 +1,34 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.1.16";
+var PFF_SCRIPT_VERSION = "4.2.0";
+
+// Changes vs v4.1.16 (BREAKING -- minor bump to mark filename schema change):
+//  - P1.13: All Export.image.toDrive / Export.table.toDrive descriptions
+//    + fileNamePrefixes migrated to the Option D naming schema (see
+//    docs/specs/PFF_NAMING_CONVENTION.md). Schema:
+//        <ISO3>_gee_<step><substep>_<layer_name>_<year>_<scale>m
+//    Renames:
+//      0_aoi_<country>_vector              -> 00a_aoi_<country>_vector
+//      1_hansen_treecover2000_raw_<s>      -> 02a_hansen_treecover2000_raw_<s>
+//      1_hansen_lossyear_raw_<s>           -> 02b_hansen_lossyear_raw_<s>
+//      1_glad_tree_height_m_<y>_<s>        -> 02c_glad_tree_height_m_<y>_<s>
+//      1_forest_<y>_<s>                    -> 02d_forest_<y>_<s>
+//      2_roads_<y>_<s>                     -> 03a_roads_<y>_<s>
+//      2_builtup_small_<y>_<s>             -> 03b_builtup_small_<y>_<s>
+//      2_builtup_large_<y>_<s>             -> 03c_builtup_large_<y>_<s>
+//      2_agriculture_<y>_<s>               -> 03d_agriculture_<y>_<s>
+//      2_plantations_<y>_<s>               -> 03e_plantations_<y>_<s>
+//      3_protection_legal_<s>              -> 03f_protection_legal_<s>
+//      3_protection_legal_unfilt_vector    -> 03g_protection_legal_unfiltered_vector
+//      3_protection_natural_dem_<s>        -> 03h_protection_natural_dem_<s>
+//      3_protection_natural_slope_<s>      -> 03i_protection_natural_slope_<s>
+//      4_pre_connectivity_forest_<y>_<s>   -> 04b_pre_connectivity_primary_forest_<y>_<s>
+//      5_primary_forest_<y>_<s>            -> 04a_primary_forest_<y>_<s>
+//      <iso3>_pff_run_metadata_<y>_<s>m    -> <iso3>_gee_run_metadata_<y>_<s>m
+//    Implementation: new mkExportName(step, name) helper inside
+//    exportRastersToDrive() that calls generateLayerName(iso3,
+//    PLATFORM_GEE, step, name, '') and appends runTag. doExport /
+//    doExportInt16 / doExportTable refactored to NOT prepend iso3
+//    themselves -- the caller's mkExportName() output is used as-is.
 
 // Changes vs v4.1.15:
 //  - P0.15 (zero-buffer rule) verified for GEE side: existing
@@ -44,7 +73,7 @@ var PFF_SCRIPT_VERSION = "4.1.16";
 //       snapshot)", default ON). Queues an Export.table.toDrive (or
 //       Cloud Storage) GeoJSON sidecar per analysis year alongside the
 //       raster batch. Filename:
-//         <iso3>_pff_run_metadata_<year>_<scale>m.geojson
+//         <iso3>_gee_run_metadata_<year>_<scale>m.geojson  (P1.13 -- was pff_)
 //
 //    2. New "Download Run Metadata" button in the Save-settings panel.
 //       In-browser download via getDownloadURL -- snapshots current
@@ -1747,16 +1776,24 @@ function exportRastersToDrive() {
     return;
   }
 
-  // Shared export helper (binary/byte images)
-  // description doubles as filename (Drive) — keep filesystem-safe with ISO3 prefix
+  // P1.13 Option D filename helper. Wraps generateLayerName() with the
+  // current run's iso3, the GEE platform tag, and appends runTag (a
+  // unique HHhMMm suffix) for task-id uniqueness across same-day
+  // re-runs. Returns extension-less since GEE appends .tif / .geojson
+  // / etc. automatically based on fileFormat.
+  function mkExportName(step, name) {
+    return generateLayerName(iso3, PLATFORM_GEE, step, name, '') + runTag;
+  }
+
+  // Shared export helper (binary/byte images). Caller passes the full
+  // already-formatted filename in `description` (use mkExportName()).
   function doExport(image, description, folder) {
-    var desc = iso3 + '_' + description + runTag;
     if (useCloud) {
       Export.image.toCloudStorage({
         image: image.toByte(),
-        description: desc,
+        description: description,
         bucket: gcsBucket.trim(),
-        fileNamePrefix: folder + '/' + iso3 + '_' + description,
+        fileNamePrefix: folder + '/' + description,
         region: exportRegion,
         scale: exportScale,
         crs: targetCRS,
@@ -1767,7 +1804,7 @@ function exportRastersToDrive() {
     } else {
       Export.image.toDrive({
         image: image.toByte(),
-        description: desc,
+        description: description,
         folder: folder,
         region: exportRegion,
         scale: exportScale,
@@ -1779,15 +1816,14 @@ function exportRastersToDrive() {
     }
   }
 
-  // Int16 export helper (for DEM)
+  // Int16 export helper (for DEM). Same caller contract as doExport.
   function doExportInt16(image, description, folder) {
-    var desc = iso3 + '_' + description + runTag;
     if (useCloud) {
       Export.image.toCloudStorage({
         image: image.toInt16(),
-        description: desc,
+        description: description,
         bucket: gcsBucket.trim(),
-        fileNamePrefix: folder + '/' + iso3 + '_' + description,
+        fileNamePrefix: folder + '/' + description,
         region: exportRegion,
         scale: exportScale,
         crs: targetCRS,
@@ -1798,7 +1834,7 @@ function exportRastersToDrive() {
     } else {
       Export.image.toDrive({
         image: image.toInt16(),
-        description: desc,
+        description: description,
         folder: folder,
         region: exportRegion,
         scale: exportScale,
@@ -1810,9 +1846,9 @@ function exportRastersToDrive() {
     }
   }
 
-  // Vector export helper
+  // Vector export helper. Same caller contract as doExport.
   function doExportTable(collection, description, folder) {
-    var desc = iso3 + '_' + description + runTag;
+    var desc = description;
     // SHP requires a single geometry type. Some source FCs (WDPA, the
     // simplified/diced GAUL asset used for IDN/THA/DZA/AUS/CHN) carry stray
     // LineString / Point features that trigger GEE Error 3 ("multiple
@@ -1826,7 +1862,7 @@ function exportRastersToDrive() {
         collection: polyOnly,
         description: desc,
         bucket: gcsBucket.trim(),
-        fileNamePrefix: folder + '/' + iso3 + '_' + description,
+        fileNamePrefix: folder + '/' + description,
         fileFormat: 'SHP'
       });
     } else {
@@ -1865,7 +1901,7 @@ function exportRastersToDrive() {
   //  0 — AOI & reference layers
   // ══════════════════════════════════════════════════════
   if (exportChk_aoi.getValue()) {
-    doExportTable(country_sel, '0_aoi_' + countryClean + '_vector', folder);
+    doExportTable(country_sel, mkExportName('00a', 'aoi_' + countryClean + '_vector'), folder);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1876,9 +1912,9 @@ function exportRastersToDrive() {
   if (exportChk_hansenRaw.getValue()) {
     var gfc = ee.Image('UMD/hansen/global_forest_change_2024_v1_12');
     doExport(gfc.select('treecover2000').updateMask(country_and_buffer_mask).unmask(0),
-      '1_hansen_treecover2000_raw_' + s, folder);
+      mkExportName('02a', 'hansen_treecover2000_raw_' + s), folder);
     doExport(gfc.select('lossyear').updateMask(country_and_buffer_mask).unmask(0),
-      '1_hansen_lossyear_raw_' + s, folder);
+      mkExportName('02b', 'hansen_lossyear_raw_' + s), folder);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1898,7 +1934,7 @@ function exportRastersToDrive() {
   var wdpa_raster = wdpa_filt_by_date_image.selfMask()
     .updateMask(country_and_buffer_mask).unmask(0).toByte().rename('protected');
   if (exportChk_protLegal.getValue()) {
-    doExport(wdpa_raster, '3_protection_legal_' + s, folder);
+    doExport(wdpa_raster, mkExportName('03f', 'protection_legal_' + s), folder);
   }
 
   if (exportChk_protVector.getValue()) {
@@ -1906,21 +1942,21 @@ function exportRastersToDrive() {
       ee.Filter.and(ee.Filter.neq('STATUS', 'Proposed'),
                     ee.Filter.neq('STATUS', 'Not Reported'))
     ).filterBounds(exportRegion);
-    doExportTable(wdpa_raw, '3_protection_legal_unfilt_vector', folder);
+    doExportTable(wdpa_raw, mkExportName('03g', 'protection_legal_unfiltered_vector'), folder);
   }
 
   // 3b — Natural protection (DEM for slope computation in QGIS)
   var alos_30m_elev = ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2').select('DSM').mosaic();
   if (exportChk_dem.getValue()) {
     doExportInt16(alos_30m_elev.updateMask(country_and_buffer_mask).unmask(0),
-      '3_protection_natural_dem_' + s, folder);
+      mkExportName('03h', 'protection_natural_dem_' + s), folder);
   }
 
   // 3c — Slope (optional — computed from DEM)
   if (exportChk_slope.getValue()) {
     var slopeImage = ee.Terrain.slope(alos_30m_elev.setDefaultProjection('EPSG:4326', null, 30));
     doExport(slopeImage.updateMask(country_and_buffer_mask).unmask(0).toByte(),
-      '3_protection_natural_slope_' + s, folder);
+      mkExportName('03i', 'protection_natural_slope_' + s), folder);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1957,7 +1993,7 @@ function exportRastersToDrive() {
     }
     if (exportChk_inputForest.getValue()) {
       doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-        '1_forest_' + analysisYear + '_' + s, folder);
+        mkExportName('02d', 'forest_' + analysisYear + '_' + s), folder);
     }
 
     // GLAD raw tree height (so user can re-threshold at any height in QGIS)
@@ -1975,13 +2011,13 @@ function exportRastersToDrive() {
       var gladTreeHeight = gladLandcoverLand.remap(fromValues, toValues)
         .updateMask(country_and_buffer_mask).unmask(0).toByte()
         .rename('tree_height_m');
-      doExport(gladTreeHeight, '1_glad_tree_height_m_' + analysisYear + '_' + s, folder);
+      doExport(gladTreeHeight, mkExportName('02c', 'glad_tree_height_m_' + analysisYear + '_' + s), folder);
     }
 
     // ── 2 — Anthropogenic: roads, built-up (small + large), agriculture ──
     var roadsMosaicStatic = timeseriesAnthroModule.roadsMosaicStatic().updateMask(country_and_buffer_mask);
     if (exportChk_roads.getValue()) {
-      doExport(roadsMosaicStatic.unmask(0), '2_roads_' + analysisYear + '_' + s, folder);
+      doExport(roadsMosaicStatic.unmask(0), mkExportName('03a', 'roads_' + analysisYear + '_' + s), folder);
     }
 
     // Built-up small
@@ -2007,11 +2043,11 @@ function exportRastersToDrive() {
     }
     if (exportChk_builtupSmall.getValue()) {
       doExport(builtUpSmall.updateMask(country_and_buffer_mask).unmask(0),
-        '2_builtup_small_' + analysisYear + '_' + s, folder);
+        mkExportName('03b', 'builtup_small_' + analysisYear + '_' + s), folder);
     }
     if (exportChk_builtupLarge.getValue()) {
       doExport(builtUpLargeImg.updateMask(country_and_buffer_mask).unmask(0),
-        '2_builtup_large_' + analysisYear + '_' + s, folder);
+        mkExportName('03c', 'builtup_large_' + analysisYear + '_' + s), folder);
     }
 
     // Agriculture
@@ -2030,24 +2066,24 @@ function exportRastersToDrive() {
       // "Exclude plantations" logic (forest AND NOT plantations). Enables
       // full FRA stats cascade (Forest → Nat. regen. forest → Primary forest).
       doExport(allPlantationsSel.unmask(0).toByte(),
-        '2_plantations_' + analysisYear + '_' + s, folder);
+        mkExportName('03e', 'plantations_' + analysisYear + '_' + s), folder);
     }
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
     var croplandGladCollectionFF = forwardFillBinaryTimeSeries(croplandGladCollection, years);
     var croplandGladSel = ee.Image(croplandGladCollectionFF.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask);
     var agriculture = pastureDatasetSel.or(allPlantationsSel.unmask()).or(croplandGladSel);
     if (exportChk_agriculture.getValue()) {
-      doExport(agriculture.unmask(0), '2_agriculture_' + analysisYear + '_' + s, folder);
+      doExport(agriculture.unmask(0), mkExportName('03d', 'agriculture_' + analysisYear + '_' + s), folder);
     }
 
     // ── 4 — Pre-connectivity Forest & Primary Forest (from analysis cache) ──
     if (exportChk_preConnectivity.getValue() && latestPreConnectivityForest[analysisYear]) {
       doExport(latestPreConnectivityForest[analysisYear].unmask(0),
-        '4_pre_connectivity_forest_' + analysisYear + '_' + s, folder);
+        mkExportName('04b', 'pre_connectivity_primary_forest_' + analysisYear + '_' + s), folder);
     }
     if (exportChk_final.getValue() && latestMaskedPrimaryForest[analysisYear]) {
       doExport(latestMaskedPrimaryForest[analysisYear].unmask(0),
-        '5_primary_forest_' + analysisYear + '_' + s, folder);
+        mkExportName('04a', 'primary_forest_' + analysisYear + '_' + s), folder);
     }
   });
 
@@ -2055,13 +2091,16 @@ function exportRastersToDrive() {
   // comparisons get distinct files reflecting the year_exported field).
   // Exported as GeoJSON because Export.table only emits geo formats and
   // CSV/SHP would lose the structure -- GeoJSON parses cleanly back to a
-  // flat dict downstream. Filename: <iso3>_pff_run_metadata_<year>_<scale>m.geojson.
+  // flat dict downstream. P1.13 filename:
+  //   <ISO3>_gee_run_metadata_<year>_<scale>m.geojson
+  // (No top-level step number -- contextual sidecar, not a per-stage layer.)
   if (exportChk_runMetadata.getValue()) {
     uniqueYears.forEach(function(metaYear) {
       var bundle = buildRunBundle(metaYear, exportScale, iso3, folder, useCloud);
       var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
-      var bundleDesc = iso3 + '_pff_run_metadata_' + metaYear + '_' + s + 'm' + runTag;
-      var bundlePrefix = iso3 + '_pff_run_metadata_' + metaYear + '_' + s + 'm';
+      var bundlePrefix = (iso3 ? iso3 + '_' : '') +
+        'gee_run_metadata_' + metaYear + '_' + s + 'm';
+      var bundleDesc = bundlePrefix + runTag;
       if (useCloud) {
         Export.table.toCloudStorage({
           collection: bundleFC,
@@ -3496,7 +3535,7 @@ function downloadRunBundle() {
   var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
   var url = bundleFC.getDownloadURL({
     format: 'json',
-    filename: iso3 + '_pff_run_metadata_' + year + '_' + scale + 'm.json'
+    filename: (iso3 ? iso3 + '_' : '') + 'gee_run_metadata_' + year + '_' + scale + 'm.json'
   });
 
   if (downloadLinkPanel) {
