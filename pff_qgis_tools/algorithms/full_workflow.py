@@ -163,9 +163,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "Use cases: pipelines, mines, lights at night, navigable "
             "waterways, country-specific disturbance layers.\n\n"
             "Add main outputs to map (default ON): after the run, the headline "
-            "outputs (Primary forest, Pre-connectivity forest, Forest input or "
-            "Forest naturally regenerating) auto-load into the QGIS Layers "
-            "panel.\n\n"
+            "outputs (Primary forest, Pre-connectivity forest, Forest, and "
+            "Naturally regenerating forest when produced) auto-load into the "
+            "QGIS Layers panel.\n\n"
             "Reuse prepared/*.tif cache (default ON): on re-runs, anthro "
             "reprojection is skipped when the cached aligned raster matches "
             "the reference grid -- saves minutes per re-run on national-scale "
@@ -181,10 +181,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "finer. If you only care about built-up / agriculture / "
             "protection, 60-100m is usually fine and much faster.\n\n"
             "Output folder layout (OUT = your chosen output folder; ISO3 prefix when set):\n"
+            "  OUT/[ISO3_]qgis_02c_naturally_regenerating_forest.tif (if plantations refined)\n"
             "  OUT/[ISO3_]qgis_04a_primary_forest.tif\n"
             "  OUT/[ISO3_]qgis_04b_pre_connectivity_primary_forest.tif\n"
             "  OUT/[ISO3_]qgis_04c_combined_coded_raster.tif (if ticked)\n"
-            "  OUT/[ISO3_]qgis_04d_forest_naturally_regenerating.tif (if plantations)\n"
             "  OUT/[ISO3_]qgis_04e_anthropogenic_mask.tif\n"
             "  OUT/[ISO3_]qgis_05a_area_statistics.csv (if zonal stats ticked)\n"
             "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.shp (if zonal stats ticked)\n"
@@ -329,8 +329,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "'Exclude plantations' tickbox below. Typical sources: Spatial "
             "Database of Planted Trees (SDPT), national plantation registry. "
             "When supplied AND 'Exclude plantations' is on, the workflow "
-            "outputs an additional forest_natreg.tif (FRA naturally "
-            "regenerating forest = forest minus plantations).",
+            "outputs an additional 02c_naturally_regenerating_forest.tif "
+            "(≈ FRA Naturally Regenerating Forest = forest minus plantations "
+            "-- proxy, depends on plantations layer completeness).",
             optional=True))
         self.addParameter(QgsProcessingParameterVectorLayer(
             self.AOI, "Area of Interest boundary (vector)", optional=True))
@@ -539,7 +540,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         _v_forest = QgsProcessingParameterBoolean(
             self.VECTORIZE_FOREST,
-            "    Vectorise: forest input (uses forest_natreg if plantations refined)",
+            "    Vectorise: forest input (uses naturally regenerating forest if plantations refined)",
             defaultValue=False)
         _v_forest.setFlags(_v_forest.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_forest)
@@ -566,7 +567,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.0"
+    PFF_VERSION = "0.9.1"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -838,8 +839,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"Target CRS: {target_crs_str} (source: {crs_source})")
 
         # All non-headline outputs (caches + tier rasters) nest under intermediates/.
-        # Headlines (per Option D: 04a primary_forest, 04b pre_connectivity,
-        # 04c combined_coded, 04d forest_natreg, 04e anthropogenic_mask,
+        # Headlines (per Option D + P1.16 FRA-aligned schema:
+        # 02c naturally_regenerating_forest, 04a primary_forest,
+        # 04b pre_connectivity, 04c combined_coded, 04e anthropogenic_mask,
         # 05a area_statistics, 06a/b/c/d vectors, qgis_run_metadata.json)
         # stay at out_dir top level with ISO3+platform+step prefixes via _out().
         intermediates_dir = ensure_dir(os.path.join(out_dir, "intermediates"))
@@ -860,7 +862,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             _out("04a", "primary_forest"),
             _out("04b", "pre_connectivity_primary_forest"),
             _out("04e", "anthropogenic_mask"),
-            _out("04d", "forest_naturally_regenerating"),
+            _out("02c", "naturally_regenerating_forest"),
             os.path.join(
                 out_dir,
                 (f"{_iso3}_qgis_run_metadata.json" if _iso3
@@ -1009,14 +1011,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                             f"Cannot write '{os.path.basename(prepared_forest_path)}' — "
                             "it is locked. Close any program using it and retry. "
                             f"(original: {e})")
-                _out = _drv.Create(prepared_forest_path, _xsz, _ysz, 1,
-                                   gdal.GDT_Byte, ["COMPRESS=LZW"])
-                _out.SetGeoTransform(_gt_ref)
-                _out.SetProjection(_proj_ref)
-                _out.GetRasterBand(1).WriteArray(_masked)
-                _out.GetRasterBand(1).SetNoDataValue(0)
-                _out.FlushCache()
-                _out = None
+                # Use _ds_out NOT _out -- _out is the helper closure for
+                # building output filenames (defined ~line 625). Naming
+                # this GDAL Dataset _out would shadow the closure for the
+                # rest of processAlgorithm, breaking every subsequent
+                # _out("step", "name") call. (Bug found in batch 11.)
+                _ds_out = _drv.Create(prepared_forest_path, _xsz, _ysz, 1,
+                                      gdal.GDT_Byte, ["COMPRESS=LZW"])
+                _ds_out.SetGeoTransform(_gt_ref)
+                _ds_out.SetProjection(_proj_ref)
+                _ds_out.GetRasterBand(1).WriteArray(_masked)
+                _ds_out.GetRasterBand(1).SetNoDataValue(0)
+                _ds_out.FlushCache()
+                _ds_out = None
                 reference = prepared_forest_path  # downstream uses the clipped version
 
         # Keep the raw forest path for stats (before plantations exclusion).
@@ -1238,7 +1245,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         if plantations_tif is not None and exclude_plantations:
             feedback.pushInfo(
                 "Excluding plantations from forest "
-                "(creating naturally regenerating forest layer)...")
+                "(creating ≈ FRA Naturally Regenerating Forest layer)...")
             if True:  # (preserve existing indentation of block below)
                 _fds = gdal.Open(forest_raw_path, gdal.GA_ReadOnly)
                 _farr = _fds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
@@ -1251,9 +1258,15 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _parr = _pds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
                 _pds = None
                 _natreg = ((_farr == 1) & (_parr != 1)).astype(np.uint8)
-                # Headline output (FRA naturally regenerating forest), lives at top level.
-                # P1.13: 04d_forest_naturally_regenerating.tif
-                forest_natreg_path = _out("04d", "forest_naturally_regenerating")
+                # Headline output (≈ FRA Naturally Regenerating Forest),
+                # lives at top level. P1.16: renamed from
+                # 04d_forest_naturally_regenerating to
+                # 02c_naturally_regenerating_forest. The layer represents
+                # Forest minus Plantations -- per FRA, this IS "Naturally
+                # regenerating forest" (Forest decomposes as Naturally
+                # regenerating + Planted). Primary forest is a subset of
+                # naturally regenerating forest, not a sibling.
+                forest_natreg_path = _out("02c", "naturally_regenerating_forest")
                 _drv = gdal.GetDriverByName("GTiff")
                 # Remove first so locked file gives a clear error.
                 if os.path.exists(forest_natreg_path):
@@ -1264,15 +1277,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                             f"Cannot overwrite '{os.path.basename(forest_natreg_path)}' — "
                             "it is locked. Remove it from QGIS Layers panel and retry. "
                             f"(original: {e})")
-                _out = _drv.Create(forest_natreg_path, _fxsz, _fysz, 1,
-                                   gdal.GDT_Byte,
-                                   ["COMPRESS=LZW", "TILED=YES"])
-                _out.SetGeoTransform(_fgt)
-                _out.SetProjection(_fproj)
-                _out.GetRasterBand(1).WriteArray(_natreg)
-                _out.GetRasterBand(1).SetNoDataValue(0)
-                _out.FlushCache()
-                _out = None
+                # _ds_out NOT _out -- shadowing _out (the closure helper)
+                # would break downstream _out("step", "name") calls.
+                _ds_out = _drv.Create(forest_natreg_path, _fxsz, _fysz, 1,
+                                      gdal.GDT_Byte,
+                                      ["COMPRESS=LZW", "TILED=YES"])
+                _ds_out.SetGeoTransform(_fgt)
+                _ds_out.SetProjection(_fproj)
+                _ds_out.GetRasterBand(1).WriteArray(_natreg)
+                _ds_out.GetRasterBand(1).SetNoDataValue(0)
+                _ds_out.FlushCache()
+                _ds_out = None
                 excluded_px = int((_farr == 1).sum() - _natreg.sum())
                 feedback.pushInfo(
                     f"  Excluded {excluded_px:,} plantation pixels from forest.")
@@ -1783,7 +1798,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # Otherwise just Forest + Primary forest (two-tier).
             zonal_rasters = {"forest": forest_raw_path}
             if forest_natreg_path is not None:
-                zonal_rasters["forest_natreg"] = forest_natreg_path
+                zonal_rasters["naturally_regenerating_forest"] = forest_natreg_path
             zonal_rasters["primary_forest"] = final_path
 
             zone_layer = self.parameterAsVectorLayer(
@@ -1851,9 +1866,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         #                   + 06b_primary_forest_dissolved.gpkg
         #   forest input   -> 06c_<forest_layer_name>_vector.gpkg
         #                   + 06d_<forest_layer_name>_dissolved.gpkg
-        # Whether forest_naturally_regenerating or forest is used is
+        # Whether naturally_regenerating_forest or forest is used is
         # determined by whether plantations refinement ran
-        # (forest_natreg_path is non-None when it did).
+        # (forest_natreg_path is non-None when it did). P1.16 renamed
+        # the source layer to naturally_regenerating_forest; the
+        # variable name forest_natreg_path was already aligned (natreg
+        # = nat reg).
         # ================================================================
         if run_vectorize and (vectorize_primary or vectorize_forest):
             _stage("STAGE 7: Vectorise outputs")
@@ -1949,15 +1967,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     "Cancelled by user (during vectorise stage).")
 
             # ── Vectorise forest input ──
-            # Use forest_natreg if plantations refinement produced one,
-            # else the AOI-clipped forest input. Naming carries to the
-            # output filenames so the user can tell which they got.
+            # Use naturally regenerating forest if plantations refinement
+            # produced one, else the AOI-clipped forest input. Naming
+            # carries to the output filenames so the user can tell
+            # which they got.
             forest_polys_path = None
             forest_name_base = None
             if vectorize_forest:
                 if forest_natreg_path is not None:
                     forest_src_path = forest_natreg_path
-                    forest_name_base = "forest_naturally_regenerating"
+                    forest_name_base = "naturally_regenerating_forest"
                 else:
                     forest_src_path = prepared_forest_path
                     forest_name_base = "forest"
@@ -2096,7 +2115,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "primary_forest": final_path,
                 "pre_connectivity_forest": candidate_path,
                 "anthropogenic_mask": anthro_path,
-                "forest_natreg": forest_natreg_path,
+                "naturally_regenerating_forest": forest_natreg_path,
             },
             "raster_properties": {
                 "x_size": x_size,
@@ -2127,14 +2146,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             if os.path.exists(candidate_path):
                 _layers_to_load.append(
                     ("Pre-connectivity forest", candidate_path))
-            # Forest INPUT: forest_natreg if plantations refined, else
-            # the AOI-clipped forest input.
+            # P1.17: load both Forest and Naturally regenerating forest
+            # when both are available, so the user can compare the FRA
+            # hierarchy visually. Falls back to forest input only when
+            # plantations weren't refined (no nat reg derivation
+            # produced).
+            if os.path.exists(prepared_forest_path):
+                _layers_to_load.append(
+                    ("Forest", prepared_forest_path))
             if forest_natreg_path is not None and os.path.exists(forest_natreg_path):
                 _layers_to_load.append(
-                    ("Forest (naturally regenerating)", forest_natreg_path))
-            elif os.path.exists(prepared_forest_path):
-                _layers_to_load.append(
-                    ("Forest input", prepared_forest_path))
+                    ("Naturally regenerating forest", forest_natreg_path))
 
         # P0.14: optional human-influence + buffer layers. Default OFF
         # (matches GEE master toggle). Adds the prepared anthro inputs +

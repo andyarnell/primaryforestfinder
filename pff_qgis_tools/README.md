@@ -104,21 +104,28 @@ layers that are not provided.
 The Full Workflow produces this folder layout (headlines at top, everything else nested in `intermediates/`):
 
 ```
-OUT/                                     (OUT = your chosen output folder)
-  primary_forest.tif                     ← HEADLINE (final result)
-  pre_connectivity_forest.tif            ← HEADLINE (combined tiers, before refine)
-  forest_natreg.tif                      ← HEADLINE (FRA naturally regenerating
-                                            forest, if plantations input supplied)
-  anthropogenic_mask.tif                 ← HEADLINE (combined buffered disturbance)
-  combined_coded_raster.tif              ← HEADLINE (only if ticked)
-  zonal_statistics.csv                   ← HEADLINE (if zonal stats ticked)
-  zonal_statistics.shp (+sidecars)
-  run_metadata.json                      ← HEADLINE (run parameters + stage timings)
+OUT/                                     (OUT = your chosen output folder; ISO3 prefix when set)
+  [ISO3_]qgis_02c_naturally_regenerating_forest.tif
+                                         ← HEADLINE (≈ FRA Naturally Regenerating
+                                            Forest, if plantations input supplied)
+  [ISO3_]qgis_04a_primary_forest.tif     ← HEADLINE (final result)
+  [ISO3_]qgis_04b_pre_connectivity_primary_forest.tif
+                                         ← HEADLINE (combined tiers, before refine)
+  [ISO3_]qgis_04c_combined_coded_raster.tif
+                                         ← HEADLINE (only if ticked)
+  [ISO3_]qgis_04e_anthropogenic_mask.tif ← HEADLINE (combined buffered disturbance)
+  [ISO3_]qgis_05a_area_statistics.csv    ← HEADLINE (if zonal stats ticked)
+  [ISO3_]qgis_05b_area_statistics_by_zone.shp (+sidecars)
+  [ISO3_]qgis_run_metadata.json          ← HEADLINE (run parameters + stage timings)
 
-  primary_forest_vector.gpkg           ← HEADLINE (Stage 7 vectorise, if ticked)
-  primary_forest_dissolved.gpkg          ← HEADLINE (Stage 7, sampling boundary)
-  forest_natreg_vector.gpkg            ← HEADLINE (Stage 7, if forest also ticked)
-  forest_natreg_dissolved.gpkg           ← HEADLINE (Stage 7, if forest also ticked)
+  [ISO3_]qgis_06a_primary_forest_vector.gpkg
+                                         ← HEADLINE (Stage 7 vectorise, if ticked)
+  [ISO3_]qgis_06b_primary_forest_dissolved.gpkg
+                                         ← HEADLINE (Stage 7, sampling boundary)
+  [ISO3_]qgis_06c_<forest>_vector.gpkg   ← HEADLINE (Stage 7, if forest also ticked;
+                                            <forest> = naturally_regenerating_forest
+                                            if refined, else forest)
+  [ISO3_]qgis_06d_<forest>_dissolved.gpkg
 
   intermediates/
     tier1_undisturbed.tif                ← tier logic byproducts
@@ -145,14 +152,17 @@ OUT/                                     (OUT = your chosen output folder)
     zonal_work/                          ← zonal stats temporary workspace
 ```
 
+Top-level filenames follow the Option D schema (see
+[`docs/specs/PFF_NAMING_CONVENTION.md`](../docs/specs/PFF_NAMING_CONVENTION.md)).
 Tier raster names match the canonical `pff_4.js` naming: `tier1_undisturbed`,
 `tier2_steep`, `tier3_protected`. Vector outputs use `_vector` / `_dissolved`
 suffixes. Forest vector naming carries the plantation-refinement state
-(`forest_natreg_*` if refined, `forest_*` otherwise).
+(`naturally_regenerating_forest_*` if refined, `forest_*` otherwise).
 
 When the **Add main outputs to map** option is ticked (default ON), Primary
-forest, Pre-connectivity forest, and Forest input are auto-loaded into the
-QGIS Layers panel after the run completes.
+forest, Pre-connectivity forest, Forest, and Naturally regenerating forest
+(when produced) are auto-loaded into the QGIS Layers panel after the run
+completes — so the user can compare the FRA hierarchy visually.
 
 ---
 
