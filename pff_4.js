@@ -1,5 +1,91 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.2.0";
+var PFF_SCRIPT_VERSION = "4.3.1";
+
+// Changes vs v4.3.0 (P1.16 follow-up fixes):
+//  - Naturally regenerating forest layer was stacking on each
+//    re-update because its name wasn't in the PFF-managed-layers
+//    cleanup list at line ~4454. Added 'Naturally regenerating
+//    forest' to pffLayerNames AND nameToKey so the existing
+//    "remove + readd" pattern picks it up.
+//  - Forest-type colour ramp redesigned to make Primary STAND OUT.
+//    Primary pushed to a very dark green (#0b3d1f) and the other
+//    forest layers pulled into notably lighter shades that are still
+//    distinguishable from each other. New constant
+//    binary_medgreen_palette added for the new Naturally regenerating
+//    forest layer.
+//      Forest                          binary_lightgreen   lightgreen (#90EE90)
+//      Naturally regenerating forest   binary_medgreen     #81c784 (Mat 300)
+//      Forest outside buffers          binary_green        #4caf50 (Mat 500)
+//      Primary forest                  binary_darkgreen    #0b3d1f (very dark)
+//    Plantations keeps its distinct gold (#d4a017) outside the ramp.
+//    LEGEND_ENTRIES colours updated to match the new palette.
+//  - Legend + visibility-panel order rationalised for the Forest
+//    group: headline-first (Primary), then dark -> light through the
+//    green ramp (Forest outside buffers, Naturally regenerating,
+//    Input: Forest), then Plantations last (distinct gold).
+//  - Legend refresh button (↻) bumped from 24x24 with 10px font to
+//    32x28 with 14px font so the icon glyph renders reliably across
+//    browser combos.
+
+// Changes vs v4.2.0 (P1.16 -- FRA-aligned forest-type schema):
+//  - New 02c_naturally_regenerating_forest output. Previously the
+//    "Exclude plantations" toggle silently overwrote forest_map_clip
+//    in-place; now forest_map_clip stays as the FRA Forest baseline
+//    and a parallel forest_natreg_image is computed when the toggle
+//    is on. Downstream tier analysis switches to a forest_baseline
+//    selector (= natreg if available, else forest).
+//  - Per FRA: Forest decomposes as Naturally regenerating + Planted.
+//    Primary forest is a SUBSET of naturally regenerating (not a
+//    sibling). The new 02c layer represents the FRA "Naturally
+//    regenerating forest" category (≈ Forest minus Planted).
+//  - New export tickbox "Naturally regenerating forest (02c)" in
+//    the Export-all panel. File name pattern:
+//    <iso3>_gee_02c_naturally_regenerating_forest_<y>_<s>m.tif.
+//  - Map: forest layer always labeled "Input: Forest" (no longer
+//    conditionally relabeled to "Input: Forest (excl. plantations)").
+//    New "Naturally regenerating forest" map layer added when
+//    forest_natreg_image is produced -- default visible, palette
+//    #1a6334 (medium green between Forest's light green and Primary's
+//    dark green).
+//  - Stats: existing label conditional removed. Forest area always
+//    reports as "Forest" (= forest_map_clip = FRA Forest baseline).
+//    When plantations refinement runs, an additional "Naturally
+//    regenerating forest" row appears (= forest_natreg_image area).
+//    Primary forest is reported under naturally regenerating in the
+//    hierarchy (subset, not sibling). Both export to the Drive CSV
+//    as separate columns when "Export Statistics" is run.
+//  - Legend: new "Naturally regenerating forest" checkbox between
+//    "Input: Forest" and "Plantations" in the Layer Visibility panel.
+//  - Substep migration: input steps (02, 03) move from per-file
+//    unique-letter scheme to semantic category-letter scheme. Files
+//    that were unique-lettered in v4.2.0 now share a substep letter:
+//      02a = forest source components (was 02a/b/c each)
+//        02a_hansen_treecover2000_raw, 02a_hansen_lossyear_raw,
+//        02a_glad_tree_height_m
+//      02b = forest baseline (was 02d_forest)
+//      02c = naturally regenerating forest (NEW)
+//      02d = plantations (was 03e_plantations)
+//      03a = disturbance inputs (was 03a/b/c/d each)
+//        03a_roads, 03a_builtup_small, 03a_builtup_large, 03a_agriculture
+//      03b = protection exceptions (was 03f/g/h/i each)
+//        03b_protection_legal, 03b_protection_legal_unfiltered_vector,
+//        03b_protection_natural_dem, 03b_protection_natural_slope
+//    Output steps (04, 05, 06) keep unique-letter scheme.
+//  - Substep migration: input steps (02, 03) move from per-file
+//    unique-letter scheme to semantic category-letter scheme. Files
+//    that were unique-lettered in v4.2.0 now share a substep letter:
+//      02a = forest source components (was 02a/b/c each)
+//        02a_hansen_treecover2000_raw, 02a_hansen_lossyear_raw,
+//        02a_glad_tree_height_m
+//      02b = forest baseline (was 02d_forest)
+//      02c = naturally regenerating forest (NEW)
+//      02d = plantations (was 03e_plantations)
+//      03a = disturbance inputs (was 03a/b/c/d each)
+//        03a_roads, 03a_builtup_small, 03a_builtup_large, 03a_agriculture
+//      03b = protection exceptions (was 03f/g/h/i each)
+//        03b_protection_legal, 03b_protection_legal_unfiltered_vector,
+//        03b_protection_natural_dem, 03b_protection_natural_slope
+//    Output steps (04, 05, 06) keep unique-letter scheme.
 
 // Changes vs v4.1.16 (BREAKING -- minor bump to mark filename schema change):
 //  - P1.13: All Export.image.toDrive / Export.table.toDrive descriptions
@@ -194,6 +280,13 @@ var IS_PUBLISHED_APP = false;
 
 var latestMaskedForest = {};
 var latestMaskedPrimaryForest = {};
+// P1.16: separate dict for Naturally regenerating forest (Forest
+// minus Plantations). Populated only when "Exclude plantations" is
+// on and a plantations layer is available. Stats panel reads this
+// in addition to (not instead of) latestMaskedForest -- gives a
+// parallel "Naturally regenerating forest" area row when the data
+// is available.
+var latestMaskedNaturallyRegenerating = {};
 var latestPreConnectivityForest = {};
 var latestTier1Undisturbed = {};
 var latestTier2Steep = {};
@@ -294,9 +387,18 @@ allWdpaCategories.forEach(function(cat) {
 });
 
 // Visualization parameters
+// Forest-type ramp -- designed so Primary forest STANDS OUT (very
+// dark) and the other layers are notably lighter shades but still
+// distinguishable from each other. Plantations uses a distinct gold
+// (#d4a017) so planted forest reads as a different category.
+//   Forest (FRA baseline)              binary_lightgreen   lightgreen (#90EE90)
+//   Naturally regenerating forest      binary_medgreen     #81c784 (Material 300)
+//   Forest outside buffers (pre-conn)  binary_green        #4caf50 (Material 500)
+//   Primary forest                     binary_darkgreen    #0b3d1f (very dark)
 var binary_lightgreen_palette = {min:0, max:1, palette:["white","lightgreen"]};
-var binary_green_palette = {min:0, max:1, palette:["white","#228B22"]};
-var binary_darkgreen_palette = {min:0, max:1, palette:["white","#26600e"]};
+var binary_medgreen_palette   = {min:0, max:1, palette:["white","#81c784"]};
+var binary_green_palette = {min:0, max:1, palette:["white","#4caf50"]};
+var binary_darkgreen_palette = {min:0, max:1, palette:["white","#0b3d1f"]};
 
 // Utility functions
 var makeDistanceBuffer = function(sourceImage, threshold, fastBuffer) {
@@ -1006,7 +1108,8 @@ var visibleLayers = {
   // Analysis outputs
   primaryForest: true,         // Headline output (default on)
   forestOutsideBuffers: true,  // Supporting output: pre-connectivity (default on)
-  forest: true,                // Input forest (default on so users can compare)
+  forest: true,                // Input forest -- FRA Forest baseline (default on)
+  naturallyRegenerating: true, // P1.16: ≈ FRA Naturally regenerating forest (default on when produced)
   // Processed binary inputs (what feeds the distance transforms)
   inputRoads: false,
   inputBuiltupSmall: false,
@@ -1032,6 +1135,7 @@ function resetVisibleLayers() {
   visibleLayers.primaryForest = true;
   visibleLayers.forestOutsideBuffers = true;
   visibleLayers.forest = true;
+  visibleLayers.naturallyRegenerating = true;
   visibleLayers.inputRoads = false;
   visibleLayers.inputBuiltupSmall = false;
   visibleLayers.inputBuiltupLarge = false;
@@ -1491,8 +1595,14 @@ var showStatsButton = ui.Button({
       var calcLabel = ui.Label('  Calculating total forest area...', {color: '#888', fontStyle: 'italic'});
       yearPanel.add(calcLabel);
 
-      // Track pending calculations for this year
-      var pending = latestMaskedPrimaryForest[year] ? 2 : 1;
+      // Track pending calculations for this year. P1.16: Forest is
+      // always counted; Naturally regenerating forest counted when
+      // produced; Primary counted when produced. Per FRA, Primary is
+      // a SUBSET of Naturally regenerating (not a sibling category).
+      var hasNatreg = latestMaskedNaturallyRegenerating[year] !== undefined;
+      var pending = 1
+        + (hasNatreg ? 1 : 0)
+        + (latestMaskedPrimaryForest[year] ? 1 : 0);
       var checkDone = function() {
         pending--;
         if (pending === 0) {
@@ -1500,13 +1610,26 @@ var showStatsButton = ui.Button({
         }
       };
 
-      var treecoverLabel = includePlantationsCheckbox.getValue() ? 'Naturally regenerating forest' : 'Forest';
-      processForestAreaStats(latestMaskedForest[year], treecoverLabel, yearInt, statsScale, false, selectedCountry, yearPanel, function() {
-        if (latestMaskedPrimaryForest[year]) {
+      // P1.16: Forest baseline always reports as "Forest" (≈ FRA).
+      // The conditional "Naturally regenerating forest" relabel was
+      // removed -- when the nat reg derivation runs, it gets its
+      // own row below.
+      processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
+        if (hasNatreg) {
+          calcLabel.setValue('  Calculating naturally regenerating forest area...');
+        } else if (latestMaskedPrimaryForest[year]) {
           calcLabel.setValue('  Calculating primary forest area...');
         }
         checkDone();
       });
+      if (hasNatreg) {
+        processForestAreaStats(latestMaskedNaturallyRegenerating[year], 'Naturally regenerating forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
+          if (latestMaskedPrimaryForest[year]) {
+            calcLabel.setValue('  Calculating primary forest area...');
+          }
+          checkDone();
+        });
+      }
       if (latestMaskedPrimaryForest[year]) {
         processForestAreaStats(latestMaskedPrimaryForest[year], "Primary Forest", yearInt, statsScale, false, selectedCountry, yearPanel, checkDone);
       }
@@ -1637,8 +1760,14 @@ var exportStatsButton = ui.Button({
     var exportScale = statsScaleSlider.getValue();
     Object.keys(latestMaskedForest).forEach(function(year) {
       var yearInt = parseInt(year);
-      var treecoverLabel = includePlantationsCheckbox.getValue() ? 'Naturally regenerating forest' : 'Forest';
-      processForestAreaStats(latestMaskedForest[year], treecoverLabel, yearInt, exportScale, true, selectedCountry);
+      // P1.16: Forest baseline always exports as "Forest". When
+      // naturally regenerating forest is also produced, export as a
+      // separate table -- gives the user CSV columns for both FRA
+      // categories.
+      processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, exportScale, true, selectedCountry);
+      if (latestMaskedNaturallyRegenerating[year]) {
+        processForestAreaStats(latestMaskedNaturallyRegenerating[year], 'Naturally regenerating forest', yearInt, exportScale, true, selectedCountry);
+      }
       if (latestMaskedPrimaryForest[year]) {
         processForestAreaStats(latestMaskedPrimaryForest[year], "Primary Forest", yearInt, exportScale, true, selectedCountry);
       }
@@ -1682,7 +1811,8 @@ var exportRasterStatusLabel = ui.Label('', {margin: '4px 0 0 8px', width: '280px
 var exportChkStyle = {fontSize: '11px', margin: '1px 0'};
 var exportChk_final           = ui.Checkbox({label: 'Primary forest (final)',        value: true,  style: exportChkStyle});
 var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-connectivity forest',       value: true,  style: exportChkStyle});
-var exportChk_inputForest     = ui.Checkbox({label: 'Input forest',                  value: true,  style: exportChkStyle});
+var exportChk_inputForest     = ui.Checkbox({label: 'Input forest (02b)',            value: true,  style: exportChkStyle});
+var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02c)', value: true,  style: exportChkStyle});
 var exportChk_roads           = ui.Checkbox({label: 'Roads',                         value: true,  style: exportChkStyle});
 var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up (small)',              value: true,  style: exportChkStyle});
 var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up (large)',              value: true,  style: exportChkStyle});
@@ -1700,7 +1830,7 @@ var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata JSON (config +
 var exportSelectPanel = ui.Panel({
   widgets: [
     ui.Label('Select layers to export:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
-    ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest],
+    ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_naturallyRegenerating],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
     ui.Panel([exportChk_roads, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
@@ -1914,7 +2044,7 @@ function exportRastersToDrive() {
     doExport(gfc.select('treecover2000').updateMask(country_and_buffer_mask).unmask(0),
       mkExportName('02a', 'hansen_treecover2000_raw_' + s), folder);
     doExport(gfc.select('lossyear').updateMask(country_and_buffer_mask).unmask(0),
-      mkExportName('02b', 'hansen_lossyear_raw_' + s), folder);
+      mkExportName('02a', 'hansen_lossyear_raw_' + s), folder);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1934,7 +2064,7 @@ function exportRastersToDrive() {
   var wdpa_raster = wdpa_filt_by_date_image.selfMask()
     .updateMask(country_and_buffer_mask).unmask(0).toByte().rename('protected');
   if (exportChk_protLegal.getValue()) {
-    doExport(wdpa_raster, mkExportName('03f', 'protection_legal_' + s), folder);
+    doExport(wdpa_raster, mkExportName('03b', 'protection_legal_' + s), folder);
   }
 
   if (exportChk_protVector.getValue()) {
@@ -1942,21 +2072,21 @@ function exportRastersToDrive() {
       ee.Filter.and(ee.Filter.neq('STATUS', 'Proposed'),
                     ee.Filter.neq('STATUS', 'Not Reported'))
     ).filterBounds(exportRegion);
-    doExportTable(wdpa_raw, mkExportName('03g', 'protection_legal_unfiltered_vector'), folder);
+    doExportTable(wdpa_raw, mkExportName('03b', 'protection_legal_unfiltered_vector'), folder);
   }
 
   // 3b — Natural protection (DEM for slope computation in QGIS)
   var alos_30m_elev = ee.ImageCollection('JAXA/ALOS/AW3D30/V3_2').select('DSM').mosaic();
   if (exportChk_dem.getValue()) {
     doExportInt16(alos_30m_elev.updateMask(country_and_buffer_mask).unmask(0),
-      mkExportName('03h', 'protection_natural_dem_' + s), folder);
+      mkExportName('03b', 'protection_natural_dem_' + s), folder);
   }
 
   // 3c — Slope (optional — computed from DEM)
   if (exportChk_slope.getValue()) {
     var slopeImage = ee.Terrain.slope(alos_30m_elev.setDefaultProjection('EPSG:4326', null, 30));
     doExport(slopeImage.updateMask(country_and_buffer_mask).unmask(0).toByte(),
-      mkExportName('03i', 'protection_natural_slope_' + s), folder);
+      mkExportName('03b', 'protection_natural_slope_' + s), folder);
   }
 
   // ══════════════════════════════════════════════════════
@@ -1993,7 +2123,7 @@ function exportRastersToDrive() {
     }
     if (exportChk_inputForest.getValue()) {
       doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-        mkExportName('02d', 'forest_' + analysisYear + '_' + s), folder);
+        mkExportName('02b', 'forest_' + analysisYear + '_' + s), folder);
     }
 
     // GLAD raw tree height (so user can re-threshold at any height in QGIS)
@@ -2011,7 +2141,7 @@ function exportRastersToDrive() {
       var gladTreeHeight = gladLandcoverLand.remap(fromValues, toValues)
         .updateMask(country_and_buffer_mask).unmask(0).toByte()
         .rename('tree_height_m');
-      doExport(gladTreeHeight, mkExportName('02c', 'glad_tree_height_m_' + analysisYear + '_' + s), folder);
+      doExport(gladTreeHeight, mkExportName('02a', 'glad_tree_height_m_' + analysisYear + '_' + s), folder);
     }
 
     // ── 2 — Anthropogenic: roads, built-up (small + large), agriculture ──
@@ -2043,11 +2173,11 @@ function exportRastersToDrive() {
     }
     if (exportChk_builtupSmall.getValue()) {
       doExport(builtUpSmall.updateMask(country_and_buffer_mask).unmask(0),
-        mkExportName('03b', 'builtup_small_' + analysisYear + '_' + s), folder);
+        mkExportName('03a', 'builtup_small_' + analysisYear + '_' + s), folder);
     }
     if (exportChk_builtupLarge.getValue()) {
       doExport(builtUpLargeImg.updateMask(country_and_buffer_mask).unmask(0),
-        mkExportName('03c', 'builtup_large_' + analysisYear + '_' + s), folder);
+        mkExportName('03a', 'builtup_large_' + analysisYear + '_' + s), folder);
     }
 
     // Agriculture
@@ -2066,14 +2196,29 @@ function exportRastersToDrive() {
       // "Exclude plantations" logic (forest AND NOT plantations). Enables
       // full FRA stats cascade (Forest → Nat. regen. forest → Primary forest).
       doExport(allPlantationsSel.unmask(0).toByte(),
-        mkExportName('03e', 'plantations_' + analysisYear + '_' + s), folder);
+        mkExportName('02d', 'plantations_' + analysisYear + '_' + s), folder);
+    }
+    // P1.16: 02c_naturally_regenerating_forest export. Derived from
+    // the FRA Forest baseline minus plantations -- gives users a
+    // ready-made Naturally Regenerating Forest layer matching the
+    // analysis-side forest_natreg_image. Gate is purely on the export
+    // tickbox; we always have allPlantationsSel available here, so the
+    // user can request the derivation regardless of whether "Exclude
+    // plantations" is on in the analysis pane.
+    if (exportChk_naturallyRegenerating.getValue()) {
+      var natRegExport = forest_map
+        .updateMask(allPlantationsSel.unmask().not())
+        .updateMask(country_and_buffer_mask)
+        .unmask(0);
+      doExport(natRegExport,
+        mkExportName('02c', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
     }
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
     var croplandGladCollectionFF = forwardFillBinaryTimeSeries(croplandGladCollection, years);
     var croplandGladSel = ee.Image(croplandGladCollectionFF.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask);
     var agriculture = pastureDatasetSel.or(allPlantationsSel.unmask()).or(croplandGladSel);
     if (exportChk_agriculture.getValue()) {
-      doExport(agriculture.unmask(0), mkExportName('03d', 'agriculture_' + analysisYear + '_' + s), folder);
+      doExport(agriculture.unmask(0), mkExportName('03a', 'agriculture_' + analysisYear + '_' + s), folder);
     }
 
     // ── 4 — Pre-connectivity Forest & Primary Forest (from analysis cache) ──
@@ -3227,6 +3372,7 @@ function createFloatingLayerPanel() {
       ui.Label('─────────────────', {color: 'gray'}),
       ui.Checkbox({label: 'Primary Forest',        value: visibleLayers.primaryForest,       onChange: function(v) { visibleLayers.primaryForest       = v; toggleLayerByName('Primary Forest', v); }}),
       ui.Checkbox({label: 'Forest Outside Buffers', value: visibleLayers.forestOutsideBuffers, onChange: function(v) { visibleLayers.forestOutsideBuffers = v; toggleLayerByName('Forest outside buffers', v); }}),
+      ui.Checkbox({label: 'Naturally regenerating forest', value: visibleLayers.naturallyRegenerating, onChange: function(v) { visibleLayers.naturallyRegenerating = v; toggleLayerByName('Naturally regenerating forest', v); }}),
       ui.Checkbox({label: 'Input: Forest',            value: visibleLayers.forest,               onChange: function(v) { visibleLayers.forest               = v; toggleLayerByName('Input: Forest', v); }}),
       ui.Checkbox({label: 'Plantations',            value: visibleLayers.plantations,          onChange: function(v) { visibleLayers.plantations          = v; toggleLayerByName('Plantations', v); }}),
       ui.Label(''),
@@ -3298,10 +3444,13 @@ function createLegendItem(color, label) {
 
 // Canonical legend definition: visibleLayers key → [colour, label]
 var LEGEND_ENTRIES = [
-  {key: 'primaryForest',       color: '#26600e', label: 'Primary Forest',         group: 'Forest'},
-  {key: 'forestOutsideBuffers',color: '#228B22', label: 'Forest outside buffers', group: 'Forest'},
-  {key: 'forest',              color: '#90EE90', label: 'Input: Forest',           group: 'Forest'},
-  {key: 'plantations',         color: '#d4a017', label: 'Plantations',            group: 'Forest'},
+  // Forest group ordered headline-first then dark -> light through the
+  // green ramp, with Plantations last (different category, gold).
+  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',         group: 'Forest'},
+  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
+  {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
+  {key: 'forest',                color: '#90EE90', label: 'Input: Forest',          group: 'Forest'},
+  {key: 'plantations',           color: '#d4a017', label: 'Plantations',            group: 'Forest'},
   {key: 'agriBuffer',          color: '#ffcc00', label: 'Buffer: Agriculture',    group: 'Human Influence'},
   {key: 'roadSmallBuffer',     color: '#ff6600', label: 'Buffer: Roads',          group: 'Human Influence'},
   {key: 'builtSmallBuffer',    color: '#cc00cc', label: 'Buffer: Small Built-up', group: 'Human Influence'},
@@ -3408,7 +3557,10 @@ function createLegendPanel() {
   var legendRefreshButton = ui.Button({
     label: '↻',
     onClick: refreshLegend,
-    style: {fontSize: '10px', padding: '1px 4px', margin: '4px 0 4px 2px', width: '24px', height: '24px'}
+    // Bumped from 24x24/10px (icon was rendering off-canvas in some
+    // QGIS browser combos) to 32x28/14px so ↻ shows reliably. Toggle
+    // button (72px) still fits alongside in the 180px legend strip.
+    style: {fontSize: '14px', padding: '2px 6px', margin: '4px 0 4px 2px', width: '32px', height: '28px'}
   });
 
   var legendToggleButton = ui.Button({
@@ -4344,6 +4496,7 @@ map2.add(createDisclaimerPanel());
       'Buffer: Roads', 'Buffer: Small Built-up', 'Buffer: Large Built-up',
       'Buffer: Agriculture', 'Input: Roads', 'Input: Small Built-up',
       'Input: Large Built-up', 'Input: Agriculture', 'Plantations',
+      'Naturally regenerating forest',
       'Forest outside buffers', 'Primary Forest',
       'Reference: FLII (high/med)', 'Reference: Forest Persistence (FDaP)'
     ];
@@ -4360,6 +4513,7 @@ map2.add(createDisclaimerPanel());
     var nameToKey = {
       'Primary Forest': 'primaryForest',
       'Forest outside buffers': 'forestOutsideBuffers',
+      'Naturally regenerating forest': 'naturallyRegenerating',
       // 'Input: Forest' handled via prefix matching below
       'Input: Roads': 'inputRoads',
       'Input: Small Built-up': 'inputBuiltupSmall',
@@ -4643,10 +4797,22 @@ map2.add(createDisclaimerPanel());
       }
     }
 
-    // Optionally remove plantations from forest input (default: excluded)
+    // P1.16: don't overwrite forest_map_clip in-place; compute a
+    // parallel forest_natreg_image so both the FRA Forest baseline
+    // (forest_map_clip) and the Natural Forest derivation
+    // (forest_natreg_image) survive for export, map display, and
+    // stats. Downstream tier analysis switches to forest_baseline
+    // (= natreg if available, else forest) so primary forest is
+    // computed from the most-refined available baseline -- matches
+    // the previous behaviour while exposing the intermediate layer.
+    var forest_natreg_image = null;
     if (includePlantationsCheckbox.getValue()) {
-      forest_map_clip = forest_map_clip.updateMask(allPlantationsSel.unmask().not());
+      forest_natreg_image = forest_map_clip.updateMask(
+        allPlantationsSel.unmask().not());
     }
+    var forest_baseline = forest_natreg_image !== null
+      ? forest_natreg_image
+      : forest_map_clip;
 
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad() 
  
@@ -5024,12 +5190,22 @@ map2.add(createDisclaimerPanel());
       updateHansenLayer(map, mapName, hansenLayer);
       
     } else {
-      var forestLayerName = includePlantationsCheckbox.getValue() ? "Input: Forest (excl. plantations)" : "Input: Forest";
-      map.addLayer(forest_map_clip.selfMask(), binary_lightgreen_palette, forestLayerName, visibleLayers.forest, 1);
+      // P1.16: always label as "Input: Forest" -- the conditional
+      // "(excl. plantations)" relabel was misleading (the layer also
+      // became the nat reg derivation). Now Forest and Naturally
+      // regenerating forest are exposed as separate layers when both
+      // are computed.
+      map.addLayer(forest_map_clip.selfMask(), binary_lightgreen_palette,
+        "Input: Forest", visibleLayers.forest, 1);
+      if (forest_natreg_image !== null) {
+        map.addLayer(forest_natreg_image.selfMask(), binary_medgreen_palette,
+          'Naturally regenerating forest', visibleLayers.naturallyRegenerating, 1);
+      }
     }
-    
-    // Decision tree
-    var step_1_1 = generateOutcomeMaps(forest_map_clip, all_edge_effects);
+
+    // Decision tree -- use the most-refined baseline available
+    // (P1.16: forest_baseline = natreg when produced, else forest)
+    var step_1_1 = generateOutcomeMaps(forest_baseline, all_edge_effects);
     var forest_map_1_1_y = step_1_1.yes;  // inside buffers
     var forest_map_1_1_n = step_1_1.no;   // outside buffers
 
@@ -5114,10 +5290,21 @@ map2.add(createDisclaimerPanel());
     // Area calculations - store for later stats button
     var masked_forest = forest_map_clip.updateMask(country_clip);
     var masked_primary_forest = largeForestPatches.updateMask(country_clip);
-    
+
     // Store forest data for statistics (accessed by "Show Area Statistics" button)
     latestMaskedForest[analysisYear] = masked_forest;
     latestMaskedPrimaryForest[analysisYear] = masked_primary_forest;
+    // P1.16: store Naturally regenerating forest separately when
+    // produced. Stats panel reads this in addition to (not instead
+    // of) Forest, so both rows appear when plantations refinement
+    // ran. Primary forest is reported under nat reg in the hierarchy
+    // (subset, not sibling category).
+    if (forest_natreg_image !== null) {
+      latestMaskedNaturallyRegenerating[analysisYear] =
+        forest_natreg_image.updateMask(country_clip);
+    } else {
+      delete latestMaskedNaturallyRegenerating[analysisYear];
+    }
     latestPreConnectivityForest[analysisYear] = all_forest_1_1_to_1_3.updateMask(country_clip);
     latestTier1Undisturbed[analysisYear] = forest_map_1_1_n.updateMask(country_clip);
     latestTier2Steep[analysisYear] = forest_map_1_2_y.updateMask(country_clip);

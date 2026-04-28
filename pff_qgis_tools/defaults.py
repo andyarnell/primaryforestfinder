@@ -38,9 +38,9 @@ PFF_CLASSES = {
         "label": "Forest",
         "filename": "forest.tif",
     },
-    "forest_natreg": {
+    "naturally_regenerating_forest": {
         "label": "Naturally regenerating forest",
-        "filename": "forest_natreg.tif",
+        "filename": "naturally_regenerating_forest.tif",
     },
     "pre_connectivity_forest": {
         "label": "Pre-connectivity forest",
