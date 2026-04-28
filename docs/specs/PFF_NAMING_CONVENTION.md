@@ -24,7 +24,7 @@ Step prefix encodes the **production stage** (where in the pipeline the file was
 |---|---|---|---|
 | `00` | Context (supplies ISO3) | — (no files of its own) | Country / Context |
 | `01` | Time Period (supplies year) | — (no files of its own) | Time Period |
-| `02` | **Forest Definition** | `02b_forest.tif`, `02c_natural_forest.tif`, `02d_plantations.tif` (when produced) | Forest Inputs / Forest Definition |
+| `02` | **Forest Definition** | `02b_forest.tif`, `02c_naturally_regenerating_forest.tif`, `02d_plantations.tif` (when produced) | Forest Inputs / Forest Definition |
 | `03` | Human Influence Inputs | `03a_roads.tif`, `03b_protection_legal.tif` (when user opts to save) | Human Influence Layers |
 | `04` | **Refine — ecological viability** | `04a_primary_forest.tif`, `04b_pre_connectivity_primary_forest.tif`, `04c_combined_coded_raster.tif` | Refine Output |
 | `05` | Statistics | `05a_area_statistics.csv`, `05b_area_statistics_by_admin1.shp` | (right-panel in GEE; standard form section in QGIS) |
@@ -42,7 +42,7 @@ Step 04 means **ecological viability filtering only** — patch/thin-section rem
 
 | Step | Substep meaning | Why |
 |---|---|---|
-| `02` (input) | category-letter | Open set; `02b_forest`, `02c_natural_forest`, `02d_plantations` etc. — name disambiguates within categories |
+| `02` (input) | category-letter | Open set; `02b_forest`, `02c_naturally_regenerating_forest`, `02d_plantations` etc. — name disambiguates within categories |
 | `03` (input) | category-letter | `03a_*` = disturbance inputs; `03b_*` = protection exceptions. New layers don't push toward `03j`/`03k`/... |
 | `04` (output) | unique-letter | Small fixed set with meaningful production order |
 | `05` (output) | unique-letter | Small fixed set |
@@ -53,43 +53,68 @@ Step 04 means **ecological viability filtering only** — patch/thin-section rem
 Step 02 produces three forest-type layers that map onto the FRA hierarchy. Whichever ones get produced depends on user inputs (see [Variable output set](#variable-output-set-by-input-declaration) below).
 
 ```
-02a_*                       Source components (Hansen treecover2000_raw, Hansen lossyear_raw,
-                            GLAD tree_height_m) — when GEE produces them and user opts to save
-02b_forest                  ≈ FRA Forest baseline (thresholded tree cover)
-02c_natural_forest          ≈ FRA Natural Forest (Forest minus planted forest)
-02d_plantations             ≈ FRA Planted Forest (SDPT class 1 only — see P1.20)
+02a_*                                 Source components (Hansen treecover2000_raw,
+                                      Hansen lossyear_raw, GLAD tree_height_m) — when
+                                      GEE produces them and user opts to save
+02b_forest                            ≈ FRA Forest baseline (thresholded tree cover)
+02c_naturally_regenerating_forest     ≈ FRA Naturally Regenerating Forest
+                                      (Forest minus planted forest; INCLUDES primary as subset)
+02d_plantations                       ≈ FRA Planted Forest (SDPT class 1 only — see P1.20)
 ```
 
 ### FRA framework + caveats
 
 The tool's forest layers are **operational proxies** — they lean on the best globally-consistent datasets and apply the FRA framework as faithfully as those datasets allow. They are NOT an FRA classification. Official FRA numbers come from country submissions with local context the tool cannot replicate. Compare in spirit, not as ground truth.
 
+**FRA decomposition (canonical):**
+
+```
+Forest = Naturally regenerating forest + Planted forest                  (mutually exclusive)
+Naturally regenerating forest = Primary forest + Other naturally regenerating forest  (subset)
+```
+
+So "Primary forest" is a **subset of** Naturally regenerating forest, not a sibling category. There is no standalone "Natural forest" parent category in FRA — that term is sometimes used colloquially to mean either Primary or Naturally regenerating, but FRA uses the precise terms.
+
+**The PFF mapping:**
+
 ```
 Tree cover (Hansen + GLAD, thresholded)     ← physical canopy + height
    │
-   ├─ 02b_forest               ≈ FRA Forest         (caveat: agriculture filter is partial — see P1.18)
+   ├─ 02b_forest                                ≈ FRA Forest
+   │     │                                       (caveat: agricultural tree cover not yet
+   │     │                                        filtered — see P1.18)
    │     │
-   │     ├─ 02d_plantations    ≈ FRA Planted forest  (caveat: SDPT incompleteness, smallholders missing)
+   │     ├─ 02d_plantations                     ≈ FRA Planted forest
+   │     │                                       (caveat: SDPT incompleteness, smallholders
+   │     │                                        missing)
    │     │
-   │     └─ 02c_natural_forest ≈ FRA Natural forest  (caveat: SDPT incompleteness can wrongly exclude
-   │                                                   real natural forest; missed planted areas remain)
+   │     └─ 02c_naturally_regenerating_forest   ≈ FRA Naturally regenerating forest
+   │            │                                (caveat: SDPT incompleteness; agricultural
+   │            │                                 tree cover may remain pre-P1.18)
    │            │
-   │            ├─ 04a_primary_forest    ← Natural forest minus disturbance buffers + viability filter
-   │            │                           (the headline PFF output)
-   │            │
-   │            └─ "Naturally regenerating forest" = 02c − 04a — **stats only**, not a saved file
-   │                                                              (trivial raster math; users can derive)
+   │            └─ 04a_primary_forest            ← naturally regenerating forest minus
+   │                                              disturbance buffers + viability filter.
+   │                                              SUBSET of 02c, not a separate category.
+   │                                              (The headline PFF output.)
    │
    └─ Agricultural tree cover (oil palm, tree crops, agroforestry)
-                                            ← routed via agriculture buffering toward primary forest;
-                                              NOT in 02d_plantations (per P1.20 — FRA-correct mapping)
+                                                ← routed via agriculture buffering toward
+                                                  primary forest; NOT in 02d_plantations
+                                                  (per P1.20 — FRA-correct mapping)
 ```
 
 **Why 02b is "≈ FRA Forest" not "FRA Forest":** Hansen tree cover above thresholds doesn't exclude agricultural land use the way FRA does. Oil palm, agroforestry, and orchards meeting the canopy/height thresholds remain in `02b_forest` until removed downstream via the agriculture disturbance buffer. P1.18 may add an option to exclude agriculture from the Forest baseline directly.
 
-**Why 02c is "≈ FRA Natural Forest" not "FRA Natural Forest":** The plantations layer used for subtraction (`02d`) is SDPT class 1 + national overrides; it misses smallholder plantations and may include some misclassified natural forest pixels. The result is "tree-covered areas not identified as planted" — a reasonable global-scale proxy, not a strict classification.
+**Why 02c is "≈ FRA Naturally Regenerating Forest" not "FRA Naturally Regenerating Forest":** The plantations layer used for subtraction (`02d`) is SDPT class 1 + national overrides; it misses smallholder plantations and may include some misclassified natural forest pixels. The result is "tree-covered areas not identified as planted" — a reasonable global-scale proxy, not a strict classification.
 
-**Why "naturally regenerating forest" is only a stats number:** FRA defines naturally regenerating forest = Natural forest − Primary forest. With `02c` and `04a` both produced, this is a one-step raster subtraction users can do themselves. Producing it as a saved file would bloat outputs without adding analytical value. Stats panel reports the area inline.
+**Two distinct meanings of "agriculture" — important:**
+
+- **FRA-aligned agriculture** (excluded from Forest baseline per FRA): the *tree-cover-meeting subset* of agricultural land — oil palm (Descals), SDPT class 2 tree crops, orchards, agroforestry. Things that have trees AND are managed for crop production. P1.18 uses this subset to derive a stricter `02b_forest`.
+- **PFF buffered agriculture** (used for primary-forest disturbance buffering): a *broader* concept covering all human-use land that signals "humans nearby producing something" — cropland (annual crops without trees), pasture, oil palm, tree crops, etc. Not FRA-aligned and intentionally so — its purpose is proximity-based disturbance detection, not forest-type classification.
+
+These two "agricultures" aren't interchangeable. Most of buffered agriculture (cropland, pasture) doesn't even meet tree cover thresholds, so it's not in `02b_forest` to begin with. Only the tree-cover-meeting subset matters for the FRA Forest derivation.
+
+**Primary vs Naturally regenerating: not separate stats rows.** Older drafts of this doc had "Naturally regenerating = `02c − 04a`" as a separate stats row. That was based on a wrong framing where Natural forest was a parent of Primary + Nat Reg as siblings. Per FRA, Primary IS a subset of Naturally regenerating — so the area `02c − 04a` is "Other naturally regenerating forest" (a sub-subset rarely worth surfacing), not a separate FRA category.
 
 ### Variable output set (by input declaration)
 
@@ -97,13 +122,12 @@ User declares what their forest input represents via the Step 02 dropdown (P1.19
 
 | Forest input declared as | Plantations layer | Files produced (Step 02) |
 |---|---|---|
-| Tree cover | yes (+ agriculture) | `02b_forest`, `02c_natural_forest`, `02d_plantations` |
-| Tree cover | yes (only) | `02c_natural_forest` (loose — agriculture not filtered), `02d_plantations` |
+| Tree cover | yes (+ FRA agriculture) | `02b_forest`, `02c_naturally_regenerating_forest`, `02d_plantations` |
+| Tree cover | yes (only) | `02c_naturally_regenerating_forest` (loose — agricultural tree cover not filtered), `02d_plantations` |
 | Tree cover | no | None at step 02 (input passes through to 04 directly) |
-| Forest (FRA) | yes | `02b_forest` (= input), `02c_natural_forest`, `02d_plantations` |
+| Forest (FRA) | yes | `02b_forest` (= input), `02c_naturally_regenerating_forest`, `02d_plantations` |
 | Forest (FRA) | no | `02b_forest` (= input) |
-| Natural forest | n/a | `02c_natural_forest` (= input) |
-| Naturally regenerating | n/a | None at step 02 — primary forest computation should yield ≈ 0 area; warn |
+| Naturally regenerating forest | n/a | `02c_naturally_regenerating_forest` (= input) |
 
 Files only exist when actually computed. `run_metadata.json` records which layers were produced, which were skipped, and why.
 
@@ -119,10 +143,18 @@ Final state after P1.16 + P1.18 + P1.20 land. "Today" deltas noted in caveats co
 | `02a_hansen_lossyear_raw` | Tree-cover loss year | Hansen GFC lossyear | — (raw data) | Encodes year of detected loss 2001-2024; not absence at year 2000 |
 | `02a_glad_tree_height_m` | Tree canopy height | GLAD tree height (per year) | — (raw data) | Per-year snapshot; height-only — no land-use info |
 | `02b_forest` | ≈ Forest (FRA) | Tree cover (canopy ≥ X% AND height ≥ Y m) | **After P1.18**: agriculture pixels removed (cropland + pasture + oil palm + SDPT class 2 tree crops). **Today (pre-P1.18)**: nothing removed at this step — agriculture filtering only happens at the disturbance-buffer stage on the way to primary | "≈" because: (a) thresholds are biophysical proxies for FRA's land-use definition; (b) without P1.18, agricultural tree cover stays in baseline; (c) FRA's 0.5 ha minimum patch size not enforced here |
-| `02c_natural_forest` | ≈ Natural forest (FRA) | `02b_forest` MINUS `02d_plantations` | Planted forest (SDPT class 1 — timber, eucalyptus, pine, national overrides) subtracted | "≈" because: (a) SDPT misses smallholders → some planted areas remain in "natural"; (b) SDPT misclassifications → some real natural forest wrongly excluded; (c) **today (pre-P1.20)** also subtracts SDPT class 2 + Descals oil palm via wrong-bucket — area is smaller-but-mislabelled today, will rebalance after P1.18+P1.20 |
+| `02c_naturally_regenerating_forest` | ≈ Naturally regenerating forest (FRA) | `02b_forest` MINUS `02d_plantations` | Planted forest (SDPT class 1 — timber, eucalyptus, pine, national overrides) subtracted | "≈" because: (a) SDPT misses smallholders → some planted areas remain in "naturally regenerating"; (b) SDPT misclassifications → some real natural forest wrongly excluded; (c) **today (pre-P1.20)** also subtracts SDPT class 2 + Descals oil palm via wrong-bucket — area is smaller-but-mislabelled today, will rebalance after P1.18+P1.20. **Includes Primary as a subset.** |
 | `02d_plantations` | ≈ Planted forest (FRA) | SDPT class 1 (Planted Forests) ∪ national plantations override | — (this IS the planted forest layer, not derived by subtraction) | "≈" because: (a) SDPT incomplete; (b) **today (pre-P1.20)** also includes SDPT class 2 (tree crops) + Descals oil palm — stat is inflated for FRA Planted Forest comparison; (c) FDAP commodity layers stay disabled (commission errors in primary forest) |
-| `04a_primary_forest` | ≈ Primary forest (PFF target) | `02c_natural_forest` MINUS disturbance buffers MINUS ecological viability fails | Distance-to-roads + builtup + agriculture buffers (radii user-tunable). Hansen `lossyear` pixels in the analysis period. Patch geometry too small (sieve) or too thin (neighbourhood density). **Protection exceptions** (WDPA legal + steep slope) override removal | "≈" because: (a) "naturalness" inferred from disturbance proximity — not species/origin data; (b) buffer distances are heuristics, not field-validated; (c) viability thresholds (min hectare, density radius) are global defaults not country-tuned; (d) inherits all upstream `02c` caveats |
-| (stats only) Naturally regenerating forest | ≈ Naturally regenerating forest (FRA) | `02c_natural_forest` MINUS `04a_primary_forest` | Primary forest pixels subtracted from natural forest | (a) Not a saved file — area only, computed inline in stats panel; (b) inherits all upstream caveats; (c) FRA defines this by ORIGIN (regrowth after disturbance), tool defines by ELIMINATION (natural minus primary) — different semantic, similar pixel set |
+| `04a_primary_forest` | ≈ Primary forest (PFF target — subset of `02c`) | `02c_naturally_regenerating_forest` MINUS disturbance buffers MINUS ecological viability fails | Distance-to-roads + builtup + agriculture (broader buffered ag, NOT FRA-aligned) buffers (radii user-tunable). Hansen `lossyear` pixels in the analysis period. Patch geometry too small (sieve) or too thin (neighbourhood density). **Protection exceptions** (WDPA legal + steep slope) override removal | "≈" because: (a) "naturalness" inferred from disturbance proximity — not species/origin data; (b) buffer distances are heuristics, not field-validated; (c) viability thresholds (min hectare, density radius) are global defaults not country-tuned; (d) inherits all upstream `02c` caveats. **Per FRA, Primary is a subset of Naturally regenerating, not a separate category.** |
+| `04b_pre_connectivity_primary_forest` | (intermediate output) | Tier analysis output (combined disturbance + protection logic) | Same as 04a but BEFORE the ecological viability filtering step (no patch sieve, no neighbourhood density) | Useful for diagnosing whether viability filtering is removing too much / too little |
+| `04c_combined_coded_raster` | (debug output) | Tier outcomes per pixel | 6-class coded raster (1-6) showing which tier rule kept/excluded each pixel: 1=inside buffer, 2=outside buffer, 3=steep slope rescue, 4=not rescued by slope, 5=protected rescue, 6=not rescued | Optional output; off by default. Useful for understanding why specific pixels survived/dropped |
+| (stats panel inline) Naturally regenerating forest area | ≈ FRA Naturally regenerating forest area | `02c_naturally_regenerating_forest` raster | Pixel-counted area at the user-selected stats scale | Includes Primary by design (subset). Stats panel renders as parent of Primary in the hierarchy view |
+| `05a_area_statistics` | (stats summary) | Forest-class layers (`02b`, `02c`, `02d`, `04a`) | Zonal area sums per class, in kha | Plus per-zone breakdowns when user supplies admin zones |
+| `05b_area_statistics_by_admin1` | (zonal breakdown — plugin only) | Same as 05a + admin1 polygons | Per-zone area totals as shapefile attributes | Useful for sub-national reporting |
+| `06a_primary_forest_vector` | (Stage 7 vector) | `04a_primary_forest` raster | Polygonise + optional simplify (CEO sampling prep) | Caveat: simplify > 0 can introduce self-intersection artefacts |
+| `06b_primary_forest_dissolved` | (sampling boundary) | `06a` polygons | Dissolve to multipart for area-stratified sampling boundary | — |
+| `06c_<forest>_vector` | (forest baseline vector) | `02c` if available, else `02b` | Polygonise the upstream forest baseline | Filename carries the upstream layer name (`naturally_regenerating_forest_*` or `forest_*`) |
+| `06d_<forest>_dissolved` | (forest baseline dissolved) | `06c` polygons | Dissolve to multipart | — |
 
 ### Step 03 inputs — not FRA categories themselves
 
@@ -138,6 +170,30 @@ These are inputs *to* the primary forest computation, not FRA forest categories.
 | `03b_protection_legal_unfiltered_vector` | WDPA raw | WDPA all features | Reference vector |
 | `03b_protection_natural_dem` | Elevation | ALOS DSM | Source for slope computation |
 | `03b_protection_natural_slope` | Steep slope | Slope ≥ threshold from DEM | Protection exception — naturally protected |
+
+### Two "agricultures" — distinction matters
+
+| | FRA-aligned agriculture (P1.18) | PFF buffered agriculture (existing) |
+|---|---|---|
+| **What's in it** | Oil palm + SDPT class 2 tree crops + agroforestry + orchards (tree-cover-meeting subset only) | Cropland + pasture + oil palm + SDPT class 2 + plantations (broader) |
+| **Used for** | Excluded from Forest baseline (per FRA Forest = land use + biophysical) — derives FRA-strict `02b_forest` | Distance-buffered as disturbance signal toward primary forest |
+| **FRA-aligned?** | Yes | No (intentionally — proximity-based, not classification-based) |
+| **Schema slot** | Subset of `03a_agriculture` (or future dedicated layer) | `03a_agriculture` |
+
+These are different things and shouldn't be conflated. Most of buffered agriculture (cropland, pasture without trees) doesn't even meet tree cover thresholds, so isn't in `02b_forest` to begin with — only the tree-cover-meeting subset matters for the FRA Forest derivation.
+
+### Stats panel layout (after P1.16 + P1.17)
+
+When plantations refinement runs, the stats panel renders the FRA hierarchy with Primary as a subset of Naturally regenerating:
+
+```
+Forest (≈FRA def):                            X km²    [FRA 2025: Y ✓]
+   ├─ Naturally regenerating forest:          X km²    [FRA 2025: Y ✓]
+   │     └─ Primary forest:                   X km²    [FRA 2025: Y ✓]   ← subset
+   └─ Planted forest:                         X km²    [no FRA comparator in tool]
+```
+
+When NO plantations layer is provided: only Forest + Primary rows shown — no nat reg derivation possible. Rows are hidden (not "—") when the corresponding layer wasn't produced.
 
 ### Cross-step caveats (apply throughout)
 
@@ -165,18 +221,25 @@ Tree cover pixel exists? (Hansen + GLAD thresholds)
    └─ YES → enters 02b_forest
               │
               │   [P1.18 if shipped:]
-              │   Is it agriculture (cropland/pasture/oil palm/tree crops)?
-              │      ├─ YES → removed from 02b_forest, stays only in 03a_agriculture
+              │   Is it FRA-aligned agriculture (oil palm / tree crops /
+              │   agroforestry — i.e. tree-cover-meeting agricultural land)?
+              │      ├─ YES → removed from 02b_forest, stays in 03a_agriculture
               │      └─ NO  → stays in 02b_forest
               │
+              │   (Note: cropland/pasture without trees are NOT relevant here
+              │    — they don't meet tree cover thresholds, so they were never
+              │    in 02b_forest in the first place. They DO appear in the
+              │    broader buffered 03a_agriculture, but only matter for primary
+              │    forest disturbance buffering, not for Forest definition.)
+              │
               ├─ Is it planted forest (SDPT class 1)?
-              │      ├─ YES → in 02d_plantations, NOT in 02c_natural_forest
-              │      └─ NO  → in 02c_natural_forest
+              │      ├─ YES → in 02d_plantations, NOT in 02c_naturally_regenerating_forest
+              │      └─ NO  → in 02c_naturally_regenerating_forest
               │
               └─ [for 02c pixels:]
                   Is it within disturbance buffer (and not under protection)?
-                      ├─ YES → removed → counted in "naturally regenerating" stat
-                      └─ NO  → in 04a_primary_forest
+                      ├─ YES → removed (counts as "Other naturally regenerating", a sub-subset)
+                      └─ NO  → in 04a_primary_forest (subset of 02c)
 ```
 
 ## Step 03 — Human Influence Inputs
@@ -207,28 +270,29 @@ Splitting an existing layer (e.g. `03a_roads_small` and `03a_roads_large`) requi
 04c_combined_coded_raster                   ← optional debug raster
 ```
 
-`04a` always = headline result. `04b` always = pre-connectivity. `04c` always = optional debug. **Nothing else lives at step 04** — forest-type derivations (Forest, Natural, Naturally regenerating) belong at step 02; stats CSV belongs at step 05; vectorisations belong at step 06.
+`04a` always = headline result. `04b` always = pre-connectivity. `04c` always = optional debug. **Nothing else lives at step 04** — forest-type derivations (Forest, Naturally regenerating, Planted) belong at step 02; stats CSV belongs at step 05; vectorisations belong at step 06.
 
 Substeps are stable: adding a new substep is allowed (`04d`, `04e`); reusing or shifting existing letters is a breaking change.
 
-## Stats panel (Step 05) — FRA-faithful four-row breakdown
+## Stats panel (Step 05) — FRA-faithful breakdown
 
 Stats reports areas matching FRA reportable categories. Hidden rows when input/data isn't available — don't surface things that didn't happen.
 
 ```
 ─────────────────────────────────────────────────────────────────
-Forest (≈FRA def):                 2,705 km²    [FRA 2025: 2,725 ✓ within 1%]
-   ├─ Natural forest:              2,612 km²    [FRA 2025: not separately reported]
-   │     ├─ Primary forest:        1,418 km²    [FRA 2025: 1,400 ✓ within 1.4%]
-   │     └─ Naturally regenerating:  1,194 km²  [FRA 2025: 1,180 ✓ within 1.2%]
-   └─ Planted forest:                 93 km²    [no FRA comparator in tool]
+Forest (≈FRA def):                            2,705 km²    [FRA 2025: 2,725 ✓ within 1%]
+   ├─ Naturally regenerating forest:          2,612 km²    [FRA 2025: 2,650 ✓ within 1.5%]
+   │     └─ Primary forest:                   1,418 km²    [FRA 2025: 1,400 ✓ within 1.4%]
+   └─ Planted forest:                            93 km²    [no FRA comparator in tool]
 ─────────────────────────────────────────────────────────────────
 ```
 
-- "Naturally regenerating" row computed inline as `02c − 04a` area; no separate file
+- Per FRA: Forest = Naturally regenerating forest + Planted forest (mutually exclusive)
+- Per FRA: Naturally regenerating forest INCLUDES Primary forest as a subset
 - FRA comparators come from `modules/fraStats.js`: forest area (235 countries), primary forest (56), naturally regenerating (86)
 - Plantations has no FRA comparator in the tool's lookup (FRA reports it; not currently in `fraStats.js`)
 - Rows are hidden (not shown as "—") when the corresponding layer wasn't produced this run
+- "Other naturally regenerating forest" = `02c − 04a` is rarely worth a separate row — surface only if a workflow specifically needs that subset
 
 ## Intermediates
 
@@ -238,7 +302,7 @@ Files that aren't headline outputs (working files, prepared inputs, distance sur
 intermediates/
   prepared/                ← reprojected + aligned inputs (reusable across runs)
     forest.tif
-    natural_forest.tif     ← when computed
+    naturally_regenerating_forest.tif     ← when computed
     plantations.tif
     roads.tif, builtup_small.tif, builtup_large.tif, agriculture.tif
     protected.tif, dem.tif, slope.tif
@@ -274,7 +338,7 @@ intermediates/
 6. **Layer names drop the production-category prefix.** `04a_primary_forest.tif`, not `04a_results_primary_forest.tif` — the `04` already says "this came from Refine".
 7. **ISO3 prefix is optional.** Include when a country was selected in the run; omit otherwise.
 8. **Input substeps are category-letters; output substeps are unique-letters.** See [Substep policy](#substep-policy-decided-2026-04-27).
-9. **Step 02 file slots are fixed** (`02a_*` source / `02b_forest` / `02c_natural_forest` / `02d_plantations`). New forest-type derivations don't get new Step 02 letters — they live in stats or as intermediates.
+9. **Step 02 file slots are fixed** (`02a_*` source / `02b_forest` / `02c_naturally_regenerating_forest` / `02d_plantations`). New forest-type derivations don't get new Step 02 letters — they live in stats or as intermediates.
 10. **Step 04 = ecological viability only.** Anything that isn't patch/sieve viability filtering does not belong at step 04.
 
 ## Helper utility
@@ -311,7 +375,7 @@ Both helpers raise / throw on `platform ∉ {'gee', 'qgis'}`, missing `step`, or
 ```
 my-output-folder/
   qgis_02b_forest.tif                        ← when input declared as Forest or derived from tree cover
-  qgis_02c_natural_forest.tif                ← when plantations subtraction ran
+  qgis_02c_naturally_regenerating_forest.tif ← when plantations subtraction ran
   qgis_04a_primary_forest.tif
   qgis_04b_pre_connectivity_primary_forest.tif
   qgis_04c_combined_coded_raster.tif         ← (when ticked)
@@ -328,7 +392,7 @@ my-output-folder/
 ```
 my-output-folder/
   KEN_qgis_02b_forest.tif
-  KEN_qgis_02c_natural_forest.tif
+  KEN_qgis_02c_naturally_regenerating_forest.tif
   KEN_qgis_04a_primary_forest.tif
   KEN_qgis_04b_pre_connectivity_primary_forest.tif
   KEN_qgis_05a_area_statistics.csv
@@ -349,8 +413,8 @@ GEE Drive folder/
   KEN_gee_02a_glad_tree_height_m_2020_30m.tif
   KEN_gee_02b_forest_2010_30m.tif
   KEN_gee_02b_forest_2020_30m.tif
-  KEN_gee_02c_natural_forest_2010_30m.tif    ← (P1.16 — new export)
-  KEN_gee_02c_natural_forest_2020_30m.tif
+  KEN_gee_02c_naturally_regenerating_forest_2010_30m.tif    ← (P1.16 — new export)
+  KEN_gee_02c_naturally_regenerating_forest_2020_30m.tif
   KEN_gee_02d_plantations_2010_30m.tif       ← SDPT class 1 only (per P1.20)
   KEN_gee_02d_plantations_2020_30m.tif
   KEN_gee_03a_roads_2010_30m.tif
@@ -394,7 +458,7 @@ Sorted alphabetically the file groups naturally by country + step, with the plat
 
 ## Migration status
 
-- **P1.13 plugin side:** ✅ shipped 2026-04-27 (commit `8bf5960`). All plugin output paths migrated to Option D via `generate_layer_name()`. Filename `04d_forest_naturally_regenerating.tif` slated for rename to `02c_natural_forest.tif` per the FRA-aligned schema (P1.16).
+- **P1.13 plugin side:** ✅ shipped 2026-04-27 (commit `8bf5960`). All plugin output paths migrated to Option D via `generate_layer_name()`. Filename `04d_forest_naturally_regenerating.tif` slated for rename to `02c_naturally_regenerating_forest.tif` per the FRA-aligned schema (P1.16).
 - **P1.13 GEE side:** WIP on branch `feat/v1-release-batch10` (uncommitted). All `Export.image.toDrive` / `Export.table.toDrive` description / fileNamePrefix calls migrated via new `mkExportName()` helper. Pending paste-into-Code-Editor verify cycle.
 - **P1.16-P1.20:** captured in `planning/tasks_260425_merged.md`. Code changes not yet started.
 
