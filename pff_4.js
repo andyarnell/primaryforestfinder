@@ -3743,12 +3743,15 @@ function createLegendItem(color, label) {
 
 // Canonical legend definition: visibleLayers key → [colour, label]
 var LEGEND_ENTRIES = [
-  // Forest group ordered headline-first then dark -> light through the
-  // green ramp, with Plantations last (different category, gold).
-  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',         group: 'Forest'},
-  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
-  {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
+  // Forest group ordered to match the FRA forest-derivation workflow:
+  // Input: Forest (tree cover) -> Naturally regenerating forest ->
+  // Forest outside buffers -> Primary forest. Light -> dark green ramp
+  // reinforces "input -> increasingly refined output". Planted forest
+  // last as a sibling category (gold, not in the green ramp).
   {key: 'forest',                color: '#90EE90', label: 'Input: Forest',          group: 'Forest'},
+  {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
+  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
+  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',         group: 'Forest'},
   {key: 'plantations',           color: '#d4a017', label: 'Planted forest',         group: 'Forest'},
   {key: 'agriBuffer',          color: '#ffcc00', label: 'Buffer: Agriculture',    group: 'Human Influence'},
   {key: 'roadSmallBuffer',     color: '#ff6600', label: 'Buffer: Roads',          group: 'Human Influence'},
