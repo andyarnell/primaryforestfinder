@@ -438,36 +438,43 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.FOREST_RASTER,
             "02 Tree Cover: Forest raster (REQUIRED; binary 1/0; defines reference grid)"))
+        # P1.22: paired plantations + planted-forest exclusions follow
+        # the FRA forest-derivation flow:
+        #   tree cover - plantations    = Forest (FRA Note 10 baseline)
+        #   Forest    - planted forest = Naturally regenerating forest
+        # Plantations FIRST in the parameter list so the UI reads in
+        # workflow order. See About panel in GEE app for full FRA
+        # definitions and rubber caveat.
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.FRA_AGRICULTURE_RASTER,
+            "02 Tree Cover: Plantations raster -- agricultural tree crops "
+            "(e.g. oil palm, fruit orchards, olive orchards, "
+            "agroforestry-with-crops; SDPT class 2 + Descals oil palm). "
+            "Per FRA Note 10 these are agricultural land regardless of "
+            "tree biology. Used to narrow tree cover -> Forest (FRA "
+            "baseline) when the toggle below is on. (binary 1/0, optional)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.EXCLUDE_AGRICULTURE_FROM_FOREST,
+            "02 Tree Cover: Exclude plantations (e.g. oil palm, fruit, "
+            "agroforestry) -- requires Plantations raster above; no-op "
+            "when none supplied. Default ON for FRA-faithful output.",
+            defaultValue=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.PLANTATIONS_RASTER,
             "02 Tree Cover: Planted forest raster -- FRA Planted Forest "
             "(timber/pulp/fibre, e.g. eucalyptus, pine, teak; SDPT class 1). "
             "Per FRA Note 7, rubber-wood plantations are also forest -- but "
             "SDPT v2 places rubber in tree crops, so rubber-bearing pixels "
-            "land in the agricultural-tree-crops slot below by default. "
-            "Supply a national rubber raster here to add it. (binary 1/0, optional)",
+            "land in the Plantations slot above by default. Supply a "
+            "national rubber raster here to add it. (binary 1/0, optional)",
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.EXCLUDE_PLANTATIONS,
-            "02 Tree Cover: Exclude planted forest from forest baseline "
-            "(requires Planted forest raster). Derives "
-            "02d_naturally_regenerating_forest = 02b_forest - 02c_planted_forest.",
-            defaultValue=True))
-        self.addParameter(QgsProcessingParameterRasterLayer(
-            self.FRA_AGRICULTURE_RASTER,
-            "02 Tree Cover: Plantations raster -- agricultural tree crops "
-            "(e.g. oil palm, fruit orchards, olive orchards, "
-            "agroforestry-with-crops; SDPT class 2 + Descals oil palm). Per FRA "
-            "Note 10 these are agricultural land regardless of tree biology. "
-            "Used to narrow the Forest baseline to FRA-strict definition "
-            "when the toggle below is on. (binary 1/0, optional)",
-            optional=True))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.EXCLUDE_AGRICULTURE_FROM_FOREST,
-            "02 Tree Cover: Exclude agricultural plantations from Forest "
-            "baseline (FRA-aligned; requires Plantations / agri tree crops "
-            "raster above; no-op when none supplied). Default ON for "
-            "FRA-faithful output.",
+            "02 Tree Cover: Exclude planted forest (e.g. eucalyptus, "
+            "pine, teak -- timber/pulp/fibre) -- requires Planted forest "
+            "raster above. Derives 02d_naturally_regenerating_forest = "
+            "02b_forest - 02c_planted_forest.",
             defaultValue=True))
 
         # ────────────────────────────────────────────────────────────
@@ -718,7 +725,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.5"
+    PFF_VERSION = "0.9.6"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")

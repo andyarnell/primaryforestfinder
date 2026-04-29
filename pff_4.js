@@ -1,5 +1,33 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.7.0";
+var PFF_SCRIPT_VERSION = "4.8.0";
+
+// Changes vs v4.7.0 (P1.22 follow-up -- checkbox reorder + About FRA block):
+//  - Tree Cover panel: paired exclusion checkboxes reordered + relabelled
+//    to match the FRA forest-derivation flow:
+//      tree cover - plantations    = Forest (FRA Note 10 baseline)
+//      Forest    - planted forest = Naturally regenerating forest
+//    OLD                                       NEW
+//    "Exclude planted forest (derives ...)"    "Exclude plantations (e.g. oil
+//                                              palm, fruit, agroforestry)" -- FIRST
+//    "Exclude agriculture from Forest          "Exclude planted forest (e.g.
+//      baseline (FRA-aligned)"                  eucalyptus, pine, teak --
+//                                              timber/pulp/fibre)" -- SECOND
+//    Code logic + state management unchanged -- excludeAgriculture- and
+//    includePlantationsCheckbox kept their existing variable names + saved-
+//    settings keys for backward compat. Only labels + display order moved.
+//
+//  - About panel expanded with FRA 2025 definitions block (Forest / NRF /
+//    Primary Forest, verbatim from FAO), FRA Note 7 inclusions (rubber-wood,
+//    cork oak, Christmas trees) and Note 10 exclusions (oil palm, fruit,
+//    olive, agroforestry-with-crops). Plus a "How PFF outputs map to FRA"
+//    block with explicit ≈ proxies and the rubber caveat (SDPT v2 vs FRA
+//    Note 7 mismatch). Workshop users now have the canonical definitions
+//    in-app rather than hunting the FAO website.
+//
+//  - Plugin side mirrors the same reorder + relabel pair (PLANTATIONS_RASTER
+//    + EXCLUDE_PLANTATIONS now appear AFTER FRA_AGRICULTURE_RASTER + EXCLUDE_
+//    AGRICULTURE_FROM_FOREST in full_workflow.py initAlgorithm). Symbolic
+//    parameter names kept for backward compat with processing.run() callers.
 
 // Changes vs v4.6.0 (P1.22 -- terminology rename: Planted forest / Plantations):
 //  Per FRA Notes 7 + 10, the everyday word "plantation" actually fits
@@ -1459,7 +1487,84 @@ var aboutContent = ui.Panel({
       'Designed to support national forest monitoring and reporting ' +
       '(e.g. FAO FRA) with transparent, reproducible methods.',
       {fontSize: '11px', margin: '0 0 8px 0'}),
-    ui.Label('Resources:', {fontWeight: 'bold', fontSize: '11px', margin: '0 0 2px 0'}),
+
+    // FRA definitions block — supplied verbatim from FAO FRA 2025 so
+    // workshop users know exactly what each output approximates. The
+    // tool's outputs are operational PROXIES (≈) of these categories;
+    // see "How PFF outputs map to FRA" below for caveats.
+    ui.Label('FRA 2025 definitions', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
+
+    ui.Label('FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
+    ui.Label(
+      'Land spanning more than 0.5 hectares with trees higher than ' +
+      '5 meters and a canopy cover of more than 10 percent, or trees ' +
+      'able to reach these thresholds in situ. It does not include ' +
+      'land that is predominantly under agricultural or urban land use.',
+      {fontSize: '10px', margin: '0 0 2px 4px'}),
+    ui.Label(
+      'Note 7 INCLUDES: rubber-wood, cork oak, Christmas tree plantations.',
+      {fontSize: '10px', margin: '0 0 2px 4px', color: '#2a7f2a'}),
+    ui.Label(
+      'Note 10 EXCLUDES: fruit tree plantations, oil palm, olive ' +
+      'orchards, agroforestry systems when crops are grown under ' +
+      'tree cover (Taungya is forest, where crops grow only during ' +
+      'early forest rotation).',
+      {fontSize: '10px', margin: '0 0 4px 4px', color: '#a0522d'}),
+
+    ui.Label('NATURALLY REGENERATING FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
+    ui.Label(
+      'Forest predominantly composed of trees established through ' +
+      'natural regeneration. Includes mixed stands where naturally ' +
+      'regenerated trees are the major part at maturity, and includes ' +
+      'naturally regenerated trees of introduced species.',
+      {fontSize: '10px', margin: '0 0 4px 4px'}),
+
+    ui.Label('PRIMARY FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
+    ui.Label(
+      'Naturally regenerating forest of native tree species, where ' +
+      'there are no clearly visible indications of human activities ' +
+      'and the ecological processes are not significantly disturbed. ' +
+      'Subset of Naturally regenerating forest. Includes managed ' +
+      'primary forest with minimum intervention, Indigenous and ' +
+      'community stewardship, and natural-disturbance signs (storms, ' +
+      'fire, pests). Excludes forests where hunting/poaching/gathering ' +
+      'has caused significant species loss.',
+      {fontSize: '10px', margin: '0 0 4px 4px'}),
+
+    ui.Label({
+      value: 'Full FRA 2025 definitions (FAO)',
+      style: {fontSize: '10px', color: 'blue', textDecoration: 'underline', margin: '0 0 8px 4px'},
+      targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
+    }),
+
+    ui.Label('How PFF outputs map to FRA (operational proxies, ≈)', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
+    ui.Label(
+      '02b_forest                   ≈ FRA Forest (when "Exclude ' +
+      'plantations" is on; tree cover MINUS FRA-aligned agriculture)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '02c_planted_forest           ≈ FRA Planted Forest (SDPT class 1)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '02d_naturally_regenerating   ≈ FRA NRF (= 02b - 02c)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '04a_primary_forest           ≈ FRA Primary Forest -- geographic ' +
+      'proxy filter only. Does NOT directly check FRA criteria for ' +
+      'native species or hunting/poaching/gathering pressure. Treat as ' +
+      'a starting point for FRA Primary Forest reporting.',
+      {fontSize: '10px', margin: '0 0 6px 4px'}),
+    ui.Label(
+      'Rubber caveat: FRA Note 7 lists rubber-wood as forest, but ' +
+      'SDPT v2 (the dataset behind the Planted forest layer) places ' +
+      'rubber in tree crops -- so rubber-bearing pixels currently land ' +
+      'in the Plantations layer. Many countries (Indonesia, Malaysia, ' +
+      'Thailand) report rubber as Planted Forest in FRA. Supply ' +
+      'national rubber data via the Custom plantations override to ' +
+      'reroute it.',
+      {fontSize: '10px', margin: '0 0 8px 4px', color: '#666'}),
+
+    ui.Label('Resources', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Label('Documentation — https://example.com/pff-docs', {fontSize: '11px', margin: '0 0 2px 4px'}),
     ui.Label('Source code — https://example.com/pff-source', {fontSize: '11px', margin: '0 0 2px 4px'}),
     ui.Label('Contact — primaryforestfinder@example.com', {fontSize: '11px', margin: '0 0 0 4px'})
@@ -3027,26 +3132,21 @@ var forestAssets = createYearAssetInputs({
   placeholder: 'users/username/forestAsset or gs://bucket/file.tif'
 });
 
-var includePlantationsCheckbox = ui.Checkbox({
-  label: 'Exclude planted forest (derives Naturally regenerating forest)',
+// P1.22: paired checkboxes follow the FRA forest-derivation flow:
+//   tree cover - plantations    = Forest (FRA baseline)
+//   Forest    - planted forest = Naturally regenerating forest
+// "Plantations" here means agricultural tree crops (oil palm, fruit,
+// agroforestry) per FRA Note 10. "Planted forest" means timber/pulp/
+// fibre plantations (eucalyptus, pine, teak) per FRA Note 7.
+// (Rubber is country-dependent in FRA reporting -- see About panel.)
+var excludeAgricultureFromForestCheckbox = ui.Checkbox({
+  label: 'Exclude plantations (e.g. oil palm, fruit, agroforestry)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
 });
 
-// P1.18: FRA-aligned Forest baseline. When ticked, the Forest layer
-// (02b_forest) is computed as tree_cover MINUS FRA-aligned
-// agricultural tree cover (Descals oil palm + SDPT class 2 tree
-// crops). This is the FRA-strict definition of Forest (land use +
-// biophysical, with agricultural land excluded by definition).
-// Default OFF for backwards-compat with prior runs -- when off, the
-// Forest baseline is closer to "thresholded tree cover" (agricultural
-// tree cover only removed downstream via disturbance buffering).
-// IMPORTANT: this is the *tree-cover-meeting subset* of agriculture
-// only. The broader buffered agriculture (cropland + pasture +
-// everything for primary-forest disturbance) is intentionally NOT
-// FRA-aligned and lives in 03a_agriculture.
-var excludeAgricultureFromForestCheckbox = ui.Checkbox({
-  label: 'Exclude agriculture from Forest baseline (FRA-aligned)',
+var includePlantationsCheckbox = ui.Checkbox({
+  label: 'Exclude planted forest (e.g. eucalyptus, pine, teak — timber/pulp/fibre)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
 });
@@ -3260,8 +3360,10 @@ var treeCoverContent = ui.Panel({
     treecoverHeightPanel,
     forestAssets.panel,
     ui.Panel({style: {height: '1px', backgroundColor: '#ddd', margin: '6px 0', stretch: 'horizontal'}}),
-    includePlantationsCheckbox,
+    // FRA-aligned exclusion order: plantations (agri tree crops) first,
+    // then planted forest (timber). See FRA notes in About panel.
     excludeAgricultureFromForestCheckbox,
+    includePlantationsCheckbox,
     nationalPlantations.panel
   ],
   style: {shown: false, padding: '8px'}
