@@ -1,5 +1,48 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.6.0";
+var PFF_SCRIPT_VERSION = "4.7.0";
+
+// Changes vs v4.6.0 (P1.22 -- terminology rename: Planted forest / Plantations):
+//  Per FRA Notes 7 + 10, the everyday word "plantation" actually fits
+//  agricultural tree crops (oil palm, fruit) BETTER than timber forestry
+//  plantations. Swap labels to match intuition:
+//
+//    OLD                                NEW
+//    "Plantations" layer (SDPT class 1) "Planted forest" (timber/pulp/fibre,
+//                                       e.g. eucalyptus, pine, teak)
+//    "FRA agriculture (tree-cover       "Plantations" (agricultural tree
+//      subset)" layer (SDPT class 2     crops, e.g. oil palm, fruit
+//      + Descals oil palm)              orchards, olive orchards,
+//                                       agroforestry-with-crops)
+//
+//  Filename renames (BREAKING):
+//    02c_plantations              -> 02c_planted_forest
+//    03a_agriculture_tree_cover_fra -> 03a_plantations_tree_crops
+//
+//  Stats panel "Plantations Included" -> "Planted Forest Excluded".
+//  Backward-compat: load-settings still reads old keys.
+//
+//  RUBBER CAVEAT (documented, not fixed): per FRA Note 7, rubber-wood
+//  plantations ARE forest. SDPT v2 puts rubber in class 2 (Tree Crops),
+//  so rubber-bearing pixels currently land in 03a_plantations_tree_crops
+//  rather than 02c_planted_forest. Workshop guide notes this -- users in
+//  rubber-heavy countries (Indonesia, Malaysia, Thailand) can supply a
+//  national rubber raster via the existing nationalPlantations override
+//  to add it to 02c. Rubber rerouting via FDAP is not used (FDAP has
+//  commission errors in primary forest -- see memory note).
+//
+//  PRIMARY FOREST honesty caveat (documented in About + workshop guide):
+//  PFF's 04a_primary_forest is a geographic-proxy filter. It DOES NOT
+//  directly check FRA Primary Forest's "native species" criterion or
+//  "no significant hunting/poaching/gathering" criterion. Treat as a
+//  starting point for FRA Primary Forest reporting, refined by national
+//  context.
+//
+//  NRF Note 4 caveat (documented): per FRA, naturally regenerated trees
+//  of introduced species count as Naturally Regenerating Forest. The
+//  tool can't distinguish volunteer regeneration from active planting,
+//  so abandoned planted-forest blocks where trees have volunteered
+//  appear in 02c_planted_forest rather than 02d_naturally_regenerating.
+//  National data on actively-managed planted forest can correct this.
 
 // Changes vs v4.5.0 (P1.20 -- FRA-correct plantations layer):
 //  - Plantations layer narrowed to SDPT class 1 only (FRA Planted
@@ -1896,13 +1939,13 @@ var exportChkStyle = {fontSize: '11px', margin: '1px 0'};
 var exportChk_final           = ui.Checkbox({label: 'Primary forest (final)',        value: true,  style: exportChkStyle});
 var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-connectivity forest',       value: true,  style: exportChkStyle});
 var exportChk_inputForest     = ui.Checkbox({label: 'Input forest (02b)',            value: true,  style: exportChkStyle});
-var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02c)', value: true,  style: exportChkStyle});
+var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02d)', value: true,  style: exportChkStyle});
 var exportChk_roads           = ui.Checkbox({label: 'Roads',                         value: true,  style: exportChkStyle});
 var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up (small)',              value: true,  style: exportChkStyle});
 var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up (large)',              value: true,  style: exportChkStyle});
 var exportChk_agriculture     = ui.Checkbox({label: 'Agriculture',                   value: true,  style: exportChkStyle});
-var exportChk_plantations     = ui.Checkbox({label: 'Plantations',                   value: true,  style: exportChkStyle});
-var exportChk_fraAgriculture  = ui.Checkbox({label: 'FRA agriculture (tree-cover subset)', value: false, style: exportChkStyle});
+var exportChk_plantations     = ui.Checkbox({label: 'Planted forest (timber/pulp/fibre, 02c)', value: true,  style: exportChkStyle});
+var exportChk_fraAgriculture  = ui.Checkbox({label: 'Plantations (agri tree crops, 03a)', value: false, style: exportChkStyle});
 var exportChk_dem             = ui.Checkbox({label: 'DEM',                           value: true,  style: exportChkStyle});
 var exportChk_slope           = ui.Checkbox({label: 'Slope',                         value: false, style: exportChkStyle});
 var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas (binary image)', value: true,  style: exportChkStyle});
@@ -2288,11 +2331,15 @@ function exportRastersToDrive() {
         .updateMask(country_and_buffer_mask);
     var allPlantationsSel = plantedForestSDPT;
     if (exportChk_plantations.getValue()) {
-      // 02c_plantations export = FRA Planted Forest only. Plugin
-      // mirrors this when consumed -- "exclude plantations" =
+      // 02c_planted_forest export = FRA Planted Forest only (SDPT class 1).
+      // Plugin mirrors this when consumed -- "exclude planted forest" =
       // exclude FRA Planted Forest (timber, pulp, fibre).
+      // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 (tree crops), so
+      // rubber is NOT in this layer. Per FRA Note 7, rubber-wood
+      // plantations ARE forest -- supply national rubber via
+      // nationalPlantations override to add it.
       doExport(allPlantationsSel.unmask(0).toByte(),
-        mkExportName('02c', 'plantations_' + analysisYear + '_' + s), folder);
+        mkExportName('02c', 'planted_forest_' + analysisYear + '_' + s), folder);
     }
     // P1.16: 02d_naturally_regenerating_forest export. Derived from
     // the FRA Forest baseline minus FRA Planted Forest -- gives users a
@@ -2309,13 +2356,21 @@ function exportRastersToDrive() {
       doExport(natRegExport,
         mkExportName('02d', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
     }
-    // P1.18: FRA-aligned agriculture (tree-cover-meeting subset only)
-    // = Descals oil palm + SDPT class 2 tree crops. Distinct from the
-    // broader 03a_agriculture (cropland + pasture + everything for
-    // primary-forest disturbance buffering). Plugin users can consume
-    // this layer to apply the FRA-strict Forest baseline derivation
-    // when running standalone. Default off -- only export when
-    // explicitly requested.
+    // P1.22 (was P1.18 export): "Plantations" (agricultural tree crops)
+    // = Descals oil palm + SDPT class 2. Per FRA Note 10 these are
+    // agricultural land regardless of tree biology -- e.g. oil palm,
+    // fruit orchards, olive orchards, agroforestry-with-crops. The
+    // everyday word "plantation" actually fits these crops better than
+    // forestry timber plantations (which we now call "Planted forest").
+    // Distinct from the broader 03a_agriculture (cropland + pasture +
+    // everything for primary-forest disturbance buffering). Plugin
+    // users can consume this layer to apply the FRA-strict Forest
+    // baseline derivation when running standalone. Default off -- only
+    // export when explicitly requested.
+    // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 so it lands here,
+    // but per FRA Note 7 rubber-wood is forest. Workshop users should
+    // be aware. National rubber data via nationalPlantations override
+    // can correct this in the analysis pipeline.
     if (exportChk_fraAgriculture.getValue()) {
       var fraAgriExport = oilPalmDescalsSel.unmask()
         .or(treeCropsSDPT.unmask())
@@ -2323,7 +2378,7 @@ function exportRastersToDrive() {
         .unmask(0)
         .toByte();
       doExport(fraAgriExport,
-        mkExportName('03a', 'agriculture_tree_cover_fra_' + analysisYear + '_' + s), folder);
+        mkExportName('03a', 'plantations_tree_crops_' + analysisYear + '_' + s), folder);
     }
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
     var croplandGladCollectionFF = forwardFillBinaryTimeSeries(croplandGladCollection, years);
@@ -2973,7 +3028,7 @@ var forestAssets = createYearAssetInputs({
 });
 
 var includePlantationsCheckbox = ui.Checkbox({
-  label: 'Exclude plantations from treecover',
+  label: 'Exclude planted forest (derives Naturally regenerating forest)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
 });
@@ -3516,7 +3571,7 @@ function createFloatingLayerPanel() {
       ui.Checkbox({label: 'Forest Outside Buffers', value: visibleLayers.forestOutsideBuffers, onChange: function(v) { visibleLayers.forestOutsideBuffers = v; toggleLayerByName('Forest outside buffers', v); }}),
       ui.Checkbox({label: 'Naturally regenerating forest', value: visibleLayers.naturallyRegenerating, onChange: function(v) { visibleLayers.naturallyRegenerating = v; toggleLayerByName('Naturally regenerating forest', v); }}),
       ui.Checkbox({label: 'Input: Forest',            value: visibleLayers.forest,               onChange: function(v) { visibleLayers.forest               = v; toggleLayerByName('Input: Forest', v); }}),
-      ui.Checkbox({label: 'Plantations',            value: visibleLayers.plantations,          onChange: function(v) { visibleLayers.plantations          = v; toggleLayerByName('Plantations', v); }}),
+      ui.Checkbox({label: 'Planted forest',         value: visibleLayers.plantations,          onChange: function(v) { visibleLayers.plantations          = v; toggleLayerByName('Planted forest', v); }}),
       ui.Label(''),
       ui.Label('Disturbance inputs:', {fontWeight: 'bold'}),
       ui.Checkbox({label: 'Agriculture',  value: visibleLayers.inputAgriculture,  onChange: function(v) { visibleLayers.inputAgriculture  = v; toggleLayerByName('Input: Agriculture', v); }}),
@@ -3592,7 +3647,7 @@ var LEGEND_ENTRIES = [
   {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
   {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
   {key: 'forest',                color: '#90EE90', label: 'Input: Forest',          group: 'Forest'},
-  {key: 'plantations',           color: '#d4a017', label: 'Plantations',            group: 'Forest'},
+  {key: 'plantations',           color: '#d4a017', label: 'Planted forest',         group: 'Forest'},
   {key: 'agriBuffer',          color: '#ffcc00', label: 'Buffer: Agriculture',    group: 'Human Influence'},
   {key: 'roadSmallBuffer',     color: '#ff6600', label: 'Buffer: Roads',          group: 'Human Influence'},
   {key: 'builtSmallBuffer',    color: '#cc00cc', label: 'Buffer: Small Built-up', group: 'Human Influence'},
@@ -3632,7 +3687,7 @@ function createLegendPanel() {
       'Primary Forest': 'primaryForest',
       'Forest outside buffers': 'forestOutsideBuffers',
       'Input: Forest': 'forest',
-      'Plantations': 'plantations',
+      'Planted forest': 'plantations',
       'Buffer: Agriculture': 'agriBuffer',
       'Buffer: Roads': 'roadSmallBuffer',
       'Buffer: Small Built-up': 'builtSmallBuffer',
@@ -4645,7 +4700,7 @@ map2.add(createDisclaimerPanel());
     var pffLayerNames = [
       'Buffer: Roads', 'Buffer: Small Built-up', 'Buffer: Large Built-up',
       'Buffer: Agriculture', 'Input: Roads', 'Input: Small Built-up',
-      'Input: Large Built-up', 'Input: Agriculture', 'Plantations',
+      'Input: Large Built-up', 'Input: Agriculture', 'Planted forest',
       'Naturally regenerating forest',
       'Forest outside buffers', 'Primary Forest',
       'Reference: FLII (high/med)', 'Reference: Forest Persistence (FDaP)'
@@ -4673,7 +4728,7 @@ map2.add(createDisclaimerPanel());
       'Buffer: Small Built-up': 'builtSmallBuffer',
       'Buffer: Large Built-up': 'builtLargeBuffer',
       'Buffer: Agriculture': 'agriBuffer',
-      'Plantations': 'plantations',
+      'Planted forest': 'plantations',
       'Reference: FLII (high/med)': 'flii'
     };
     function syncAndRemovePffLayers(m) {
@@ -5049,7 +5104,7 @@ map2.add(createDisclaimerPanel());
     // map.addLayer(country_and_buffer_mask,'',"country_and_buffer_mask")
 
     if (addInputLayersToMap.getValue())
-      map.addLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Plantations', visibleLayers.plantations, 0.7);
+      map.addLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Planted forest', visibleLayers.plantations, 0.7);
     // map.addLayer(pastureDatasetSel,"","pastureDatasetSel")
     // map.addLayer(croplandComb,"","croplandComb")
 

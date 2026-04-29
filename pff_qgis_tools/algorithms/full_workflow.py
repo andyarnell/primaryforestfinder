@@ -439,27 +439,35 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.FOREST_RASTER,
             "02 Tree Cover: Forest raster (REQUIRED; binary 1/0; defines reference grid)"))
         self.addParameter(QgsProcessingParameterRasterLayer(
-            self.FRA_AGRICULTURE_RASTER,
-            "02 Tree Cover: FRA agriculture raster (binary 1/0, optional; "
-            "tree-cover-meeting only)",
-            optional=True))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.EXCLUDE_AGRICULTURE_FROM_FOREST,
-            "02 Tree Cover: Exclude agriculture from Forest baseline "
-            "(FRA-aligned; requires FRA agri raster; no-op when none supplied)",
-            defaultValue=True))
-        self.addParameter(QgsProcessingParameterRasterLayer(
             self.PLANTATIONS_RASTER,
-            "02 Tree Cover: Plantations raster -- FRA Planted Forest only "
-            "(SDPT class 1: timber/pulp/fibre plantations like eucalyptus, "
-            "pine, teak; NOT oil palm, rubber, fruit orchards or "
-            "agroforestry -- those are FRA agriculture, supply via FRA "
-            "agriculture raster above) (binary 1/0, optional)",
+            "02 Tree Cover: Planted forest raster -- FRA Planted Forest "
+            "(timber/pulp/fibre, e.g. eucalyptus, pine, teak; SDPT class 1). "
+            "Per FRA Note 7, rubber-wood plantations are also forest -- but "
+            "SDPT v2 places rubber in tree crops, so rubber-bearing pixels "
+            "land in the agricultural-tree-crops slot below by default. "
+            "Supply a national rubber raster here to add it. (binary 1/0, optional)",
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.EXCLUDE_PLANTATIONS,
-            "02 Tree Cover: Exclude plantations from forest (requires Plantations raster). "
-            "Derives 02d_naturally_regenerating_forest = 02b_forest - 02c_plantations.",
+            "02 Tree Cover: Exclude planted forest from forest baseline "
+            "(requires Planted forest raster). Derives "
+            "02d_naturally_regenerating_forest = 02b_forest - 02c_planted_forest.",
+            defaultValue=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.FRA_AGRICULTURE_RASTER,
+            "02 Tree Cover: Plantations raster -- agricultural tree crops "
+            "(e.g. oil palm, fruit orchards, olive orchards, "
+            "agroforestry-with-crops; SDPT class 2 + Descals oil palm). Per FRA "
+            "Note 10 these are agricultural land regardless of tree biology. "
+            "Used to narrow the Forest baseline to FRA-strict definition "
+            "when the toggle below is on. (binary 1/0, optional)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.EXCLUDE_AGRICULTURE_FROM_FOREST,
+            "02 Tree Cover: Exclude agricultural plantations from Forest "
+            "baseline (FRA-aligned; requires Plantations / agri tree crops "
+            "raster above; no-op when none supplied). Default ON for "
+            "FRA-faithful output.",
             defaultValue=True))
 
         # ────────────────────────────────────────────────────────────
@@ -710,7 +718,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.4"
+    PFF_VERSION = "0.9.5"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
