@@ -105,14 +105,23 @@ The Full Workflow produces this folder layout (headlines at top, everything else
 
 ```
 OUT/                                     (OUT = your chosen output folder; ISO3 prefix when set)
-  [ISO3_]qgis_02c_naturally_regenerating_forest.tif
+  [ISO3_]qgis_02b_forest.tif             ← HEADLINE (≈ FRA Forest baseline -- the
+                                            harmonised forest layer used downstream;
+                                            FRA-strict when "Exclude agriculture
+                                            from Forest baseline (FRA-aligned)" is
+                                            on with FRA agriculture raster supplied,
+                                            else thresholded tree cover)
+  [ISO3_]qgis_02d_naturally_regenerating_forest.tif
                                          ← HEADLINE (≈ FRA Naturally Regenerating
                                             Forest, if plantations input supplied)
-  [ISO3_]qgis_04a_primary_forest.tif     ← HEADLINE (final result)
-  [ISO3_]qgis_04b_pre_connectivity_primary_forest.tif
-                                         ← HEADLINE (combined tiers, before refine)
-  [ISO3_]qgis_04c_combined_coded_raster.tif
-                                         ← HEADLINE (only if ticked)
+  [ISO3_]qgis_03c_pre_connectivity_primary_forest.tif
+                                         ← HEADLINE (forest after disturbance buffers
+                                            + protection rescues; output of Step 03
+                                            tier logic, input to Step 04 viability)
+  [ISO3_]qgis_03d_combined_coded_raster.tif
+                                         ← HEADLINE (only if ticked; tier-logic debug)
+  [ISO3_]qgis_04a_primary_forest.tif     ← HEADLINE (final result -- after Step 04
+                                            ecological viability filter)
   [ISO3_]qgis_04e_anthropogenic_mask.tif ← HEADLINE (combined buffered disturbance)
   [ISO3_]qgis_05a_area_statistics.csv    ← HEADLINE (if zonal stats ticked)
   [ISO3_]qgis_05b_area_statistics_by_zone.shp (+sidecars)

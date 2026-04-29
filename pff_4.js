@@ -1,5 +1,88 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.3.1";
+var PFF_SCRIPT_VERSION = "4.6.0";
+
+// Changes vs v4.5.0 (P1.20 -- FRA-correct plantations layer):
+//  - Plantations layer narrowed to SDPT class 1 only (FRA Planted
+//    Forest -- timber/pulp/fibre plantations: eucalyptus, pine, teak).
+//    Per FRA, tree crops (SDPT class 2 -- rubber, fruit, agroforestry)
+//    and Descals oil palm are agricultural land regardless of tree
+//    biology and now route through the agriculture aggregation
+//    instead. Affects:
+//      02c_plantations export                       (FRA Planted Forest only)
+//      02d_naturally_regenerating_forest derivation (= 02b - 02c, FRA-faithful)
+//    Behaviour: 02c_plantations area SHRINKS in oil-palm-heavy
+//    countries (Indonesia, Malaysia, Nigeria) -- now matches FRA
+//    Planted Forest reporting. 02d_naturally_regenerating_forest
+//    pixels unchanged from pre-P1.20 because P1.18 already excluded
+//    tree-cover-meeting agriculture at the baseline. 04a_primary_forest
+//    pixels unchanged -- agriculture aggregation explicitly includes
+//    tree crops + oil palm so disturbance buffering content is the
+//    same as before P1.20.
+//  - New helper modules/timeseriesAnthro.js processingPlantedForestSDPT()
+//    exposes SDPT class 1 (Planted Forests) as a separate layer.
+//    Sibling to processingTreeCropsSDPT() added in v4.5.0 prep.
+//  - processingPlantationsMosaic() retained for backwards compat but
+//    no longer called by pff_4.js -- consumers should migrate to
+//    processingPlantedForestSDPT() + processingTreeCropsSDPT() pair.
+//  - National plantations override (nationalPlantations.checkbox)
+//    semantics unchanged BUT users should now supply FRA Planted
+//    Forest only (not their full national "plantations" registry if
+//    that bundles tree crops). Workshop guide gains a one-paragraph
+//    note on the SDPT class 1 vs class 2 distinction.
+
+// Changes vs v4.4.0 (workflow-progression schema reorder):
+//  - File numbers now reflect "more removed = higher number" through
+//    the pipeline. Three swaps:
+//      02c plantations          (was 02d) -- INPUT for nat reg derivation
+//      02d naturally_regenerating_forest  (was 02c) -- output of (02b - 02c)
+//      03c pre_connectivity_primary_forest  (was 04b) -- output of Step 03
+//                                            tier logic (disturbance buffers
+//                                            + protection rescues), feeds
+//                                            into Step 04 viability filter
+//      03d combined_coded_raster  (was 04c) -- debug of Step 03 tier logic
+//      04a primary_forest        (unchanged) -- final output of Step 04
+//                                                ecological viability filter
+//  - Step 04 collapses to a single output (04a primary_forest), matching
+//    "Refine Output = ecological viability filter only".
+//  - Anthropogenic mask still at 04e for now -- spec says it should move
+//    to intermediates/ (no top-level number); flagged for follow-up batch.
+
+// Changes vs v4.3.1 (P1.18 -- FRA-aligned Forest baseline):
+//  - New checkbox "Exclude agriculture from Forest baseline
+//    (FRA-aligned)" in Tree Cover section, default ON (FRA-correct).
+//    When ticked, forest_map_clip is masked by NOT(Descals oil palm
+//    OR SDPT class 2 tree crops) BEFORE the P1.16 plantations
+//    subtraction. This narrows the Forest baseline (02b) to the
+//    FRA-strict definition: tree cover meeting biophysical
+//    thresholds AND not primarily agricultural land. Safe as a
+//    default because when SDPT class 2 / Descals are empty for a
+//    country, the mask is empty and the layer is unchanged.
+//  - Per FRA, "agriculture" here means the *tree-cover-meeting
+//    subset* only (oil palm, tree crops, agroforestry). The broader
+//    PFF buffered agriculture (cropland + pasture + everything for
+//    primary-forest disturbance) is intentionally NOT FRA-aligned --
+//    it serves a different role (proximity-based disturbance signal,
+//    not classification).
+//  - Behaviour change when on: 02b_forest area shrinks (agricultural
+//    tree cover removed at baseline). 02c_naturally_regenerating
+//    area also shrinks (inherits the narrower baseline). 04a_primary
+//    is essentially unchanged -- those pixels were already removed
+//    via disturbance buffering toward primary.
+//  - Run metadata bundle gains "FRA Agriculture Excluded from Forest"
+//    boolean. Settings save/load + reset wired. Backward-compat:
+//    older saved settings without this key default to false.
+//  - New helper modules/timeseriesAnthro.js processingTreeCropsSDPT()
+//    exposes SDPT class 2 (Tree Crops) as a separate layer so P1.18
+//    can use it without manually replicating the SDPT loading logic.
+//    Sets the stage for P1.20 (FRA-correct plantations refactor)
+//    which will reroute SDPT class 2 + Descals oil palm out of the
+//    plantations layer entirely.
+//  - **P1.18 must ship before P1.20** -- without it, P1.20's
+//    plantations rebucketing would leave 02c_naturally_regenerating
+//    containing agricultural tree cover (oil palm, rubber). With
+//    P1.18 first, the baseline already excludes that tree cover so
+//    P1.20 just refines what counts as "Planted forest" without
+//    re-introducing agricultural pixels into Naturally regenerating.
 
 // Changes vs v4.3.0 (P1.16 follow-up fixes):
 //  - Naturally regenerating forest layer was stacking on each
@@ -1535,7 +1618,8 @@ function processForestAreaStats(image, name, year, scale, exportToDrive, country
       "Years Protected": years_protected,
       // "Fast Buffer Used": fastBuffer ? "Yes" : "No",
       "Strict IUCN Categories": selected_iucn_categories.join(", "),
-      "Plantations Included": includePlantationsCheckbox.getValue() ? "No" : "Yes"
+      "Plantations Included": includePlantationsCheckbox.getValue() ? "No" : "Yes",
+      "FRA Agriculture Excluded from Forest": excludeAgricultureFromForestCheckbox.getValue() ? "Yes" : "No"
     });
     
     Export.table.toDrive({
@@ -1818,6 +1902,7 @@ var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up (small)',         
 var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up (large)',              value: true,  style: exportChkStyle});
 var exportChk_agriculture     = ui.Checkbox({label: 'Agriculture',                   value: true,  style: exportChkStyle});
 var exportChk_plantations     = ui.Checkbox({label: 'Plantations',                   value: true,  style: exportChkStyle});
+var exportChk_fraAgriculture  = ui.Checkbox({label: 'FRA agriculture (tree-cover subset)', value: false, style: exportChkStyle});
 var exportChk_dem             = ui.Checkbox({label: 'DEM',                           value: true,  style: exportChkStyle});
 var exportChk_slope           = ui.Checkbox({label: 'Slope',                         value: false, style: exportChkStyle});
 var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas (binary image)', value: true,  style: exportChkStyle});
@@ -1832,7 +1917,7 @@ var exportSelectPanel = ui.Panel({
     ui.Label('Select layers to export:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_naturallyRegenerating],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_roads, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations],
+    ui.Panel([exportChk_roads, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations, exportChk_fraAgriculture],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
     ui.Panel([exportChk_dem, exportChk_slope, exportChk_protLegal, exportChk_protVector, exportChk_aoi],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
@@ -2189,20 +2274,31 @@ function exportRastersToDrive() {
     var pastureDatasetSel = pastureDatasetFF.filter(ee.Filter.eq("year", analysisYear)).first().updateMask(country_and_buffer_mask);
     var oilPalmDescalsCollection = timeseriesAnthroModule.processingOilPalmDescals();
     var oilPalmDescalsSel = ee.Image(oilPalmDescalsCollection.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask);
-    var plantationsMosaicStatic = timeseriesAnthroModule.processingPlantationsMosaic().updateMask(country_and_buffer_mask);
-    var allPlantationsSel = plantationsMosaicStatic.unmask().where(oilPalmDescalsSel.eq(1), 1).updateMask(country_and_buffer_mask);
+    // P1.20: Plantations layer = SDPT class 1 only (FRA Planted Forest --
+    // timber/pulp/fibre plantations like eucalyptus, pine, teak). SDPT
+    // class 2 (tree crops -- rubber, fruit, agroforestry) and Descals
+    // oil palm now route through the agriculture aggregation instead,
+    // per FRA: those are agricultural land regardless of tree biology.
+    // Net 04a_primary_forest pixels unchanged (everything is still in
+    // the disturbance bucket), but 02c_plantations export and the
+    // 02d_naturally_regenerating_forest derivation are now FRA-faithful.
+    var plantedForestSDPT = timeseriesAnthroModule.processingPlantedForestSDPT()
+        .updateMask(country_and_buffer_mask);
+    var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
+        .updateMask(country_and_buffer_mask);
+    var allPlantationsSel = plantedForestSDPT;
     if (exportChk_plantations.getValue()) {
-      // Separate plantations export so the QGIS plugin can echo the GEE
-      // "Exclude plantations" logic (forest AND NOT plantations). Enables
-      // full FRA stats cascade (Forest → Nat. regen. forest → Primary forest).
+      // 02c_plantations export = FRA Planted Forest only. Plugin
+      // mirrors this when consumed -- "exclude plantations" =
+      // exclude FRA Planted Forest (timber, pulp, fibre).
       doExport(allPlantationsSel.unmask(0).toByte(),
-        mkExportName('02d', 'plantations_' + analysisYear + '_' + s), folder);
+        mkExportName('02c', 'plantations_' + analysisYear + '_' + s), folder);
     }
-    // P1.16: 02c_naturally_regenerating_forest export. Derived from
-    // the FRA Forest baseline minus plantations -- gives users a
+    // P1.16: 02d_naturally_regenerating_forest export. Derived from
+    // the FRA Forest baseline minus FRA Planted Forest -- gives users a
     // ready-made Naturally Regenerating Forest layer matching the
     // analysis-side forest_natreg_image. Gate is purely on the export
-    // tickbox; we always have allPlantationsSel available here, so the
+    // tickbox; we always have plantedForestSDPT available here, so the
     // user can request the derivation regardless of whether "Exclude
     // plantations" is on in the analysis pane.
     if (exportChk_naturallyRegenerating.getValue()) {
@@ -2211,12 +2307,39 @@ function exportRastersToDrive() {
         .updateMask(country_and_buffer_mask)
         .unmask(0);
       doExport(natRegExport,
-        mkExportName('02c', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('02d', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
+    }
+    // P1.18: FRA-aligned agriculture (tree-cover-meeting subset only)
+    // = Descals oil palm + SDPT class 2 tree crops. Distinct from the
+    // broader 03a_agriculture (cropland + pasture + everything for
+    // primary-forest disturbance buffering). Plugin users can consume
+    // this layer to apply the FRA-strict Forest baseline derivation
+    // when running standalone. Default off -- only export when
+    // explicitly requested.
+    if (exportChk_fraAgriculture.getValue()) {
+      var fraAgriExport = oilPalmDescalsSel.unmask()
+        .or(treeCropsSDPT.unmask())
+        .updateMask(country_and_buffer_mask)
+        .unmask(0)
+        .toByte();
+      doExport(fraAgriExport,
+        mkExportName('03a', 'agriculture_tree_cover_fra_' + analysisYear + '_' + s), folder);
     }
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
     var croplandGladCollectionFF = forwardFillBinaryTimeSeries(croplandGladCollection, years);
     var croplandGladSel = ee.Image(croplandGladCollectionFF.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask);
-    var agriculture = pastureDatasetSel.or(allPlantationsSel.unmask()).or(croplandGladSel);
+    // P1.20: agriculture aggregation now explicitly includes the
+    // tree-cover-meeting agricultural sources (tree crops + oil palm)
+    // since allPlantationsSel no longer carries them. Plus planted
+    // forest stays in the buffering bucket -- for primary-forest
+    // disturbance purposes large managed plantations DO disturb
+    // adjacent natural forest (logging access, edge effects), even
+    // though FRA classifies them as forest.
+    var agriculture = pastureDatasetSel
+                        .or(plantedForestSDPT.unmask())   // SDPT class 1 -- buffered for primary
+                        .or(treeCropsSDPT.unmask())       // SDPT class 2 -- FRA agriculture
+                        .or(oilPalmDescalsSel.unmask())   // Descals oil palm -- FRA agriculture
+                        .or(croplandGladSel);             // GLAD croplands
     if (exportChk_agriculture.getValue()) {
       doExport(agriculture.unmask(0), mkExportName('03a', 'agriculture_' + analysisYear + '_' + s), folder);
     }
@@ -2224,7 +2347,7 @@ function exportRastersToDrive() {
     // ── 4 — Pre-connectivity Forest & Primary Forest (from analysis cache) ──
     if (exportChk_preConnectivity.getValue() && latestPreConnectivityForest[analysisYear]) {
       doExport(latestPreConnectivityForest[analysisYear].unmask(0),
-        mkExportName('04b', 'pre_connectivity_primary_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('03c', 'pre_connectivity_primary_forest_' + analysisYear + '_' + s), folder);
     }
     if (exportChk_final.getValue() && latestMaskedPrimaryForest[analysisYear]) {
       doExport(latestMaskedPrimaryForest[analysisYear].unmask(0),
@@ -2855,6 +2978,24 @@ var includePlantationsCheckbox = ui.Checkbox({
   onChange: function() { markNeedsUpdate(); }
 });
 
+// P1.18: FRA-aligned Forest baseline. When ticked, the Forest layer
+// (02b_forest) is computed as tree_cover MINUS FRA-aligned
+// agricultural tree cover (Descals oil palm + SDPT class 2 tree
+// crops). This is the FRA-strict definition of Forest (land use +
+// biophysical, with agricultural land excluded by definition).
+// Default OFF for backwards-compat with prior runs -- when off, the
+// Forest baseline is closer to "thresholded tree cover" (agricultural
+// tree cover only removed downstream via disturbance buffering).
+// IMPORTANT: this is the *tree-cover-meeting subset* of agriculture
+// only. The broader buffered agriculture (cropland + pasture +
+// everything for primary-forest disturbance) is intentionally NOT
+// FRA-aligned and lives in 03a_agriculture.
+var excludeAgricultureFromForestCheckbox = ui.Checkbox({
+  label: 'Exclude agriculture from Forest baseline (FRA-aligned)',
+  value: true,
+  onChange: function() { markNeedsUpdate(); }
+});
+
 // Function to update which asset inputs are visible based on selected years
 function updateVisibleAssetInputs() {
   var useSplitScreen = enableSplitScreenCheckbox.getValue();
@@ -3065,6 +3206,7 @@ var treeCoverContent = ui.Panel({
     forestAssets.panel,
     ui.Panel({style: {height: '1px', backgroundColor: '#ddd', margin: '6px 0', stretch: 'horizontal'}}),
     includePlantationsCheckbox,
+    excludeAgricultureFromForestCheckbox,
     nationalPlantations.panel
   ],
   style: {shown: false, padding: '8px'}
@@ -3753,6 +3895,7 @@ function resetToDefaults() {
   
   // Reset plantations and custom assets
   includePlantationsCheckbox.setValue(true);
+  excludeAgricultureFromForestCheckbox.setValue(true);  // P1.18 default on (FRA-correct)
   if (treecoverSourceSelect.getValue() === 'Custom Forest') {
     treecoverSourceSelect.setValue('GLAD LULC');
   }
@@ -3909,6 +4052,7 @@ function collectSettings() {
   'Use Agreement Forest': (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)'),
   'Use Combined Extent Forest': (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)'),
     'Exclude Plantations': includePlantationsCheckbox.getValue(),
+    'Exclude Agriculture from Forest (FRA)': excludeAgricultureFromForestCheckbox.getValue(),
     'WDPA Preset': wdpaPresetSelect.getValue(),
     'WDPA Established Before': wdpaYearSlider.getValue(),
     'WDPA Selected Categories': selected_iucn_categories.join(', '),
@@ -4116,6 +4260,12 @@ function applySettings(settings) {
   } else if (settings['Include Plantations'] !== undefined) {
     // Backward compatibility: invert old "Include" to new "Exclude" semantic
     includePlantationsCheckbox.setValue(!settings['Include Plantations']);
+  }
+
+  // P1.18: FRA-aligned Forest baseline toggle
+  if (settings['Exclude Agriculture from Forest (FRA)'] !== undefined) {
+    excludeAgricultureFromForestCheckbox.setValue(
+      settings['Exclude Agriculture from Forest (FRA)']);
   }
 
   if (treecoverSourceSelect.getValue() === 'Custom Forest') {
@@ -4781,10 +4931,21 @@ map2.add(createDisclaimerPanel());
     var pastureDatasetSel = pastureDatasetFF.filter(ee.Filter.eq("year", analysisYear)).first().updateMask(country_and_buffer_mask)
     var oilPalmDescalsCollection = timeseriesAnthroModule.processingOilPalmDescals();
     var oilPalmDescalsSel = ee.Image(oilPalmDescalsCollection.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask)
-    var plantationsMosaicStatic = timeseriesAnthroModule.processingPlantationsMosaic().updateMask(country_and_buffer_mask)
-    var allPlantationsSel = plantationsMosaicStatic.unmask().where(oilPalmDescalsSel.eq(1), 1).updateMask(country_and_buffer_mask)
+    // P1.20: Plantations layer = SDPT class 1 only (FRA Planted Forest --
+    // timber/pulp/fibre). SDPT class 2 + Descals oil palm route through
+    // agriculture instead per FRA. See export-context comment for full
+    // rationale.
+    var plantedForestSDPT = timeseriesAnthroModule.processingPlantedForestSDPT()
+        .updateMask(country_and_buffer_mask);
+    var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
+        .updateMask(country_and_buffer_mask);
+    var allPlantationsSel = plantedForestSDPT;
 
-    // Override plantations with national data if provided
+    // Override plantations with national data if provided. National
+    // plantations layer should also be FRA Planted Forest -- if the
+    // user supplies a national "plantations" raster that includes tree
+    // crops or oil palm, those pixels will be mis-classified as planted
+    // forest by the natreg derivation. Document this in workshop notes.
     if (nationalPlantations.checkbox.getValue()) {
       var natPlantationsAsset = nationalPlantations.getAsset(analysisYear);
       if (natPlantationsAsset) {
@@ -4797,14 +4958,28 @@ map2.add(createDisclaimerPanel());
       }
     }
 
+    // P1.18: FRA-aligned Forest baseline. When ticked, exclude
+    // tree-cover-meeting agricultural land (Descals oil palm + SDPT
+    // class 2 tree crops) from forest_map_clip BEFORE the natreg
+    // derivation. This narrows the Forest baseline (02b) to the
+    // FRA-strict definition: tree cover meeting biophysical
+    // thresholds AND not primarily agricultural land. Default ON
+    // (FRA-correct); when on, 02b_forest area shrinks but
+    // 04a_primary_forest is essentially unchanged (those pixels
+    // were already removed via disturbance buffering toward primary).
+    if (excludeAgricultureFromForestCheckbox.getValue()) {
+      var fraAgriculture = oilPalmDescalsSel.unmask()
+        .or(treeCropsSDPT.unmask());
+      forest_map_clip = forest_map_clip.updateMask(fraAgriculture.not());
+    }
+
     // P1.16: don't overwrite forest_map_clip in-place; compute a
     // parallel forest_natreg_image so both the FRA Forest baseline
-    // (forest_map_clip) and the Natural Forest derivation
-    // (forest_natreg_image) survive for export, map display, and
-    // stats. Downstream tier analysis switches to forest_baseline
-    // (= natreg if available, else forest) so primary forest is
-    // computed from the most-refined available baseline -- matches
-    // the previous behaviour while exposing the intermediate layer.
+    // (forest_map_clip) and the Naturally Regenerating Forest
+    // derivation (forest_natreg_image) survive for export, map
+    // display, and stats. Downstream tier analysis switches to
+    // forest_baseline (= natreg if available, else forest) so primary
+    // forest is computed from the most-refined available baseline.
     var forest_natreg_image = null;
     if (includePlantationsCheckbox.getValue()) {
       forest_natreg_image = forest_map_clip.updateMask(
@@ -4841,7 +5016,20 @@ map2.add(createDisclaimerPanel());
     // var croplandSelLessNoise = croplandSel.convolve(boxcar).gt(agriSmallPixelThreshold).convolve(boxcar).gt(agriSmallPixelThreshold);
     var croplandComb = croplandGladSel //.or(croplandSelLessNoise)// the removing small patches is slow for tihs
 
-    var agriculture = pastureDatasetSel.or(allPlantationsSel.unmask()).or(croplandComb);
+    // P1.20: agriculture aggregation now explicitly includes the
+    // tree-cover-meeting agricultural sources (tree crops + oil palm)
+    // since allPlantationsSel no longer carries them. Plus planted
+    // forest stays in the buffering bucket -- for primary-forest
+    // disturbance purposes large managed plantations DO disturb
+    // adjacent natural forest (logging access, edge effects), even
+    // though FRA classifies them as forest. Net pixel content
+    // unchanged from pre-P1.20: cropland + pasture + tree crops +
+    // oil palm + planted forest.
+    var agriculture = pastureDatasetSel
+                        .or(allPlantationsSel.unmask())   // SDPT class 1 -- planted forest, buffered for primary
+                        .or(treeCropsSDPT.unmask())       // SDPT class 2 -- FRA agriculture
+                        .or(oilPalmDescalsSel.unmask())   // Descals oil palm -- FRA agriculture
+                        .or(croplandComb);                // GLAD croplands
 
     // Override agriculture with national data if provided
     if (nationalAgri.checkbox.getValue()) {

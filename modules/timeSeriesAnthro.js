@@ -777,6 +777,37 @@ function processingPlantationsMosaic(){
     return plantationsMosaicStaticNoDescals;
 }
 
+// Step 2b: Tree Crops only (SDPT class 2). Per FRA, tree crops
+// (rubber, fruit, agroforestry) are agricultural land regardless of
+// tree biology -- they do NOT count as planted forest. P1.18 uses
+// this to exclude tree-cover-meeting agricultural land from the
+// Forest baseline (FRA-aligned Forest = tree cover - agriculture).
+// P1.20 reroutes SDPT class 2 + Descals oil palm out of the
+// plantations layer entirely, leaving 02c_plantations as FRA
+// Planted Forest (SDPT class 1) only. This helper gives consumers
+// a clean Tree Crops layer alongside the new processingPlantedForestSDPT.
+function processingTreeCropsSDPT(){
+    var sdpt = ee.Image("projects/sdpt-v2/assets/sdpt_v2_simpleType_v09032024_public").unmask();
+    return sdpt.eq(2);
+}
+exports.processingTreeCropsSDPT = processingTreeCropsSDPT;
+
+// Step 2c: FRA Planted Forest only (SDPT class 1). P1.20: this is
+// the FRA-faithful "Plantations" layer -- timber / pulp / fibre
+// plantations (eucalyptus, pine, teak). It IS forest per FRA
+// (just planted, not naturally regenerating), so it's the correct
+// subtractor for deriving Naturally Regenerating Forest:
+//   02d_naturally_regenerating_forest = 02b_forest - 02c_plantations
+// Compare with processingPlantationsMosaic() which historically
+// also bundled SDPT class 2 (tree crops) + Descals oil palm --
+// per FRA those are agriculture, not forest, and now route through
+// the disturbance/agriculture aggregation instead.
+function processingPlantedForestSDPT(){
+    var sdpt = ee.Image("projects/sdpt-v2/assets/sdpt_v2_simpleType_v09032024_public").unmask();
+    return sdpt.eq(1);
+}
+exports.processingPlantedForestSDPT = processingPlantedForestSDPT;
+
 exports.processingPlantationsMosaic = processingPlantationsMosaic
 
 // Map.addLayer(processingPlantationsMosaic(),"","processingPlantationsMosaic")
