@@ -125,11 +125,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     ZONE_LAYER = "ZONE_LAYER"
     ZONE_FIELD = "ZONE_FIELD"
     # -- Vectorisation (optional, advanced) --
-    RUN_VECTORIZE = "RUN_VECTORIZE"
+    # Vectorise runs whenever VECTORIZE_PRIMARY or VECTORIZE_FOREST is
+    # ticked; there is no separate enable flag.
     VECTORIZE_PRIMARY = "VECTORIZE_PRIMARY"
     VECTORIZE_FOREST = "VECTORIZE_FOREST"
     VECTORIZE_NEST = "VECTORIZE_NEST"
     VECTORIZE_SIMPLIFY_M = "VECTORIZE_SIMPLIFY_M"
+    VECTORIZE_OUTPUT_AS_SHAPEFILE = "VECTORIZE_OUTPUT_AS_SHAPEFILE"
     # -- Output --
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
@@ -304,7 +306,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "═══════════════════════════════════════════════\n"
             "Polygonise + optional simplify + dissolve. Same pipeline as\n"
             "the standalone 'Vectorize PFF output' tool.\n\n"
-            "06 Validation: Vectorise selected outputs (master toggle)\n"
+            "Stage runs whenever any of the layer ticks below is set.\n\n"
             "06 Validation: Vectorise: primary forest\n"
             "06 Validation: Vectorise: forest input (uses naturally regenerating if\n"
             "    plantations refined)\n"
@@ -365,7 +367,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "      (after Step 04 viability filter -- HEADLINE result)\n"
             "  OUT/[ISO3_]qgis_04e_anthropogenic_mask.tif (intermediate)\n"
             "  OUT/[ISO3_]qgis_05a_area_statistics.csv (if 05 ticked)\n"
-            "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.shp\n"
+            "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.gpkg\n"
             "  OUT/[ISO3_]qgis_06a_primary_forest_vector.gpkg (if 06 ticked)\n"
             "  OUT/[ISO3_]qgis_06b_primary_forest_dissolved.gpkg\n"
             "  OUT/[ISO3_]qgis_06c_<forest>_vector.gpkg (if 06 ticked)\n"
@@ -661,17 +663,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         # ────────────────────────────────────────────────────────────
         # §06 — Validation / Vectorise (advanced)
+        # Vectorise runs whenever primary or forest below is ticked; no
+        # separate enable flag.
         # ────────────────────────────────────────────────────────────
-        _v_run = QgsProcessingParameterBoolean(
-            self.RUN_VECTORIZE,
-            "06 Validation: Vectorise selected outputs (advanced)",
-            defaultValue=False)
-        _v_run.setFlags(_v_run.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(_v_run)
         _v_primary = QgsProcessingParameterBoolean(
             self.VECTORIZE_PRIMARY,
             "06 Validation:     Vectorise: primary forest",
-            defaultValue=True)
+            defaultValue=False)
         _v_primary.setFlags(_v_primary.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_primary)
         _v_forest = QgsProcessingParameterBoolean(
@@ -693,6 +691,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=0.0, minValue=0.0)
         _v_simplify.setFlags(_v_simplify.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_simplify)
+        _v_format = QgsProcessingParameterBoolean(
+            self.VECTORIZE_OUTPUT_AS_SHAPEFILE,
+            "06 Validation:     Output as Shapefile (.shp) instead of "
+            "GeoPackage (.gpkg) -- default OFF (.gpkg recommended; .shp "
+            "limited to 10-char field names + 2GB cap)",
+            defaultValue=False)
+        _v_format.setFlags(_v_format.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_format)
 
         # ────────────────────────────────────────────────────────────
         # Run options (orthogonal to workflow steps)
@@ -827,17 +833,38 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         add_human_influence_layers_to_map = self.parameterAsBool(
             parameters, self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP, context)
 
-        # Vectorise stage params (advanced).
-        run_vectorize = self.parameterAsBool(
-            parameters, self.RUN_VECTORIZE, context)
+        # Vectorise stage params (advanced). The stage runs whenever
+        # either primary or forest is ticked; the previous master enable
+        # tick was redundant and has been removed.
         vectorize_primary = self.parameterAsBool(
             parameters, self.VECTORIZE_PRIMARY, context)
         vectorize_forest = self.parameterAsBool(
             parameters, self.VECTORIZE_FOREST, context)
         vectorize_nest = self.parameterAsBool(
             parameters, self.VECTORIZE_NEST, context)
+        # Nesting is "cut primary out of forest" -- it requires both
+        # primary and forest as inputs. Ticking only nest is otherwise
+        # silently no-op, so auto-enable the two inputs it needs.
+        if vectorize_nest and not (vectorize_primary and vectorize_forest):
+            if not vectorize_primary:
+                feedback.pushInfo(
+                    "Vectorise: 'nest' is ticked -- auto-enabling "
+                    "'primary forest' (required input for nesting).")
+                vectorize_primary = True
+            if not vectorize_forest:
+                feedback.pushInfo(
+                    "Vectorise: 'nest' is ticked -- auto-enabling "
+                    "'forest' (required input for nesting).")
+                vectorize_forest = True
+        run_vectorize = bool(vectorize_primary or vectorize_forest)
         vectorize_simplify_m = self.parameterAsDouble(
             parameters, self.VECTORIZE_SIMPLIFY_M, context)
+        # User-toggleable output format. Default GPKG; ESRI Shapefile
+        # available for legacy / CEO workflows that require .shp.
+        _vec_as_shp = self.parameterAsBool(
+            parameters, self.VECTORIZE_OUTPUT_AS_SHAPEFILE, context)
+        vec_ext = "shp" if _vec_as_shp else "gpkg"
+        vec_format = "ESRI Shapefile" if _vec_as_shp else "GPKG"
 
         # Read individual distances even when single-mode is on, so we can
         # warn the user if they've customised them but ticked the single-mode
@@ -878,6 +905,33 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             thresholds = {k: single_dist for k in individual_thresholds}
         else:
             thresholds = individual_thresholds
+
+        # Warn upfront if any active buffer distance exceeds MAX_DISTANCE.
+        # Distance computation (gdal_proximity) is capped at MAX_DISTANCE
+        # for speed; pixels beyond it report nodata. If a buffer threshold
+        # is larger than the cap, all pixels at that range get treated as
+        # "outside buffer" (i.e. forest preserved when it should be
+        # removed) -- silent wrong-result bug. Better to flag now and ask
+        # the user to bump MAX_DISTANCE in the advanced parameters.
+        _exceeded = []
+        for _name, _dist in thresholds.items():
+            if not enable_buffers.get(_name, True):
+                continue
+            if _dist > max_dist:
+                _exceeded.append(f"{_name}={_dist:g} m")
+        if _exceeded:
+            from qgis.core import QgsProcessingException
+            raise QgsProcessingException(
+                "Buffer distance(s) exceed Maximum Distance "
+                f"({max_dist:g} m): " + ", ".join(_exceeded) + ". "
+                "Distance computation is capped at MAX_DISTANCE for speed; "
+                "pixels beyond it report nodata, so any buffer threshold "
+                "larger than the cap silently produces wrong results. "
+                "Fix: open the advanced parameters and increase "
+                "'00 Country: Maximum distance to compute (m, advanced)' "
+                "to at least the largest buffer distance + ~100 m headroom. "
+                "(Then re-run.)"
+            )
 
         # Prominent log block so the user always sees which distances were
         # actually applied — mitigates the "I forgot the single-distance
@@ -1031,7 +1085,28 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             _likely_outputs.append(_out("03d", "combined_coded_raster"))
         if _run_zonal:
             _likely_outputs.append(_out("05a", "area_statistics", ext="csv"))
-            _likely_outputs.append(_out("05b", "area_statistics_by_zone", ext="shp"))
+            _likely_outputs.append(_out("05b", "area_statistics_by_zone", ext="gpkg"))
+        # Vectorise outputs (06a/b/c/d). Forest-vector basename depends
+        # on whether nat reg derivation runs (chosen later in workflow);
+        # check both candidate names since either may exist from a
+        # previous run. Non-existent files are silently skipped by the
+        # lock check loop below.
+        if run_vectorize:
+            if vectorize_primary:
+                _likely_outputs.append(_out("06a", "primary_forest_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06b", "primary_forest_dissolved", ext=vec_ext))
+            if vectorize_forest:
+                # Six candidate filenames -- non-nested (forest|nat-reg) and
+                # nested (with_primary_nested) variants. Only the relevant
+                # ones get produced this run; non-existent files skip.
+                _likely_outputs.append(_out("06c", "forest_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06d", "forest_dissolved", ext=vec_ext))
+                _likely_outputs.append(_out("06c", "naturally_regenerating_forest_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06d", "naturally_regenerating_forest_dissolved", ext=vec_ext))
+                _likely_outputs.append(_out("06c", "forest_with_primary_nested_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06d", "forest_with_primary_nested_dissolved", ext=vec_ext))
+                _likely_outputs.append(_out("06c", "naturally_regenerating_forest_with_primary_nested_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06d", "naturally_regenerating_forest_with_primary_nested_dissolved", ext=vec_ext))
 
         _locked = []
         for _p in _likely_outputs:
@@ -2102,11 +2177,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 zonal_csv = _out("05a", "area_statistics", ext="csv")
                 write_zonal_csv(results, totals, zonal_csv, feedback)
 
-            # Join to vector (if zones provided)
+            # Join to vector (if zones provided). Final OUTPUT 05b is
+            # .gpkg (avoids shapefile field-name truncation + 2GB cap),
+            # but the zone_with_id intermediate stays .shp because
+            # zonal_statistics.py creates it upstream as .shp on
+            # purpose (avoids gpkg FID uniqueness issues with GEE-
+            # exported country boundaries that have duplicate FIDs).
+            # native:reprojectlayer in join_stats_to_vector will convert
+            # the .shp intermediate to .gpkg by extension on output.
             if results and zone_path:
                 zone_with_id = os.path.join(
                     zonal_work, "zones_with_id.shp")
-                zonal_vec = _out("05b", "area_statistics_by_zone", ext="shp")
+                zonal_vec = _out("05b", "area_statistics_by_zone", ext="gpkg")
                 join_stats_to_vector(
                     results, zone_with_id, zonal_vec,
                     target_crs_str, context, feedback)
@@ -2136,7 +2218,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             vector_scratch = ensure_dir(
                 os.path.join(intermediates_dir, "_vectorize"))
 
-            def _do_polygonise(src_raster_path, step, layer_name):
+            def _do_polygonise(src_raster_path, step, layer_name,
+                               target_path=None):
                 """Mask + polygonise + optional simplify. Returns polys path.
 
                 Args:
@@ -2145,8 +2228,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     layer_name: snake-case descriptor without _vector
                                 suffix or extension (e.g. 'primary_forest').
                                 The function appends '_vector' and '.gpkg'.
+                    target_path: optional override for the output path.
+                                When set, polygonise writes here instead of
+                                the canonical _out(step, ...) location. Used
+                                by nesting flow to write to scratch first
+                                then diff into the canonical file.
                 """
-                polys_path = _out(step, f"{layer_name}_vector", ext="gpkg")
+                polys_path = (target_path if target_path is not None
+                              else _out(step, f"{layer_name}_vector", ext=vec_ext))
                 # Build mask raster with nodata=0 so polygonize skips
                 # background efficiently. Source rasters are already
                 # binary 0/1, so the mask is just (arr == 1).
@@ -2170,7 +2259,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                                       gdal.GDT_Byte,
                                       ["COMPRESS=LZW", "TILED=YES"])
                 _ds_o.SetGeoTransform(_v_gt)
-                _ds_o.SetProjection(_v_proj)
+                # Defensive: if source raster has empty/missing CRS,
+                # fall back to the target_crs_str so polygonize doesn't
+                # produce pixel-coordinate polygons. (Pixel-coord polys
+                # would render at lat/long 0 with target-CRS metadata
+                # stamped -- the "polygons in wrong place" bug.)
+                if _v_proj:
+                    _ds_o.SetProjection(_v_proj)
+                else:
+                    from qgis.core import QgsCoordinateReferenceSystem
+                    _fallback_crs = QgsCoordinateReferenceSystem(target_crs_str)
+                    _ds_o.SetProjection(_fallback_crs.toWkt())
+                    feedback.pushWarning(
+                        f"  Source raster for {layer_name} had no CRS; "
+                        f"using target {target_crs_str} as fallback.")
                 _ob = _ds_o.GetRasterBand(1)
                 _ob.WriteArray(_v_mask)
                 _ob.SetNoDataValue(0)
@@ -2178,11 +2280,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_o = None
                 del _v_arr, _v_mask
 
-                if vectorize_simplify_m > 0:
-                    polys_tmp = os.path.join(
-                        vector_scratch, f"{layer_name}_polys_raw.gpkg")
-                else:
-                    polys_tmp = polys_path
+                # Always polygonise to scratch first, then pass through
+                # gdal.VectorTranslate to canonical with explicit
+                # -a_srs (and optional -simplify). Uniform path means
+                # canonical always has CRS metadata stamped, regardless
+                # of simplify=0 vs >0. Avoids "polygons in wrong place"
+                # bug when polygonize output lacks CRS metadata.
+                polys_tmp = os.path.join(
+                    vector_scratch, f"{layer_name}_polys_raw.gpkg")
 
                 feedback.pushInfo(
                     f"  Polygonising {layer_name} (gdal:polygonize, "
@@ -2196,20 +2301,39 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     "OUTPUT": polys_tmp,
                 }, context=context, feedback=feedback)
 
+                # Always pass through ogr2ogr to set -a_srs explicitly.
+                # If simplify is on, fold it into the same pass.
                 if vectorize_simplify_m > 0:
                     feedback.pushInfo(
-                        f"  Simplifying {layer_name} (Douglas-Peucker, "
-                        f"tolerance={vectorize_simplify_m:g} m)...")
+                        f"  Simplifying {layer_name} (ogr2ogr "
+                        f"-simplify, tolerance={vectorize_simplify_m:g} m)...")
                     feedback.pushWarning(
                         "Simplify can introduce geometry artefacts; "
                         "reduce tolerance if downstream tools throw "
                         "errors.")
-                    run_processing("native:simplifygeometries", {
-                        "INPUT": polys_tmp,
-                        "METHOD": 0,
-                        "TOLERANCE": vectorize_simplify_m,
-                        "OUTPUT": polys_path,
-                    }, context=context, feedback=feedback)
+                    _vt_options = [
+                        '-simplify', str(vectorize_simplify_m),
+                        '-a_srs', target_crs_str,
+                    ]
+                else:
+                    feedback.pushInfo(
+                        f"  Stamping {layer_name} with target CRS "
+                        f"({target_crs_str})...")
+                    _vt_options = ['-a_srs', target_crs_str]
+                if os.path.exists(polys_path):
+                    try:
+                        os.remove(polys_path)
+                    except OSError as e:
+                        raise RuntimeError(
+                            f"Cannot overwrite '{os.path.basename(polys_path)}' "
+                            "before final write. If it's open in QGIS, remove "
+                            f"the layer from the Layers panel and retry. "
+                            f"(original: {e})")
+                gdal.VectorTranslate(
+                    polys_path, polys_tmp,
+                    format=vec_format,
+                    options=_vt_options,
+                )
 
                 return polys_path
 
@@ -2229,8 +2353,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # produced one, else the AOI-clipped forest input. Naming
             # carries to the output filenames so the user can tell
             # which they got.
+            #
+            # When nesting is enabled, polygonise to scratch first so
+            # the canonical 06c file is the OUTPUT of the difference
+            # operation (no os.replace needed -- avoids Windows file-
+            # lock issues when QGIS holds the just-polygonised vector
+            # open after native:difference reads it).
             forest_polys_path = None
             forest_name_base = None
+            _nest_active = (vectorize_nest and vectorize_primary
+                            and vectorize_forest)
             if vectorize_forest:
                 if forest_natreg_path is not None:
                     forest_src_path = forest_natreg_path
@@ -2238,8 +2370,32 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 else:
                     forest_src_path = prepared_forest_path
                     forest_name_base = "forest"
-                forest_polys_path = _do_polygonise(
-                    forest_src_path, "06c", forest_name_base)
+
+                # Filename differs in nest mode -- the nested output is
+                # a single file containing BOTH primary (level 2) and
+                # surrounding nat reg (level 1), so it gets a "_with_
+                # primary_nested" suffix so users can tell at a glance.
+                if _nest_active:
+                    _canonical_forest_polys = _out(
+                        "06c",
+                        f"{forest_name_base}_with_primary_nested_vector",
+                        ext=vec_ext)
+                else:
+                    _canonical_forest_polys = _out(
+                        "06c", f"{forest_name_base}_vector", ext=vec_ext)
+
+                if _nest_active:
+                    # Polygonise to scratch; nesting step writes the
+                    # final 06c via merge output below.
+                    _scratch_forest_polys = os.path.join(
+                        vector_scratch,
+                        f"{forest_name_base}_full.gpkg")
+                    forest_polys_path = _do_polygonise(
+                        forest_src_path, "06c", forest_name_base,
+                        target_path=_scratch_forest_polys)
+                else:
+                    forest_polys_path = _do_polygonise(
+                        forest_src_path, "06c", forest_name_base)
 
             if feedback.isCanceled():
                 from qgis.core import QgsProcessingException
@@ -2254,33 +2410,112 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # sampling layout (sample primary plots + non-primary
             # plots independently with no double-counting).
             if vectorize_nest:
-                if vectorize_primary and vectorize_forest:
+                if _nest_active:
                     feedback.pushInfo(
-                        f"  Nesting: cutting primary_forest out of "
-                        f"{forest_name_base} so the two layers don't "
-                        "overlap (CEO stratification)...")
-                    _diff_tmp = os.path.join(
+                        f"  Nesting (coded-raster path): building "
+                        f"2-level coded raster (1={forest_name_base} "
+                        "outside primary, 2=primary) and polygonising "
+                        "in one pass -- avoids slow vector difference.")
+                    # Build a 2-level coded raster from the nat-reg
+                    # baseline + primary forest. Polygonising this in
+                    # one pass produces a single vector with a 'level'
+                    # attribute (1 or 2) that perfectly tiles nat reg
+                    # without overlap. Much faster than the previous
+                    # polygonise + native:difference + fieldcalculator
+                    # + mergevectorlayers chain, and geometrically
+                    # cleaner (no slivers from vector subtraction).
+                    _nat_reg_src = forest_src_path  # set above (natreg or forest)
+                    _ds_n = gdal.Open(_nat_reg_src, gdal.GA_ReadOnly)
+                    _n_arr = _ds_n.GetRasterBand(1).ReadAsArray()
+                    _n_gt = _ds_n.GetGeoTransform()
+                    _n_proj = _ds_n.GetProjection()
+                    _n_xsz = _ds_n.RasterXSize
+                    _n_ysz = _ds_n.RasterYSize
+                    _ds_n = None
+                    _ds_p = gdal.Open(final_path, gdal.GA_ReadOnly)
+                    _p_arr = _ds_p.GetRasterBand(1).ReadAsArray()
+                    _ds_p = None
+                    # 2 = primary, 1 = nat reg outside primary, 0 = none
+                    _nested_arr = np.where(
+                        _p_arr == 1, 2,
+                        np.where(_n_arr == 1, 1, 0)).astype(np.uint8)
+                    del _n_arr, _p_arr
+                    _nested_tif = os.path.join(
                         vector_scratch,
-                        f"{forest_name_base}_minus_primary.gpkg")
-                    if os.path.exists(_diff_tmp):
+                        f"{forest_name_base}_with_primary_nested_coded.tif")
+                    if os.path.exists(_nested_tif):
                         try:
-                            os.remove(_diff_tmp)
+                            os.remove(_nested_tif)
                         except OSError:
                             pass
-                    run_processing("native:difference", {
-                        "INPUT": forest_polys_path,
-                        "OVERLAY": primary_polys_path,
-                        "OUTPUT": _diff_tmp,
+                    _drv_v = gdal.GetDriverByName("GTiff")
+                    _ds_n_out = _drv_v.Create(
+                        _nested_tif, _n_xsz, _n_ysz, 1,
+                        gdal.GDT_Byte,
+                        ["COMPRESS=LZW", "TILED=YES"])
+                    _ds_n_out.SetGeoTransform(_n_gt)
+                    if _n_proj:
+                        _ds_n_out.SetProjection(_n_proj)
+                    else:
+                        from qgis.core import QgsCoordinateReferenceSystem
+                        _ds_n_out.SetProjection(
+                            QgsCoordinateReferenceSystem(target_crs_str).toWkt())
+                    _b_n = _ds_n_out.GetRasterBand(1)
+                    _b_n.WriteArray(_nested_arr)
+                    _b_n.SetNoDataValue(0)
+                    _b_n.FlushCache()
+                    _ds_n_out = None
+                    del _nested_arr
+                    # Pre-flight check covered the canonical path; if
+                    # locked we would have failed at run start.
+                    if os.path.exists(_canonical_forest_polys):
+                        try:
+                            os.remove(_canonical_forest_polys)
+                        except OSError as e:
+                            raise RuntimeError(
+                                f"Cannot remove existing "
+                                f"'{os.path.basename(_canonical_forest_polys)}' "
+                                "during nesting. If it's open in QGIS, "
+                                "remove the layer from the Layers panel "
+                                f"and retry. (original: {e})")
+                    # Polygonise to scratch always; final pass through
+                    # ogr2ogr applies -a_srs (and optional -simplify).
+                    # Uniform CRS handling regardless of simplify state.
+                    _nested_polys_raw = os.path.join(
+                        vector_scratch,
+                        f"{forest_name_base}_with_primary_nested_polys_raw.gpkg")
+                    feedback.pushInfo(
+                        "  Polygonising nested coded raster...")
+                    run_processing("gdal:polygonize", {
+                        "INPUT": _nested_tif,
+                        "BAND": 1,
+                        "FIELD": "level",
+                        "EIGHT_CONNECTEDNESS": False,
+                        "EXTRA": "",
+                        "OUTPUT": _nested_polys_raw,
                     }, context=context, feedback=feedback)
-                    # Replace forest polygons with the differenced
-                    # version. .gpkg can't be overwritten in-place, so
-                    # delete + rename.
-                    if os.path.exists(forest_polys_path):
-                        try:
-                            os.remove(forest_polys_path)
-                        except OSError:
-                            pass
-                    os.rename(_diff_tmp, forest_polys_path)
+                    if vectorize_simplify_m > 0:
+                        feedback.pushInfo(
+                            f"  Simplifying nested polygons (ogr2ogr "
+                            f"-simplify, tolerance="
+                            f"{vectorize_simplify_m:g} m)...")
+                        _nest_vt_options = [
+                            '-simplify', str(vectorize_simplify_m),
+                            '-a_srs', target_crs_str,
+                        ]
+                    else:
+                        feedback.pushInfo(
+                            f"  Stamping nested polygons with target "
+                            f"CRS ({target_crs_str})...")
+                        _nest_vt_options = ['-a_srs', target_crs_str]
+                    gdal.VectorTranslate(
+                        _canonical_forest_polys, _nested_polys_raw,
+                        format=vec_format,
+                        options=_nest_vt_options,
+                    )
+                    # Update so downstream code (auto-load, metadata,
+                    # dissolve) references the canonical nested file.
+                    forest_polys_path = _canonical_forest_polys
                 else:
                     feedback.pushWarning(
                         "Vectorise nesting is on but only one of "
@@ -2297,7 +2532,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # output reflects the final (possibly differenced) geometry.
             if vectorize_primary:
                 _primary_dissolved = _out(
-                    "06b", "primary_forest_dissolved", ext="gpkg")
+                    "06b", "primary_forest_dissolved", ext=vec_ext)
                 feedback.pushInfo(
                     "  Dissolving primary_forest to multipart...")
                 run_processing("native:dissolve", {
@@ -2307,15 +2542,86 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 }, context=context, feedback=feedback)
 
             if vectorize_forest:
-                _forest_dissolved = _out(
-                    "06d", f"{forest_name_base}_dissolved", ext="gpkg")
-                feedback.pushInfo(
-                    f"  Dissolving {forest_name_base} to multipart...")
-                run_processing("native:dissolve", {
-                    "INPUT": forest_polys_path,
-                    "FIELD": [],
-                    "OUTPUT": _forest_dissolved,
-                }, context=context, feedback=feedback)
+                # In nest mode, dissolve BY level so the output has
+                # two multipart features (one for level=1 / outside-
+                # primary nat reg, one for level=2 / primary). Filename
+                # uses the same "_with_primary_nested" suffix as 06c.
+                if _nest_active:
+                    _forest_dissolved = _out(
+                        "06d",
+                        f"{forest_name_base}_with_primary_nested_dissolved",
+                        ext=vec_ext)
+                    feedback.pushInfo(
+                        f"  Dissolving {forest_name_base} (nested, by "
+                        "level) to multipart...")
+                    run_processing("native:dissolve", {
+                        "INPUT": forest_polys_path,
+                        "FIELD": ["level"],
+                        "OUTPUT": _forest_dissolved,
+                    }, context=context, feedback=feedback)
+                else:
+                    _forest_dissolved = _out(
+                        "06d", f"{forest_name_base}_dissolved", ext=vec_ext)
+                    feedback.pushInfo(
+                        f"  Dissolving {forest_name_base} to multipart...")
+                    run_processing("native:dissolve", {
+                        "INPUT": forest_polys_path,
+                        "FIELD": [],
+                        "OUTPUT": _forest_dissolved,
+                    }, context=context, feedback=feedback)
+
+            # Defensive CRS stamp: gdal:polygonize occasionally writes
+            # vector outputs without proper CRS metadata even when the
+            # source raster has it (intermittent on Windows + some
+            # QGIS / GDAL combos). Two paths:
+            #   - Shapefile: write the .prj sidecar directly with the
+            #     target WKT. No temp file, no rename -- avoids both
+            #     the .gpkg-to-.shp format mismatch and the OneDrive
+            #     file-lock window during atomic replace.
+            #   - GPKG / other single-file: VectorTranslate to a temp
+            #     in the same format, then atomic os.replace.
+            def _stamp_crs(path):
+                if not os.path.exists(path):
+                    return
+                if vec_ext == "shp":
+                    try:
+                        from osgeo import osr
+                        _srs = osr.SpatialReference()
+                        _srs.SetFromUserInput(target_crs_str)
+                        _prj = os.path.splitext(path)[0] + ".prj"
+                        with open(_prj, "w") as _f:
+                            _f.write(_srs.ExportToWkt())
+                    except Exception as _e:
+                        feedback.pushWarning(
+                            f"  CRS stamp failed for {os.path.basename(path)}: "
+                            f"{_e}. File may load without CRS.")
+                    return
+                _tmp = path + ".__crsfix__." + vec_ext
+                try:
+                    gdal.VectorTranslate(
+                        _tmp, path, format=vec_format,
+                        options=['-a_srs', target_crs_str])
+                    os.replace(_tmp, path)
+                except Exception as _e:
+                    feedback.pushWarning(
+                        f"  CRS stamp failed for {os.path.basename(path)}: "
+                        f"{_e}. File may load without CRS.")
+                    if os.path.exists(_tmp):
+                        try:
+                            os.remove(_tmp)
+                        except OSError:
+                            pass
+
+            # CRS stamp uses the actual produced paths -- _forest_dissolved
+            # was set above (with or without _with_primary_nested suffix).
+            for _vec in [
+                primary_polys_path,
+                _out("06b", "primary_forest_dissolved", ext=vec_ext) if vectorize_primary else None,
+                forest_polys_path,
+                _forest_dissolved if vectorize_forest else None,
+            ]:
+                if _vec:
+                    _stamp_crs(_vec)
 
         # ================================================================
         #  Write run metadata
@@ -2420,6 +2726,32 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _layers_to_load.append(
                     ("Pre-connectivity forest", candidate_path))
             _layers_to_load.append(("Primary forest", final_path))
+            # Vectorise outputs auto-load when produced. Includes both
+            # _vector and _dissolved variants. Loaded ABOVE primary so
+            # the user sees the polygon outputs as the topmost layers
+            # (CEO sampling boundary on top makes most sense).
+            if run_vectorize:
+                if vectorize_forest and forest_polys_path is not None and os.path.exists(forest_polys_path):
+                    _label = ("Forest with primary nested (06c)"
+                              if _nest_active else "Forest polygons (06c)")
+                    _layers_to_load.append((_label, forest_polys_path))
+                if vectorize_forest and '_forest_dissolved' in dir():
+                    if os.path.exists(_forest_dissolved):
+                        _diss_label = (
+                            "Forest with primary nested, dissolved (06d)"
+                            if _nest_active
+                            else "Forest dissolved (06d)")
+                        _layers_to_load.append(
+                            (_diss_label, _forest_dissolved))
+                if vectorize_primary and primary_polys_path is not None and os.path.exists(primary_polys_path):
+                    _layers_to_load.append(
+                        ("Primary forest polygons (06a)", primary_polys_path))
+                if vectorize_primary:
+                    _primary_dissolved_path = _out(
+                        "06b", "primary_forest_dissolved", ext=vec_ext)
+                    if os.path.exists(_primary_dissolved_path):
+                        _layers_to_load.append(
+                            ("Primary forest dissolved (06b)", _primary_dissolved_path))
 
         # P0.14: optional human-influence + buffer layers. Default OFF
         # (matches GEE master toggle). Adds the prepared anthro inputs +

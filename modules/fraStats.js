@@ -439,18 +439,22 @@ exports.formatFRA = function(countryName, year) {
   if (d.forestArea === null && d.primaryForest === null && d.naturalForest === null) {
     return "FRA 2025 (" + year + "): not reported";
   }
+  // Be explicit per-category when data is missing -- gives the user a
+  // clear signal that the value isn't simply 0 but unreported. The FRA
+  // 'naturalForest' field corresponds to "Naturally regenerating
+  // forest" per FRA terminology (Forest = Naturally regenerating +
+  // Planted, mutually exclusive; Primary is a subset of Naturally
+  // regenerating). Calling it just "natural" was ambiguous.
   var parts = [];
-  if (d.forestArea !== null) {
-    parts.push(d.forestArea.toLocaleString() + " kha forest");
-  }
-  if (d.naturalForest !== null) {
-    parts.push(d.naturalForest.toLocaleString() + " kha natural");
-  }
-  if (d.primaryForest !== null) {
-    parts.push(d.primaryForest.toLocaleString() + " kha primary");
-  } else {
-    parts.push("primary: not reported");
-  }
+  parts.push(d.forestArea !== null
+    ? d.forestArea.toLocaleString() + " kha forest"
+    : "forest: not reported");
+  parts.push(d.naturalForest !== null
+    ? d.naturalForest.toLocaleString() + " kha naturally regenerating"
+    : "naturally regenerating: not reported");
+  parts.push(d.primaryForest !== null
+    ? d.primaryForest.toLocaleString() + " kha primary"
+    : "primary: not reported");
   return "FRA 2025 (" + year + "): " + parts.join(", ");
 };
 
