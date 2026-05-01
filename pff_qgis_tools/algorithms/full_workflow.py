@@ -458,9 +458,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.EXCLUDE_AGRICULTURE_FROM_FOREST,
-            "02 Tree Cover: Exclude plantations (e.g. oil palm, fruit, "
-            "agroforestry) -- requires Plantations raster above; no-op "
-            "when none supplied. Default ON for FRA-faithful output.",
+            "02 Tree Cover: Refine to forest (exclude plantations: e.g. "
+            "oil palm, fruit, agroforestry) -- requires Plantations raster "
+            "above; no-op when none supplied. Default ON for FRA-faithful "
+            "output.",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.PLANTATIONS_RASTER,
@@ -473,10 +474,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.EXCLUDE_PLANTATIONS,
-            "02 Tree Cover: Exclude planted forest (e.g. eucalyptus, "
-            "pine, teak -- timber/pulp/fibre) -- requires Planted forest "
-            "raster above. Derives 02d_naturally_regenerating_forest = "
-            "02b_forest - 02c_planted_forest.",
+            "02 Tree Cover: Refine to naturally regenerating forest "
+            "(exclude planted forest: e.g. eucalyptus, pine, teak -- "
+            "timber/pulp/fibre) -- requires Planted forest raster above. "
+            "Derives 02d_naturally_regenerating_forest = 02b_forest - "
+            "02c_planted_forest.",
             defaultValue=True))
 
         # ────────────────────────────────────────────────────────────
@@ -731,7 +733,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.6"
+    PFF_VERSION = "0.9.7"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")

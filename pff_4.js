@@ -1,5 +1,5 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.9.0";
+var PFF_SCRIPT_VERSION = "4.10.0";
 
 // Changes vs v4.8.4 (P1.23 -- Custom forest section + input declaration):
 //  - "Custom Forest" pulled out of the Source dropdown into its own
@@ -1934,8 +1934,8 @@ function processForestAreaStats(image, name, year, scale, exportToDrive, country
       "Strict IUCN Categories": selected_iucn_categories.join(", "),
       // P1.23: report what was *effectively* applied (exclusionActive)
       // so the metadata reflects the analysis run, not stale UI state.
-      "Plantations Included": exclusionActive(includePlantationsCheckbox) ? "No" : "Yes",
-      "FRA Agriculture Excluded from Forest": exclusionActive(excludeAgricultureFromForestCheckbox) ? "Yes" : "No",
+      "Plantations Included": exclusionActive(includePlantationsCheckbox, includePlantationsPanel) ? "No" : "Yes",
+      "FRA Agriculture Excluded from Forest": exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel) ? "Yes" : "No",
       "Input Category (declared)": inputCategorySelect.getValue(),
       "Custom Forest Asset Active": nationalForest.checkbox.getValue() ? "Yes" : "No",
       "Custom Forest Merge Mode": nationalForest.checkbox.getValue() ? nationalForest.modeSelect.getValue() : ""
@@ -2007,8 +2007,8 @@ var showStatsButton = ui.Button({
       //   declared "Naturally regen": NRF, Primary
       //   declared "Primary":         Primary
       var declCat = inputCategorySelect.getValue();
-      var olwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox);
-      var plantedApplied = exclusionActive(includePlantationsCheckbox);
+      var olwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+      var plantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
       var showTreeCoverRow = (declCat === INPUT_CATEGORY_ALL);
       // Forest is distinct only when OLWTC was applied (declared ALL)
       // or when input IS forest (declared Forest).
@@ -2209,8 +2209,8 @@ var exportStatsButton = ui.Button({
     // P1.23a: same redundant-row rules as the on-the-fly stats panel
     // so the exported CSV matches what's displayed.
     var exportDeclCat = inputCategorySelect.getValue();
-    var exportOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox);
-    var exportPlantedApplied = exclusionActive(includePlantationsCheckbox);
+    var exportOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+    var exportPlantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
     var exportShowTreeCover = (exportDeclCat === INPUT_CATEGORY_ALL);
     var exportShowForest = (exportDeclCat === INPUT_CATEGORY_ALL && exportOlwtcApplied) ||
                            (exportDeclCat === INPUT_CATEGORY_FOREST);
@@ -3353,11 +3353,10 @@ var treecoverHeightPanel = ui.Panel({
 var treecoverSourceSelect = ui.Select({
   items: ['Hansen GFC', 'GLAD LULC', 'Agreement (Hansen & GLAD)', 'Combined extent (Hansen | GLAD)'],
   value: 'GLAD LULC',
-  onChange: function(value) {
-    var isHansen = (value === 'Hansen GFC');
-    var isGlad   = (value === 'GLAD LULC');
-    treecoverPanel.style().set('shown', isHansen || !isGlad);
-    treecoverHeightPanel.style().set('shown', isGlad || !isHansen);
+  onChange: function() {
+    // P1.24: visibility branching (source -> threshold panels, plus
+    // hide-on-Replace-global) is owned by updateGlobalForestInputsVisibility().
+    updateGlobalForestInputsVisibility();
     markNeedsUpdate();
   }
 });
@@ -3375,16 +3374,38 @@ var treecoverSourceSelect = ui.Select({
 // agroforestry) per FRA Note 10. "Planted forest" means timber/pulp/
 // fibre plantations (eucalyptus, pine, teak) per FRA Note 7.
 // (Rubber is country-dependent in FRA reporting -- see About panel.)
+// P1.24: outcome-framed labels with examples as italic sub-hint.
+// Wrappers (excludeAgriPanel / includePlantationsPanel) are what
+// updateInputCategoryVisibility() hides; analysis sites read the
+// wrapper visibility via exclusionActive(checkbox, wrapper).
 var excludeAgricultureFromForestCheckbox = ui.Checkbox({
-  label: 'Exclude plantations (e.g. oil palm, fruit, agroforestry)',
+  label: 'Refine to forest (exclude plantations)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
 });
+var excludeAgriHint = ui.Label(
+  'e.g. oil palm, fruit, agroforestry',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 4px 22px'}
+);
+var excludeAgriPanel = ui.Panel({
+  widgets: [excludeAgricultureFromForestCheckbox, excludeAgriHint],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {margin: '0'}
+});
 
 var includePlantationsCheckbox = ui.Checkbox({
-  label: 'Exclude planted forest (e.g. eucalyptus, pine, teak — timber/pulp/fibre)',
+  label: 'Refine to naturally regenerating forest (exclude planted forest)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
+});
+var includePlantationsHint = ui.Label(
+  'e.g. eucalyptus, pine, teak — timber/pulp/fibre',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 4px 22px'}
+);
+var includePlantationsPanel = ui.Panel({
+  widgets: [includePlantationsCheckbox, includePlantationsHint],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {margin: '0'}
 });
 
 // Function to update which asset inputs are visible based on selected years
@@ -3648,8 +3669,10 @@ function updateInputCategoryVisibility() {
   var showOlwtc   = (v === INPUT_CATEGORY_ALL);
   var showPlanted = showOlwtc || (v === INPUT_CATEGORY_FOREST);
 
-  excludeAgricultureFromForestCheckbox.style().set('shown', showOlwtc);
-  includePlantationsCheckbox.style().set('shown', showPlanted);
+  // P1.24: hide wrapper panels (checkbox + italic hint) together,
+  // not the bare checkboxes -- otherwise the hint orphans below.
+  excludeAgriPanel.style().set('shown', showOlwtc);
+  includePlantationsPanel.style().set('shown', showPlanted);
   nationalPlantations.setShown(showOlwtc || showPlanted);
 }
 
@@ -3663,8 +3686,12 @@ updateInputCategoryVisibility();
 // Helper: a hidden exclusion checkbox should never apply, even if its
 // underlying value is still `true`. Used at every analysis branch
 // that reads excludeAgricultureFromForestCheckbox / includePlantationsCheckbox.
-function exclusionActive(checkbox) {
-  return checkbox.style().get('shown') !== false && checkbox.getValue();
+// P1.24: now accepts an optional wrapper panel -- visibility is toggled
+// on the wrapper (so checkbox + hint label hide together), so we must
+// read the wrapper's shown state, not the bare checkbox.
+function exclusionActive(checkbox, wrapper) {
+  var visTarget = wrapper || checkbox;
+  return visTarget.style().get('shown') !== false && checkbox.getValue();
 }
 
 // =============================================================================
@@ -3712,23 +3739,84 @@ var datesPanelCollapsible = ui.Panel({
 //   5. Divider
 //   6. Conditional exclusion toggles (OLWTC, planted forest) and the
 //      Custom exclusion data section.
+// P1.24: bound to a variable so updateGlobalForestInputsVisibility()
+// can hide the whole row (label + dropdown) when custom forest is in
+// 'Replace global' mode.
+var treecoverSourceRow = createCompactRow('Source:', treecoverSourceSelect);
+
+// P1.24: status note that appears in the gap left by the hidden global
+// controls when custom forest replaces them. Default hidden.
+var globalSourceHiddenNote = ui.Label(
+  'Global tree-cover source not in use — custom forest replaces it.',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic',
+   margin: '4px 0 4px 4px', shown: false}
+);
+
 var treeCoverContent = ui.Panel({
   widgets: [
     ui.Label('Define Tree Cover:', {fontWeight: 'bold', margin: '0 0 4px 0'}),
-    createCompactRow('Source:', treecoverSourceSelect),
+    treecoverSourceRow,
     treecoverPanel,
     treecoverHeightPanel,
     nationalForest.panel,
+    globalSourceHiddenNote,
     inputCategoryRow,
     ui.Panel({style: {height: '1px', backgroundColor: '#ddd', margin: '6px 0', stretch: 'horizontal'}}),
     // FRA-aligned exclusion order: plantations (agri tree crops) first,
     // then planted forest (timber). See FRA notes in About panel.
-    excludeAgricultureFromForestCheckbox,
-    includePlantationsCheckbox,
+    // P1.24: wrappers carry the checkbox + italic example hint together.
+    excludeAgriPanel,
+    includePlantationsPanel,
     nationalPlantations.panel
   ],
   style: {shown: false, padding: '8px'}
 });
+
+// =============================================================================
+// P1.24: GLOBAL FOREST INPUTS VISIBILITY
+// When a user supplies a custom forest layer in 'Replace global' mode,
+// the global tree-cover Source dropdown + threshold panels are inert
+// (the global layer is fully bypassed). Hide them and show a small
+// status note in the gap so the user knows why -- and isn't tempted
+// to fiddle with knobs that have no effect.
+//
+// Single source of truth: the existing source-driven threshold-panel
+// toggle (formerly inline in treecoverSourceSelect.onChange) is folded
+// into this helper too, so both paths can't disagree.
+// =============================================================================
+function updateGlobalForestInputsVisibility() {
+  var customActive = nationalForest.checkbox.getValue();
+  var mode         = nationalForest.modeSelect.getValue();
+  var hideGlobal   = customActive && mode === 'Replace global';
+
+  treecoverSourceRow.style().set('shown', !hideGlobal);
+  globalSourceHiddenNote.style().set('shown', hideGlobal);
+
+  if (hideGlobal) {
+    treecoverPanel.style().set('shown', false);
+    treecoverHeightPanel.style().set('shown', false);
+  } else {
+    // Restore source-driven sub-visibility (was the original logic
+    // inside treecoverSourceSelect.onChange).
+    var src = treecoverSourceSelect.getValue();
+    var isHansen = (src === 'Hansen GFC');
+    var isGlad   = (src === 'GLAD LULC');
+    treecoverPanel.style().set('shown',       isHansen || !isGlad);
+    treecoverHeightPanel.style().set('shown', isGlad   || !isHansen);
+  }
+}
+
+// Re-evaluate global-controls visibility whenever the custom-forest
+// section changes state. Multiple onChange handlers stack in GEE UI,
+// so this composes cleanly with the factory's internal handler at
+// L3470 (which toggles the mode-select and year inputs).
+nationalForest.checkbox.onChange(updateGlobalForestInputsVisibility);
+nationalForest.modeSelect.onChange(updateGlobalForestInputsVisibility);
+
+// Initial sync at startup -- mirrors the pattern at line 3683 for
+// updateInputCategoryVisibility(). Placed after treeCoverContent so
+// treecoverSourceRow / globalSourceHiddenNote are in scope.
+updateGlobalForestInputsVisibility();
 
 var treeCoverToggle = ui.Button({
   label: '▶ 2. Tree Cover',
@@ -5523,7 +5611,7 @@ map2.add(createDisclaimerPanel());
     // a stale `true` value being applied -- e.g. user ticked exclude
     // plantations under "All tree cover", then switched declaration
     // to "Naturally regenerating forest" which hides the toggle.
-    if (exclusionActive(excludeAgricultureFromForestCheckbox)) {
+    if (exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel)) {
       var fraAgriculture = oilPalmDescalsSel.unmask()
         .or(treeCropsSDPT.unmask());
       forest_map_clip = forest_map_clip.updateMask(fraAgriculture.not());
@@ -5537,7 +5625,7 @@ map2.add(createDisclaimerPanel());
     // forest_baseline (= natreg if available, else forest) so primary
     // forest is computed from the most-refined available baseline.
     var forest_natreg_image = null;
-    if (exclusionActive(includePlantationsCheckbox)) {  // P1.23: hidden-toggle guard
+    if (exclusionActive(includePlantationsCheckbox, includePlantationsPanel)) {  // P1.23: hidden-toggle guard
       forest_natreg_image = forest_map_clip.updateMask(
         allPlantationsSel.unmask().not());
     } else if (inputCategorySelect.getValue() === INPUT_CATEGORY_NATREG ||
@@ -5963,8 +6051,8 @@ map2.add(createDisclaimerPanel());
       // produces 3 visually-identical green layers (Tree cover ==
       // Forest, NRF skipped), which clutters the EE Layers dropdown.
       var mapDeclCat = inputCategorySelect.getValue();
-      var mapOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox);
-      var mapPlantedApplied = exclusionActive(includePlantationsCheckbox);
+      var mapOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+      var mapPlantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
       var mapShowTreeCover = (mapDeclCat === INPUT_CATEGORY_ALL);
       var mapShowForest = (mapDeclCat === INPUT_CATEGORY_ALL && mapOlwtcApplied) ||
                           (mapDeclCat === INPUT_CATEGORY_FOREST);
