@@ -373,11 +373,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     ZONE_LAYER = "ZONE_LAYER"
     ZONE_FIELD = "ZONE_FIELD"
     # -- Vectorisation (optional, advanced) --
-    # Vectorise runs whenever VECTORIZE_PRIMARY or VECTORIZE_FOREST is
-    # ticked; there is no separate enable flag.
+    # Vectorise runs whenever any of VECTORIZE_PRIMARY / VECTORIZE_FOREST
+    # / VECTORIZE_NEST is ticked. P1.28c semantics: each tick produces
+    # ONLY its named output (no auto-enables, no side-effect outputs).
     VECTORIZE_PRIMARY = "VECTORIZE_PRIMARY"
     VECTORIZE_FOREST = "VECTORIZE_FOREST"
     VECTORIZE_NEST = "VECTORIZE_NEST"
+    VECTORIZE_DISSOLVE_MULTIPART = "VECTORIZE_DISSOLVE_MULTIPART"
     VECTORIZE_SIMPLIFY_M = "VECTORIZE_SIMPLIFY_M"
     VECTORIZE_OUTPUT_AS_SHAPEFILE = "VECTORIZE_OUTPUT_AS_SHAPEFILE"
     # -- Output --
@@ -616,10 +618,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "  OUT/[ISO3_]qgis_04e_anthropogenic_mask.tif (intermediate)\n"
             "  OUT/[ISO3_]qgis_05a_area_statistics.csv (if 05 ticked)\n"
             "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.gpkg\n"
-            "  OUT/[ISO3_]qgis_06a_primary_forest_vector.gpkg (if 06 ticked)\n"
-            "  OUT/[ISO3_]qgis_06b_primary_forest_dissolved.gpkg\n"
-            "  OUT/[ISO3_]qgis_06c_<forest>_vector.gpkg (if 06 ticked)\n"
-            "  OUT/[ISO3_]qgis_06d_<forest>_dissolved.gpkg\n"
+            "  OUT/[ISO3_]qgis_06a_primary_forest_vector.gpkg\n"
+            "      (if Vectorise: primary ticked)\n"
+            "  OUT/[ISO3_]qgis_06c_<forest>_vector.gpkg\n"
+            "      (if Vectorise: forest ticked)\n"
+            "  OUT/[ISO3_]qgis_06c_<forest>_with_primary_nested_vector.gpkg\n"
+            "      (if Vectorise: nest ticked)\n"
+            "  OUT/[ISO3_]qgis_06d_<forest>_with_primary_nested_dissolved.gpkg\n"
+            "      (if Vectorise: nest + dissolve_multipart ticked)\n"
             "  OUT/[ISO3_]qgis_run_metadata.json\n"
             "  OUT/intermediates/ (tier rasters, prepared cache,\n"
             "                     distance cache, scratch workspaces)\n"
@@ -927,6 +933,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=False)
         _v_nest.setFlags(_v_nest.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_nest)
+        _v_dissolve = QgsProcessingParameterBoolean(
+            self.VECTORIZE_DISSOLVE_MULTIPART,
+            "06 Validation:     Vectorise: also dissolve nested output to "
+            "multipart by level (CEO-relevant; slow on big countries with "
+            "low simplify)",
+            defaultValue=True)
+        _v_dissolve.setFlags(_v_dissolve.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_dissolve)
         _v_simplify = QgsProcessingParameterNumber(
             self.VECTORIZE_SIMPLIFY_M,
             "06 Validation:     Vectorise: simplify tolerance (m; 0 = no simplify)",
@@ -974,7 +988,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.11"
+    PFF_VERSION = "0.9.13"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1084,29 +1098,24 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP, context)
 
         # Vectorise stage params (advanced). The stage runs whenever
-        # either primary or forest is ticked; the previous master enable
-        # tick was redundant and has been removed.
+        # any of primary / forest / nest is ticked.
         vectorize_primary = self.parameterAsBool(
             parameters, self.VECTORIZE_PRIMARY, context)
         vectorize_forest = self.parameterAsBool(
             parameters, self.VECTORIZE_FOREST, context)
         vectorize_nest = self.parameterAsBool(
             parameters, self.VECTORIZE_NEST, context)
-        # Nesting is "cut primary out of forest" -- it requires both
-        # primary and forest as inputs. Ticking only nest is otherwise
-        # silently no-op, so auto-enable the two inputs it needs.
-        if vectorize_nest and not (vectorize_primary and vectorize_forest):
-            if not vectorize_primary:
-                feedback.pushInfo(
-                    "Vectorise: 'nest' is ticked -- auto-enabling "
-                    "'primary forest' (required input for nesting).")
-                vectorize_primary = True
-            if not vectorize_forest:
-                feedback.pushInfo(
-                    "Vectorise: 'nest' is ticked -- auto-enabling "
-                    "'forest' (required input for nesting).")
-                vectorize_forest = True
-        run_vectorize = bool(vectorize_primary or vectorize_forest)
+        vectorize_dissolve_multipart = self.parameterAsBool(
+            parameters, self.VECTORIZE_DISSOLVE_MULTIPART, context)
+        # P1.28c: tick-what-it-says semantics. Each VECTORIZE_* toggle
+        # produces ONLY its named output. Ticking nest no longer auto-
+        # enables primary/forest -- the coded-raster nest path uses the
+        # source RASTERS directly (final_path, forest_src_path) and
+        # never needed the polygonised vector primary/forest. Dissolve
+        # is scoped to the nested output only (CEO-relevant): primary-
+        # alone and forest-alone outputs are NOT dissolved.
+        run_vectorize = bool(vectorize_primary or vectorize_forest
+                             or vectorize_nest)
         vectorize_simplify_m = self.parameterAsDouble(
             parameters, self.VECTORIZE_SIMPLIFY_M, context)
         # User-toggleable output format. Default GPKG; ESRI Shapefile
@@ -1336,27 +1345,28 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         if _run_zonal:
             _likely_outputs.append(_out("05a", "area_statistics", ext="csv"))
             _likely_outputs.append(_out("05b", "area_statistics_by_zone", ext="gpkg"))
-        # Vectorise outputs (06a/b/c/d). Forest-vector basename depends
-        # on whether nat reg derivation runs (chosen later in workflow);
-        # check both candidate names since either may exist from a
-        # previous run. Non-existent files are silently skipped by the
-        # lock check loop below.
+        # Vectorise outputs (06a/c/d). P1.28c output matrix:
+        #   - vectorize_primary -> 06a primary_forest_vector
+        #   - vectorize_forest  -> 06c <forest|naturally_regenerating_forest>_vector
+        #   - vectorize_nest    -> 06c <base>_with_primary_nested_vector
+        #                          + 06d <base>_with_primary_nested_dissolved
+        #                            (only if vectorize_dissolve_multipart)
+        # Forest-vector basename depends on whether nat reg derivation
+        # runs (chosen later in workflow); check both candidate names
+        # since either may exist from a previous run. Non-existent
+        # files are silently skipped by the lock check loop below.
         if run_vectorize:
             if vectorize_primary:
                 _likely_outputs.append(_out("06a", "primary_forest_vector", ext=vec_ext))
-                _likely_outputs.append(_out("06b", "primary_forest_dissolved", ext=vec_ext))
             if vectorize_forest:
-                # Six candidate filenames -- non-nested (forest|nat-reg) and
-                # nested (with_primary_nested) variants. Only the relevant
-                # ones get produced this run; non-existent files skip.
                 _likely_outputs.append(_out("06c", "forest_vector", ext=vec_ext))
-                _likely_outputs.append(_out("06d", "forest_dissolved", ext=vec_ext))
                 _likely_outputs.append(_out("06c", "naturally_regenerating_forest_vector", ext=vec_ext))
-                _likely_outputs.append(_out("06d", "naturally_regenerating_forest_dissolved", ext=vec_ext))
+            if vectorize_nest:
                 _likely_outputs.append(_out("06c", "forest_with_primary_nested_vector", ext=vec_ext))
-                _likely_outputs.append(_out("06d", "forest_with_primary_nested_dissolved", ext=vec_ext))
                 _likely_outputs.append(_out("06c", "naturally_regenerating_forest_with_primary_nested_vector", ext=vec_ext))
-                _likely_outputs.append(_out("06d", "naturally_regenerating_forest_with_primary_nested_dissolved", ext=vec_ext))
+                if vectorize_dissolve_multipart:
+                    _likely_outputs.append(_out("06d", "forest_with_primary_nested_dissolved", ext=vec_ext))
+                    _likely_outputs.append(_out("06d", "naturally_regenerating_forest_with_primary_nested_dissolved", ext=vec_ext))
 
         _locked = []
         for _p in _likely_outputs:
@@ -2419,16 +2429,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  STAGE 7 -- Vectorise (optional, advanced)
         # ================================================================
-        # Polygonises selected outputs (primary forest and/or forest
-        # input) into .gpkg files, with optional Douglas-Peucker
-        # simplification and optional CEO-style nesting (cut primary
-        # out of forest so the two layers don't overlap).
+        # Polygonises selected outputs into .gpkg/.shp files with
+        # optional Douglas-Peucker simplification. P1.28c semantics:
+        # tick-what-it-says -- each VECTORIZE_* tick produces ONLY its
+        # named output, no auto-enables, no side-effect outputs. CEO-
+        # style nesting (cut primary out of forest) uses a coded raster
+        # built from final_path + forest_src_path RASTERS directly, so
+        # ticking nest does NOT require ticking forest or primary.
         #
-        # P1.13 filenames (Option D):
-        #   primary forest -> 06a_primary_forest_vector.gpkg
-        #                   + 06b_primary_forest_dissolved.gpkg
-        #   forest input   -> 06c_<forest_layer_name>_vector.gpkg
-        #                   + 06d_<forest_layer_name>_dissolved.gpkg
+        # Output filenames:
+        #   primary tick -> 06a_primary_forest_vector
+        #   forest tick  -> 06c_<forest_layer_name>_vector
+        #   nest tick    -> 06c_<forest_layer_name>_with_primary_nested_vector
+        #                 + 06d_<forest_layer_name>_with_primary_nested_dissolved
+        #                   (when VECTORIZE_DISSOLVE_MULTIPART is on)
         # Whether naturally_regenerating_forest or forest is used is
         # determined by whether plantations refinement ran
         # (forest_natreg_path is non-None when it did). P1.16 renamed
@@ -2436,7 +2450,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # variable name forest_natreg_path was already aligned (natreg
         # = nat reg).
         # ================================================================
-        if run_vectorize and (vectorize_primary or vectorize_forest):
+        if run_vectorize:
             _stage("STAGE 7: Vectorise outputs")
             vector_scratch = ensure_dir(
                 os.path.join(intermediates_dir, "_vectorize"))
@@ -2557,6 +2571,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 return polys_path
 
             # ── Vectorise primary forest ──
+            # Tick produces 06a only -- no dissolve (CEO-relevant
+            # dissolve is nested-only; users wanting a dissolved primary
+            # can run native:dissolve themselves).
             primary_polys_path = None
             if vectorize_primary:
                 primary_polys_path = _do_polygonise(
@@ -2567,22 +2584,15 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException(
                     "Cancelled by user (during vectorise stage).")
 
-            # ── Vectorise forest input ──
+            # ── Resolve forest source (used by forest tick AND nest tick) ──
             # Use naturally regenerating forest if plantations refinement
             # produced one, else the AOI-clipped forest input. Naming
-            # carries to the output filenames so the user can tell
-            # which they got.
-            #
-            # When nesting is enabled, polygonise to scratch first so
-            # the canonical 06c file is the OUTPUT of the difference
-            # operation (no os.replace needed -- avoids Windows file-
-            # lock issues when QGIS holds the just-polygonised vector
-            # open after native:difference reads it).
-            forest_polys_path = None
+            # carries through to output filenames so the user can tell
+            # which they got. Computed once because both vectorize_forest
+            # and vectorize_nest read this raster.
+            forest_src_path = None
             forest_name_base = None
-            _nest_active = (vectorize_nest and vectorize_primary
-                            and vectorize_forest)
-            if vectorize_forest:
+            if vectorize_forest or vectorize_nest:
                 if forest_natreg_path is not None:
                     forest_src_path = forest_natreg_path
                     forest_name_base = "naturally_regenerating_forest"
@@ -2590,196 +2600,155 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     forest_src_path = prepared_forest_path
                     forest_name_base = "forest"
 
-                # Filename differs in nest mode -- the nested output is
-                # a single file containing BOTH primary (level 2) and
-                # surrounding nat reg (level 1), so it gets a "_with_
-                # primary_nested" suffix so users can tell at a glance.
-                if _nest_active:
-                    _canonical_forest_polys = _out(
-                        "06c",
-                        f"{forest_name_base}_with_primary_nested_vector",
-                        ext=vec_ext)
-                else:
-                    _canonical_forest_polys = _out(
-                        "06c", f"{forest_name_base}_vector", ext=vec_ext)
-
-                if _nest_active:
-                    # Polygonise to scratch; nesting step writes the
-                    # final 06c via merge output below.
-                    _scratch_forest_polys = os.path.join(
-                        vector_scratch,
-                        f"{forest_name_base}_full.gpkg")
-                    forest_polys_path = _do_polygonise(
-                        forest_src_path, "06c", forest_name_base,
-                        target_path=_scratch_forest_polys)
-                else:
-                    forest_polys_path = _do_polygonise(
-                        forest_src_path, "06c", forest_name_base)
-
-            if feedback.isCanceled():
-                from qgis.core import QgsProcessingException
-                raise QgsProcessingException(
-                    "Cancelled by user (during vectorise stage).")
-
-            # ── Optional nesting: cut primary out of forest ──
-            # Only meaningful when both are vectorised. Result: primary
-            # polygons are unchanged, forest polygons have primary
-            # subtracted -- the two layers tile the forest extent
-            # without overlap, which is the standard CEO stratified-
-            # sampling layout (sample primary plots + non-primary
-            # plots independently with no double-counting).
-            if vectorize_nest:
-                if _nest_active:
-                    feedback.pushInfo(
-                        f"  Nesting (coded-raster path): building "
-                        f"2-level coded raster (1={forest_name_base} "
-                        "outside primary, 2=primary) and polygonising "
-                        "in one pass -- avoids slow vector difference.")
-                    # Build a 2-level coded raster from the nat-reg
-                    # baseline + primary forest. Polygonising this in
-                    # one pass produces a single vector with a 'level'
-                    # attribute (1 or 2) that perfectly tiles nat reg
-                    # without overlap. Much faster than the previous
-                    # polygonise + native:difference + fieldcalculator
-                    # + mergevectorlayers chain, and geometrically
-                    # cleaner (no slivers from vector subtraction).
-                    _nat_reg_src = forest_src_path  # set above (natreg or forest)
-                    _ds_n = gdal.Open(_nat_reg_src, gdal.GA_ReadOnly)
-                    _n_arr = _ds_n.GetRasterBand(1).ReadAsArray()
-                    _n_gt = _ds_n.GetGeoTransform()
-                    _n_proj = _ds_n.GetProjection()
-                    _n_xsz = _ds_n.RasterXSize
-                    _n_ysz = _ds_n.RasterYSize
-                    _ds_n = None
-                    _ds_p = gdal.Open(final_path, gdal.GA_ReadOnly)
-                    _p_arr = _ds_p.GetRasterBand(1).ReadAsArray()
-                    _ds_p = None
-                    # 2 = primary, 1 = nat reg outside primary, 0 = none
-                    _nested_arr = np.where(
-                        _p_arr == 1, 2,
-                        np.where(_n_arr == 1, 1, 0)).astype(np.uint8)
-                    del _n_arr, _p_arr
-                    _nested_tif = os.path.join(
-                        vector_scratch,
-                        f"{forest_name_base}_with_primary_nested_coded.tif")
-                    if os.path.exists(_nested_tif):
-                        try:
-                            os.remove(_nested_tif)
-                        except OSError:
-                            pass
-                    _drv_v = gdal.GetDriverByName("GTiff")
-                    _ds_n_out = _drv_v.Create(
-                        _nested_tif, _n_xsz, _n_ysz, 1,
-                        gdal.GDT_Byte,
-                        ["COMPRESS=LZW", "TILED=YES"])
-                    _ds_n_out.SetGeoTransform(_n_gt)
-                    if _n_proj:
-                        _ds_n_out.SetProjection(_n_proj)
-                    else:
-                        from qgis.core import QgsCoordinateReferenceSystem
-                        _ds_n_out.SetProjection(
-                            QgsCoordinateReferenceSystem(target_crs_str).toWkt())
-                    _b_n = _ds_n_out.GetRasterBand(1)
-                    _b_n.WriteArray(_nested_arr)
-                    _b_n.SetNoDataValue(0)
-                    _b_n.FlushCache()
-                    _ds_n_out = None
-                    del _nested_arr
-                    # Pre-flight check covered the canonical path; if
-                    # locked we would have failed at run start.
-                    # P1.28: _safe_remove handles transient locks (OneDrive etc.).
-                    _safe_remove(_canonical_forest_polys, feedback=feedback)
-                    # Polygonise to scratch always; final pass through
-                    # ogr2ogr applies -a_srs (and optional -simplify).
-                    # Uniform CRS handling regardless of simplify state.
-                    _nested_polys_raw = os.path.join(
-                        vector_scratch,
-                        f"{forest_name_base}_with_primary_nested_polys_raw.gpkg")
-                    feedback.pushInfo(
-                        "  Polygonising nested coded raster...")
-                    run_processing("gdal:polygonize", {
-                        "INPUT": _nested_tif,
-                        "BAND": 1,
-                        "FIELD": "level",
-                        "EIGHT_CONNECTEDNESS": False,
-                        "EXTRA": "",
-                        "OUTPUT": _nested_polys_raw,
-                    }, context=context, feedback=feedback)
-                    if vectorize_simplify_m > 0:
-                        feedback.pushInfo(
-                            f"  Simplifying nested polygons (ogr2ogr "
-                            f"-simplify, tolerance="
-                            f"{vectorize_simplify_m:g} m)...")
-                        _nest_vt_options = [
-                            '-simplify', str(vectorize_simplify_m),
-                            '-a_srs', target_crs_str,
-                        ]
-                    else:
-                        feedback.pushInfo(
-                            f"  Stamping nested polygons with target "
-                            f"CRS ({target_crs_str})...")
-                        _nest_vt_options = ['-a_srs', target_crs_str]
-                    gdal.VectorTranslate(
-                        _canonical_forest_polys, _nested_polys_raw,
-                        format=vec_format,
-                        options=_nest_vt_options,
-                    )
-                    # Update so downstream code (auto-load, metadata,
-                    # dissolve) references the canonical nested file.
-                    forest_polys_path = _canonical_forest_polys
-                else:
-                    feedback.pushWarning(
-                        "Vectorise nesting is on but only one of "
-                        "primary / forest was selected -- nesting "
-                        "skipped (needs both).")
-
-            if feedback.isCanceled():
-                from qgis.core import QgsProcessingException
-                raise QgsProcessingException(
-                    "Cancelled by user (during vectorise stage).")
-
-            # ── Dissolve each to multipart ──
-            # Dissolve happens after potential nesting so the dissolved
-            # output reflects the final (possibly differenced) geometry.
-            if vectorize_primary:
-                _primary_dissolved = _out(
-                    "06b", "primary_forest_dissolved", ext=vec_ext)
-                feedback.pushInfo(
-                    "  Dissolving primary_forest to multipart...")
-                run_processing("native:dissolve", {
-                    "INPUT": primary_polys_path,
-                    "FIELD": [],
-                    "OUTPUT": _primary_dissolved,
-                }, context=context, feedback=feedback)
-
+            # ── Vectorise forest input (plain, non-nested) ──
+            # Tick produces 06c_<base>_vector only. No dissolve. When
+            # vectorize_nest is also ticked the user gets BOTH this plain
+            # 06c AND the nested 06c below (different filenames).
+            forest_polys_path = None
             if vectorize_forest:
-                # In nest mode, dissolve BY level so the output has
-                # two multipart features (one for level=1 / outside-
-                # primary nat reg, one for level=2 / primary). Filename
-                # uses the same "_with_primary_nested" suffix as 06c.
-                if _nest_active:
-                    _forest_dissolved = _out(
-                        "06d",
-                        f"{forest_name_base}_with_primary_nested_dissolved",
-                        ext=vec_ext)
-                    feedback.pushInfo(
-                        f"  Dissolving {forest_name_base} (nested, by "
-                        "level) to multipart...")
-                    run_processing("native:dissolve", {
-                        "INPUT": forest_polys_path,
-                        "FIELD": ["level"],
-                        "OUTPUT": _forest_dissolved,
-                    }, context=context, feedback=feedback)
+                forest_polys_path = _do_polygonise(
+                    forest_src_path, "06c", forest_name_base)
+
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (during vectorise stage).")
+
+            # ── Nested output: primary as level=2, surrounding nat-reg as
+            #    level=1 in a single coded raster, polygonised in one pass.
+            # Reads forest_src_path + final_path as RASTERS directly (no
+            # dependency on the polygonised forest/primary vectors). This
+            # is why ticking nest no longer auto-enables forest/primary.
+            nested_polys_path = None
+            if vectorize_nest:
+                _canonical_forest_polys = _out(
+                    "06c",
+                    f"{forest_name_base}_with_primary_nested_vector",
+                    ext=vec_ext)
+                feedback.pushInfo(
+                    f"  Nesting (coded-raster path): building "
+                    f"2-level coded raster (1={forest_name_base} "
+                    "outside primary, 2=primary) and polygonising "
+                    "in one pass -- avoids slow vector difference.")
+                # Build a 2-level coded raster from the nat-reg
+                # baseline + primary forest. Polygonising this in
+                # one pass produces a single vector with a 'level'
+                # attribute (1 or 2) that perfectly tiles nat reg
+                # without overlap. Much faster than the previous
+                # polygonise + native:difference + fieldcalculator
+                # + mergevectorlayers chain, and geometrically
+                # cleaner (no slivers from vector subtraction).
+                _nat_reg_src = forest_src_path  # set above (natreg or forest)
+                _ds_n = gdal.Open(_nat_reg_src, gdal.GA_ReadOnly)
+                _n_arr = _ds_n.GetRasterBand(1).ReadAsArray()
+                _n_gt = _ds_n.GetGeoTransform()
+                _n_proj = _ds_n.GetProjection()
+                _n_xsz = _ds_n.RasterXSize
+                _n_ysz = _ds_n.RasterYSize
+                _ds_n = None
+                _ds_p = gdal.Open(final_path, gdal.GA_ReadOnly)
+                _p_arr = _ds_p.GetRasterBand(1).ReadAsArray()
+                _ds_p = None
+                # 2 = primary, 1 = nat reg outside primary, 0 = none
+                _nested_arr = np.where(
+                    _p_arr == 1, 2,
+                    np.where(_n_arr == 1, 1, 0)).astype(np.uint8)
+                del _n_arr, _p_arr
+                _nested_tif = os.path.join(
+                    vector_scratch,
+                    f"{forest_name_base}_with_primary_nested_coded.tif")
+                if os.path.exists(_nested_tif):
+                    try:
+                        os.remove(_nested_tif)
+                    except OSError:
+                        pass
+                _drv_v = gdal.GetDriverByName("GTiff")
+                _ds_n_out = _drv_v.Create(
+                    _nested_tif, _n_xsz, _n_ysz, 1,
+                    gdal.GDT_Byte,
+                    ["COMPRESS=LZW", "TILED=YES"])
+                _ds_n_out.SetGeoTransform(_n_gt)
+                if _n_proj:
+                    _ds_n_out.SetProjection(_n_proj)
                 else:
-                    _forest_dissolved = _out(
-                        "06d", f"{forest_name_base}_dissolved", ext=vec_ext)
+                    from qgis.core import QgsCoordinateReferenceSystem
+                    _ds_n_out.SetProjection(
+                        QgsCoordinateReferenceSystem(target_crs_str).toWkt())
+                _b_n = _ds_n_out.GetRasterBand(1)
+                _b_n.WriteArray(_nested_arr)
+                _b_n.SetNoDataValue(0)
+                _b_n.FlushCache()
+                _ds_n_out = None
+                del _nested_arr
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(_canonical_forest_polys, feedback=feedback)
+                # Polygonise to scratch always; final pass through
+                # ogr2ogr applies -a_srs (and optional -simplify).
+                # Uniform CRS handling regardless of simplify state.
+                _nested_polys_raw = os.path.join(
+                    vector_scratch,
+                    f"{forest_name_base}_with_primary_nested_polys_raw.gpkg")
+                feedback.pushInfo(
+                    "  Polygonising nested coded raster...")
+                run_processing("gdal:polygonize", {
+                    "INPUT": _nested_tif,
+                    "BAND": 1,
+                    "FIELD": "level",
+                    "EIGHT_CONNECTEDNESS": False,
+                    "EXTRA": "",
+                    "OUTPUT": _nested_polys_raw,
+                }, context=context, feedback=feedback)
+                if vectorize_simplify_m > 0:
                     feedback.pushInfo(
-                        f"  Dissolving {forest_name_base} to multipart...")
-                    run_processing("native:dissolve", {
-                        "INPUT": forest_polys_path,
-                        "FIELD": [],
-                        "OUTPUT": _forest_dissolved,
-                    }, context=context, feedback=feedback)
+                        f"  Simplifying nested polygons (ogr2ogr "
+                        f"-simplify, tolerance="
+                        f"{vectorize_simplify_m:g} m)...")
+                    _nest_vt_options = [
+                        '-simplify', str(vectorize_simplify_m),
+                        '-a_srs', target_crs_str,
+                    ]
+                else:
+                    feedback.pushInfo(
+                        f"  Stamping nested polygons with target "
+                        f"CRS ({target_crs_str})...")
+                    _nest_vt_options = ['-a_srs', target_crs_str]
+                gdal.VectorTranslate(
+                    _canonical_forest_polys, _nested_polys_raw,
+                    format=vec_format,
+                    options=_nest_vt_options,
+                )
+                nested_polys_path = _canonical_forest_polys
+
+            if feedback.isCanceled():
+                from qgis.core import QgsProcessingException
+                raise QgsProcessingException(
+                    "Cancelled by user (during vectorise stage).")
+
+            # ── Dissolve nested output to multipart by level ──
+            # Scoped to the nested case only -- this is the CEO-relevant
+            # output (level=1 surrounding nat-reg + level=2 primary as
+            # two multipart features for stratified sampling). Primary
+            # 06a and forest 06c are NOT dissolved; users wanting that
+            # can run native:dissolve on those layers themselves.
+            nested_dissolved_path = None
+            if vectorize_nest and vectorize_dissolve_multipart:
+                nested_dissolved_path = _out(
+                    "06d",
+                    f"{forest_name_base}_with_primary_nested_dissolved",
+                    ext=vec_ext)
+                feedback.pushInfo(
+                    f"  Dissolving {forest_name_base} (nested, by "
+                    "level) to multipart...")
+                run_processing("native:dissolve", {
+                    "INPUT": nested_polys_path,
+                    "FIELD": ["level"],
+                    "OUTPUT": nested_dissolved_path,
+                }, context=context, feedback=feedback)
+            elif vectorize_nest and not vectorize_dissolve_multipart:
+                feedback.pushInfo(
+                    "  Nested dissolve skipped (VECTORIZE_DISSOLVE_"
+                    "MULTIPART unticked) -- 06d_*_nested_dissolved "
+                    "not produced.")
 
             # Defensive CRS stamp: gdal:polygonize occasionally writes
             # vector outputs without proper CRS metadata even when the
@@ -2823,13 +2792,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                         except OSError:
                             pass
 
-            # CRS stamp uses the actual produced paths -- _forest_dissolved
-            # was set above (with or without _with_primary_nested suffix).
+            # CRS stamp uses the actual produced paths. Only the four
+            # outputs that this batch can produce: 06a primary, 06c plain
+            # forest, 06c nested, 06d nested_dissolved.
             for _vec in [
                 primary_polys_path,
-                _out("06b", "primary_forest_dissolved", ext=vec_ext) if vectorize_primary else None,
                 forest_polys_path,
-                _forest_dissolved if vectorize_forest else None,
+                nested_polys_path,
+                nested_dissolved_path,
             ]:
                 if _vec:
                     _stamp_crs(_vec)
@@ -2868,6 +2838,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "vectorize_primary": vectorize_primary if run_vectorize else None,
                 "vectorize_forest": vectorize_forest if run_vectorize else None,
                 "vectorize_nest": vectorize_nest if run_vectorize else None,
+                "vectorize_dissolve_multipart": (
+                    vectorize_dissolve_multipart if run_vectorize else None),
                 "vectorize_simplify_m": vectorize_simplify_m if run_vectorize else None,
                 "auto_utm": auto_utm,
                 "exclude_plantations": exclude_plantations,
@@ -2937,32 +2909,30 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _layers_to_load.append(
                     ("Pre-connectivity forest", candidate_path))
             _layers_to_load.append(("Primary forest", final_path))
-            # Vectorise outputs auto-load when produced. Includes both
-            # _vector and _dissolved variants. Loaded ABOVE primary so
-            # the user sees the polygon outputs as the topmost layers
-            # (CEO sampling boundary on top makes most sense).
+            # Vectorise outputs auto-load when produced. P1.28c output
+            # matrix: 06a (primary), 06c plain forest, 06c nested, 06d
+            # nested_dissolved. Loaded ABOVE primary so the user sees the
+            # polygon outputs as the topmost layers (CEO sampling
+            # boundary on top makes most sense).
             if run_vectorize:
-                if vectorize_forest and forest_polys_path is not None and os.path.exists(forest_polys_path):
-                    _label = ("Forest with primary nested (06c)"
-                              if _nest_active else "Forest polygons (06c)")
-                    _layers_to_load.append((_label, forest_polys_path))
-                if vectorize_forest and '_forest_dissolved' in dir():
-                    if os.path.exists(_forest_dissolved):
-                        _diss_label = (
-                            "Forest with primary nested, dissolved (06d)"
-                            if _nest_active
-                            else "Forest dissolved (06d)")
-                        _layers_to_load.append(
-                            (_diss_label, _forest_dissolved))
-                if vectorize_primary and primary_polys_path is not None and os.path.exists(primary_polys_path):
+                if (vectorize_forest and forest_polys_path is not None
+                        and os.path.exists(forest_polys_path)):
+                    _layers_to_load.append(
+                        ("Forest polygons (06c)", forest_polys_path))
+                if (vectorize_nest and nested_polys_path is not None
+                        and os.path.exists(nested_polys_path)):
+                    _layers_to_load.append(
+                        ("Forest with primary nested (06c)",
+                         nested_polys_path))
+                if (vectorize_nest and nested_dissolved_path is not None
+                        and os.path.exists(nested_dissolved_path)):
+                    _layers_to_load.append(
+                        ("Forest with primary nested, dissolved (06d)",
+                         nested_dissolved_path))
+                if (vectorize_primary and primary_polys_path is not None
+                        and os.path.exists(primary_polys_path)):
                     _layers_to_load.append(
                         ("Primary forest polygons (06a)", primary_polys_path))
-                if vectorize_primary:
-                    _primary_dissolved_path = _out(
-                        "06b", "primary_forest_dissolved", ext=vec_ext)
-                    if os.path.exists(_primary_dissolved_path):
-                        _layers_to_load.append(
-                            ("Primary forest dissolved (06b)", _primary_dissolved_path))
 
         # P0.14: optional human-influence + buffer layers. Default OFF
         # (matches GEE master toggle). Adds the prepared anthro inputs +
