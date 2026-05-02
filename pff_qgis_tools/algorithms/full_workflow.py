@@ -189,39 +189,39 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "§02 TREE COVER\n"
             "═══════════════════════════════════════════════\n"
             "Order matches the workflow sequence: forest input first,\n"
-            "then FRA-agri exclusion (narrows tree cover -> FRA Forest),\n"
-            "then plantations exclusion (narrows FRA Forest -> Naturally\n"
+            "then OLWTC exclusion (narrows tree cover -> FRA Forest), then\n"
+            "planted-forest exclusion (narrows Forest -> Naturally\n"
             "Regenerating).\n\n"
             "Forest raster (REQUIRED)\n"
             "    Binary 1/0 raster. Defines the reference grid (extent /\n"
             "    resolution / pixel origin) -- all other rasters align to it.\n"
             "    Example sources: Hansen GFC thresholded, GLAD LULC forest\n"
             "    class, national forest map. GEE filename: 02b_forest_*\n\n"
-            "FRA agriculture raster (optional)\n"
-            "    Binary 1/0. Tree-cover-meeting agricultural land only:\n"
-            "    oil palm, tree crops, agroforestry. NOT the broader\n"
-            "    buffered agriculture (cropland + pasture + everything).\n"
-            "    Paired with 'Exclude agriculture' toggle. Example sources:\n"
-            "    GEE export 03a_agriculture_tree_cover_fra (Descals oil palm\n"
-            "    + SDPT class 2). When supplied AND toggle is on, narrows\n"
-            "    the Forest baseline (02b) to FRA-strict Forest.\n\n"
-            "Exclude agriculture from Forest baseline (FRA-aligned, default ON)\n"
-            "    Requires FRA agri raster above. When on: narrows\n"
-            "    02b_forest = tree_cover MINUS FRA agriculture, BEFORE the\n"
-            "    plantations subtraction. Harmless no-op when no FRA agri\n"
-            "    raster supplied.\n\n"
-            "Plantations raster (optional)\n"
-            "    Binary 1/0. Paired with 'Exclude plantations' toggle.\n"
-            "    Example sources: SDPT class 1, national plantations\n"
-            "    registry. When supplied AND toggle is on, workflow outputs\n"
-            "    02d_naturally_regenerating_forest.tif (≈ FRA Naturally\n"
-            "    Regenerating Forest = forest minus plantations -- proxy,\n"
-            "    depends on plantations layer completeness).\n"
-            "    GEE filename: 02c_plantations_*\n\n"
-            "Exclude plantations from forest (default ON)\n"
-            "    Requires Plantations raster above. When on: derives\n"
+            "Other land with tree cover raster (optional)\n"
+            "    Binary 1/0. FRA-Note-10 'other land with tree cover':\n"
+            "    oil palm, orchards, agroforestry-with-crops, urban trees.\n"
+            "    NOT the broader buffered agriculture (cropland + pasture).\n"
+            "    Paired with 'Refine to forest' toggle. Example sources:\n"
+            "    GEE export 03a_plantations_tree_crops (Descals oil palm\n"
+            "    + SDPT class 2).\n\n"
+            "Refine to forest (default ON)\n"
+            "    Requires OLWTC raster above. When on: narrows\n"
+            "    02b_forest = tree_cover MINUS other land with tree cover,\n"
+            "    BEFORE the planted-forest subtraction. Harmless no-op when\n"
+            "    no OLWTC raster supplied.\n\n"
+            "Planted forest raster (optional)\n"
+            "    Binary 1/0. FRA Planted Forest (timber/pulp/fibre):\n"
+            "    eucalyptus, pine, teak. Paired with 'Refine to naturally\n"
+            "    regenerating forest' toggle. Example sources: SDPT class 1,\n"
+            "    national planted-forest registry. When supplied AND toggle\n"
+            "    is on, workflow outputs 02d_naturally_regenerating_forest.tif\n"
+            "    (≈ FRA NRF = Forest minus planted forest -- proxy, depends\n"
+            "    on planted-forest layer completeness).\n"
+            "    GEE filename: 02c_planted_forest_*\n\n"
+            "Refine to naturally regenerating forest (default ON)\n"
+            "    Requires Planted forest raster above. When on: derives\n"
             "    02d_naturally_regenerating_forest as 02b MINUS 02c\n"
-            "    (FRA Forest minus Plantations).\n\n"
+            "    (Forest minus Planted forest).\n\n"
             "═══════════════════════════════════════════════\n"
             "§03 HUMAN INFLUENCE -- (a) DISTURBANCE INPUTS\n"
             "═══════════════════════════════════════════════\n"
@@ -447,38 +447,31 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Plantations FIRST in the parameter list so the UI reads in
         # workflow order. See About panel in GEE app for full FRA
         # definitions and rubber caveat.
+        # P1.27: parallel/aligned shorter labels. FRA Note 7 / Note 10
+        # caveats + rubber caveat live in the GEE app About panel and the
+        # workshop guide -- keeping the parameter labels short is far
+        # better UX in the QGIS Processing dialog.
+        #   raster: "02 Tree Cover: <NAME> raster -- e.g. <examples> ..."
+        #   toggle: "02 Tree Cover: Refine to <result> (exclude <NAME> raster above)"
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.FRA_AGRICULTURE_RASTER,
-            "02 Tree Cover: Plantations raster -- agricultural tree crops "
-            "(e.g. oil palm, fruit orchards, olive orchards, "
-            "agroforestry-with-crops; SDPT class 2 + Descals oil palm). "
-            "Per FRA Note 10 these are agricultural land regardless of "
-            "tree biology. Used to narrow tree cover -> Forest (FRA "
-            "baseline) when the toggle below is on. (binary 1/0, optional)",
+            "02 Tree Cover: Other land with tree cover raster -- e.g. oil "
+            "palm, orchards, agroforestry (binary 1/0, optional)",
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.EXCLUDE_AGRICULTURE_FROM_FOREST,
-            "02 Tree Cover: Refine to forest (exclude plantations: e.g. "
-            "oil palm, fruit, agroforestry) -- requires Plantations raster "
-            "above; no-op when none supplied. Default ON for FRA-faithful "
-            "output.",
+            "02 Tree Cover: Refine to forest (exclude other land with tree "
+            "cover raster above)",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.PLANTATIONS_RASTER,
-            "02 Tree Cover: Planted forest raster -- FRA Planted Forest "
-            "(timber/pulp/fibre, e.g. eucalyptus, pine, teak; SDPT class 1). "
-            "Per FRA Note 7, rubber-wood plantations are also forest -- but "
-            "SDPT v2 places rubber in tree crops, so rubber-bearing pixels "
-            "land in the Plantations slot above by default. Supply a "
-            "national rubber raster here to add it. (binary 1/0, optional)",
+            "02 Tree Cover: Planted forest raster -- e.g. eucalyptus, pine, "
+            "teak (binary 1/0, optional)",
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.EXCLUDE_PLANTATIONS,
             "02 Tree Cover: Refine to naturally regenerating forest "
-            "(exclude planted forest: e.g. eucalyptus, pine, teak -- "
-            "timber/pulp/fibre) -- requires Planted forest raster above. "
-            "Derives 02d_naturally_regenerating_forest = 02b_forest - "
-            "02c_planted_forest.",
+            "(exclude planted forest raster above)",
             defaultValue=True))
 
         # ────────────────────────────────────────────────────────────
@@ -733,7 +726,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.7"
+    PFF_VERSION = "0.9.10"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1483,8 +1476,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         if fra_agriculture_tif is not None and exclude_agriculture_from_forest:
             feedback.pushInfo(
-                "P1.18: Excluding FRA agriculture (oil palm + tree crops) "
-                "from Forest baseline (creating ≈ FRA-strict Forest)...")
+                "Refining tree cover to Forest by excluding other land "
+                "with tree cover (oil palm, orchards, agroforestry)...")
             forest_fra_path = os.path.join(prepared_dir, "forest_fra.tif")
             _fds = gdal.Open(forest_raw_path, gdal.GA_ReadOnly)
             _farr = _fds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
@@ -1518,7 +1511,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             _ds_out = None
             excluded_px = int((_farr == 1).sum() - _farr_fra.sum())
             feedback.pushInfo(
-                f"  Excluded {excluded_px:,} agricultural-tree-cover pixels "
+                f"  Excluded {excluded_px:,} other-land-with-tree-cover pixels "
                 "from Forest baseline.")
             # Switch downstream to use the FRA-stricter forest baseline.
             # The plantations exclusion block + nat reg derivation +
@@ -1527,11 +1520,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             reference = forest_fra_path
         elif fra_agriculture_layer is not None and not exclude_agriculture_from_forest:
             feedback.pushInfo(
-                "FRA agriculture raster prepared in "
+                "Other land with tree cover raster prepared in "
                 "intermediates/prepared/fra_agriculture_tree_cover.tif "
-                "but 'Exclude agriculture from Forest baseline (FRA-aligned)' "
-                "is off — Forest baseline NOT narrowed. Tick the option "
-                "to apply the FRA-strict Forest definition.")
+                "but 'Refine to forest' is off — Forest baseline NOT "
+                "narrowed. Tick the option to derive FRA-strict Forest.")
 
         # ─── Top-level 02b_forest.tif (FRA Forest baseline output) ───
         # Per spec, 02b_forest belongs at top level (not just as the
@@ -1577,8 +1569,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         if plantations_tif is not None and exclude_plantations:
             feedback.pushInfo(
-                "Excluding plantations from forest "
-                "(creating ≈ FRA Naturally Regenerating Forest layer)...")
+                "Refining Forest to naturally regenerating forest by "
+                "excluding planted forest...")
             if True:  # (preserve existing indentation of block below)
                 _fds = gdal.Open(forest_raw_path, gdal.GA_ReadOnly)
                 _farr = _fds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
@@ -1625,18 +1617,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_out = None
                 excluded_px = int((_farr == 1).sum() - _natreg.sum())
                 feedback.pushInfo(
-                    f"  Excluded {excluded_px:,} plantation pixels from forest.")
+                    f"  Excluded {excluded_px:,} planted-forest pixels from forest.")
                 # Downstream stages operate on nat-regen forest
                 reference = forest_natreg_path
         elif plantations_tif is not None and not exclude_plantations:
             feedback.pushInfo(
-                "Plantations raster prepared in intermediates/prepared/plantations.tif "
-                "but 'Exclude plantations' is off — plantations are NOT excluded "
-                "from the forest input in this run.")
+                "Planted forest raster prepared in intermediates/prepared/plantations.tif "
+                "but 'Refine to naturally regenerating forest' is off — planted forest "
+                "is NOT excluded from the forest input in this run.")
         elif plantations_layer is None and exclude_plantations:
             feedback.pushInfo(
-                "'Exclude plantations' is on but no plantations raster"
-                " provided — skipping exclusion.")
+                "'Refine to naturally regenerating forest' is on but no Planted "
+                "forest raster provided — skipping exclusion.")
 
         # DEM / Slope: slope raster overrides DEM if provided
         slope_layer = self.parameterAsRasterLayer(

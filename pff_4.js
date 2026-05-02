@@ -1,5 +1,5 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.10.0";
+var PFF_SCRIPT_VERSION = "4.11.0";
 
 // Changes vs v4.8.4 (P1.23 -- Custom forest section + input declaration):
 //  - "Custom Forest" pulled out of the Source dropdown into its own
@@ -1759,7 +1759,9 @@ var runButton = ui.Button({
     if (typeof areaStatsPanel !== 'undefined') {
       areaStatsPanel.clear();
     }
-    updateMap();
+    // P1.25: button-only flag triggers visibility reset inside updateMap
+    // so any layer the user had toggled off in the legend comes back on.
+    updateMap({fromUpdateAnalysisButton: true});
   },
   style: {
     fontWeight: 'bold',
@@ -1770,6 +1772,33 @@ var runButton = ui.Button({
     color: '#333333'
   }
 });
+
+// P1.26: "Disable map" mode for slow internet connections. When ticked,
+// addLayersToMap() skips every map.addLayer() / map.layers().add() call
+// -- no tile fetches at all -- but the analysis cache (latestMasked*)
+// still populates. So Update Analysis still runs the server-side
+// compute graph (lazily), and Export All Layers / Export Statistics to
+// Drive still queue tasks containing Primary Forest + Pre-connectivity.
+// On-the-fly Show Area Statistics is also disabled (it uses .evaluate()
+// roundtrips per layer/year); user is steered to Export Statistics to
+// Drive instead, which queues server-side without immediate roundtrips.
+// Save/Load Settings + Download Run Metadata stay enabled (single small
+// JSON downloads, fast even on slow connections).
+var disableMapCheckbox = ui.Checkbox({
+  label: 'Disable map (low internet)',
+  value: false,
+  onChange: function(v) {
+    disableMapHint.style().set('shown', v);
+    markNeedsUpdate();
+  },
+  style: {fontSize: '11px', margin: '4px 8px 0 8px'}
+});
+var disableMapHint = ui.Label(
+  'Map preview off — Update Analysis + Export to Drive still work. ' +
+  'On-the-fly Show Stats disabled; use Export Statistics to Drive instead.',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic',
+   margin: '0 8px 4px 24px', shown: false}
+);
 
 // Track if parameters have changed since last update
 var needsUpdate = false;
@@ -1957,6 +1986,19 @@ var showStatsButton = ui.Button({
   onClick: function() {
     showStatsButton.setLabel('↻ Show Area\nStatistics');
     areaStatsPanel.clear();
+    // P1.26: in "Disable map" mode, on-the-fly stats are disabled
+    // because each layer/year does a server-side .evaluate() roundtrip
+    // -- bad on slow connections. Steer the user to Export Statistics
+    // to Drive instead, which queues a server-side task.
+    if (disableMapCheckbox.getValue()) {
+      areaStatsPanel.add(ui.Label(
+        'On-the-fly Show Area Statistics is disabled in low-internet mode. ' +
+        'Use "Export Statistics to Drive" below -- it queues a server-side ' +
+        'task and the CSV waits in your Drive for later pickup.',
+        {color: '#b58105', fontSize: '11px', fontStyle: 'italic',
+         margin: '0 0 6px 0'}));
+      return;
+    }
     var selectedCountry = countrySelector.getValue();
     if (!selectedCountry) {
       areaStatsPanel.add(ui.Label('Please select a country first.'));
@@ -2284,7 +2326,7 @@ var exportChk_slope           = ui.Checkbox({label: 'Slope',                    
 var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas (binary image)', value: true,  style: exportChkStyle});
 var exportChk_protVector      = ui.Checkbox({label: 'Protected areas (vector)',      value: false, style: exportChkStyle});
 var exportChk_aoi             = ui.Checkbox({label: 'AOI boundary (vector)',         value: true,  style: exportChkStyle});
-var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (treecover + loss)', value: false, style: exportChkStyle});
+var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (tree cover + loss)', value: false, style: exportChkStyle});
 var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height',              value: false, style: exportChkStyle});
 var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata JSON (config + run snapshot)', value: true,  style: exportChkStyle});
 
@@ -3374,21 +3416,19 @@ var treecoverSourceSelect = ui.Select({
 // agroforestry) per FRA Note 10. "Planted forest" means timber/pulp/
 // fibre plantations (eucalyptus, pine, teak) per FRA Note 7.
 // (Rubber is country-dependent in FRA reporting -- see About panel.)
-// P1.24: outcome-framed labels with examples as italic sub-hint.
-// Wrappers (excludeAgriPanel / includePlantationsPanel) are what
-// updateInputCategoryVisibility() hides; analysis sites read the
-// wrapper visibility via exclusionActive(checkbox, wrapper).
+// P1.24: outcome-framed labels.
+// P1.25: examples now inline in the label (FRA-aligned "other land
+// with tree cover" wording), so the standalone italic hint that lived
+// here in P1.24 is redundant and removed. Wrapper panel kept (single
+// child) so updateInputCategoryVisibility() still toggles via the
+// wrapper and exclusionActive(checkbox, wrapper) keeps working.
 var excludeAgricultureFromForestCheckbox = ui.Checkbox({
-  label: 'Refine to forest (exclude plantations)',
+  label: 'Refine to forest (exclude other land with tree cover, e.g. oil palm, orchards etc)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
 });
-var excludeAgriHint = ui.Label(
-  'e.g. oil palm, fruit, agroforestry',
-  {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 4px 22px'}
-);
 var excludeAgriPanel = ui.Panel({
-  widgets: [excludeAgricultureFromForestCheckbox, excludeAgriHint],
+  widgets: [excludeAgricultureFromForestCheckbox],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {margin: '0'}
 });
@@ -3622,10 +3662,15 @@ var customSlopeInput = ui.Textbox({
 // =============================================================================
 
 // Plain-language input category labels (kept short enough to fit panel)
-var INPUT_CATEGORY_ALL    = 'All tree cover (includes oil palm, orchards, plantations)';
-var INPUT_CATEGORY_FOREST = 'Forest only (excludes oil palm, orchards, agroforestry, urban trees)';
+// P1.25: FRA-aligned phrasing. "Other land with tree cover" is the
+// FRA 2025 category name (Note 10 + section 1e of the FRA Terms doc)
+// for the non-Forest tree-cover bucket -- palms, orchards,
+// agroforestry, urban trees. Surfacing the FRA term in the dropdown
+// trains workshop users on the vocabulary they'll need when reporting.
+var INPUT_CATEGORY_ALL    = 'Tree cover (includes oil palm, orchards, agroforestry etc)';
+var INPUT_CATEGORY_FOREST = 'Forest (excludes other land with tree cover e.g. oil palm, orchards, agroforestry etc)';
 var INPUT_CATEGORY_NATREG = 'Naturally regenerating forest (also excludes planted forest)';
-var INPUT_CATEGORY_PRIMARY= 'Primary forest (already filtered for human disturbance)';
+var INPUT_CATEGORY_PRIMARY= 'Primary forest (for comparison/further analysis)';
 
 var inputCategorySelect = ui.Select({
   items: [INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST, INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY],
@@ -4622,7 +4667,7 @@ var downloadsPanel = ui.Panel({
 
 // Left panel with collapsible sections and scroll
 var leftPanel = ui.Panel({
-  widgets: [runButton, resetSettingsButton, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
+  widgets: [runButton, resetSettingsButton, disableMapCheckbox, disableMapHint, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {width: '150px', backgroundColor: 'rgba(255, 255, 255, 0.95)', padding: '2px', maxHeight: '600px'}
 });
@@ -5093,7 +5138,13 @@ ui.util.setInterval(function() {
 
 // Main update function
 
-function updateMap()  { 
+function updateMap(opts)  {
+  // P1.25: opts.fromUpdateAnalysisButton flag toggles two button-only
+  // behaviours (visibility reset, see below). All other callers
+  // (country/year change, applySettings, initial load) call updateMap()
+  // with no args -- they keep current behaviour and preserve the user's
+  // per-layer toggles.
+  opts = opts || {};
   markUpToDate();
   // Clear stale on-the-fly stats whenever parameters change
   areaStatsPanel.clear();
@@ -5204,6 +5255,13 @@ function updateMap()  {
     mainContainer.clear();
     linker = null;
     splitPanel = null;
+
+    // P1.26: clear legend-refresh closures from previous maps. Each
+    // createLegendPanel() call below pushes a new closure to
+    // _legendRefreshFns; without this cleanup, every mode rebuild
+    // leaks one fn referencing a now-orphaned panel. Cheap to keep
+    // around individually, but accumulates across many mode toggles.
+    _legendRefreshFns.length = 0;
 
     if (requestedMode === 'split') {
       // Recreate maps fresh
@@ -5336,7 +5394,17 @@ map2.add(createDisclaimerPanel());
     syncAndRemovePffLayers(map1);
     syncAndRemovePffLayers(map2);
   }
-  
+
+  // P1.25: when triggered by the Update Analysis button, restore default
+  // layer visibility so freshly-added layers show on the map. Layers the
+  // user had toggled off in the legend come back -- "fresh analysis =
+  // fresh view." Placed AFTER syncAndRemovePffLayers so its writeback
+  // to visibleLayers (from the soon-to-be-removed layers' shown-state)
+  // doesn't overwrite the reset.
+  if (opts.fromUpdateAnalysisButton) {
+    resetVisibleLayers();
+  }
+
   // After rebuild or clear, ensure maps are centered to avoid default USA view
   // Priority: restore last view if available; otherwise center on selected country
   var centroid = country_sel.geometry().centroid().coordinates().getInfo();
@@ -5482,6 +5550,20 @@ map2.add(createDisclaimerPanel());
   
   // Function to add layers to a map for a given year
   function addLayersToMap(map, analysisYear) {
+    // P1.26: "Disable map" mode -- when on, skip every pffAddLayer()
+    // call. The lazy ee.Image graph still gets built (cheap, no
+    // roundtrip) and the latestMasked* caches still populate, so
+    // Export All Layers / Export Statistics to Drive can still queue
+    // tasks containing Primary Forest + Pre-connectivity. Only the
+    // visual preview is skipped.
+    var skipMap = disableMapCheckbox.getValue();
+    function pffAddLayer() {
+      if (skipMap) return;
+      // .apply lets us forward whatever args the call site passed
+      // (varies in arity across the addLayersToMap call sites).
+      map.addLayer.apply(map, arguments);
+    }
+
     // P1.23: forest_map is always derived from the Source dropdown
     // first; if Custom forest data is on, applyCustomForestMerge then
     // combines it with the global source according to the user-chosen
@@ -5537,13 +5619,13 @@ map2.add(createDisclaimerPanel());
     // }).union() :
     // country_sel.buffer(country_buffer_threshold);
     
-    // map.addLayer(country_buffer)
+    // pffAddLayer(country_buffer)
     
     
     // var country_and_buffer_mask = ee.Image(1).clip(country_buffer);
     // var forest_map_clip = forest_map.clip(country_buffer);
     
-    // map.addLayer(forest_map_clip, binary_lightgreen_palette, "Forest", 0, 1);
+    // pffAddLayer(forest_map_clip, binary_lightgreen_palette, "Forest", 0, 1);
     
     /////////
     // Anthropogenic features
@@ -5698,14 +5780,14 @@ map2.add(createDisclaimerPanel());
       }
     }
 
-    // map.addLayer(plantationsMosaicStatic,"","plantationsMosaicStatic")
+    // pffAddLayer(plantationsMosaicStatic,"","plantationsMosaicStatic")
 
-    // map.addLayer(country_and_buffer_mask,'',"country_and_buffer_mask")
+    // pffAddLayer(country_and_buffer_mask,'',"country_and_buffer_mask")
 
     if (addInputLayersToMap.getValue())
-      map.addLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Planted forest', visibleLayers.plantations, 0.7);
-    // map.addLayer(pastureDatasetSel,"","pastureDatasetSel")
-    // map.addLayer(croplandComb,"","croplandComb")
+      pffAddLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Planted forest', visibleLayers.plantations, 0.7);
+    // pffAddLayer(pastureDatasetSel,"","pastureDatasetSel")
+    // pffAddLayer(croplandComb,"","croplandComb")
 
     // Road data
     var roadsMosaicStatic = timeseriesAnthroModule.roadsMosaicStatic().updateMask(country_and_buffer_mask);
@@ -5838,7 +5920,7 @@ map2.add(createDisclaimerPanel());
     // var distImageTest = cachedState.distanceImages[analysisYear + '_road_small'];
 
     // if (distImageTest) {
-    //   map.addLayer(
+    //   pffAddLayer(
     //     distImageTest, 
     //     {min: 0, max: 5000, palette: ['white', 'blue', 'darkblue']}, 
     //     'Distance to small roads (' + analysisYear + ')'
@@ -5915,24 +5997,24 @@ map2.add(createDisclaimerPanel());
     // Order: agriculture (bottom), roads, small built-up, large built-up (top)
     if (addInputLayersToMap.getValue()) {
       if (enableAgriBuffer.getValue())
-        map.addLayer(buffer_from_agriculture, getVisParams('#ffcc00'), 'Buffer: Agriculture', visibleLayers.agriBuffer, 0.5);
+        pffAddLayer(buffer_from_agriculture, getVisParams('#ffcc00'), 'Buffer: Agriculture', visibleLayers.agriBuffer, 0.5);
       if (enableRoadsBuffer.getValue())
-        map.addLayer(buffer_from_road_small, getVisParams('#ff6600'), 'Buffer: Roads', visibleLayers.roadSmallBuffer, 0.5);
+        pffAddLayer(buffer_from_road_small, getVisParams('#ff6600'), 'Buffer: Roads', visibleLayers.roadSmallBuffer, 0.5);
       if (enableBuiltUpSmallBuffer.getValue())
-        map.addLayer(buffer_from_built_up_small, getVisParams('#cc00cc'), 'Buffer: Small Built-up', visibleLayers.builtSmallBuffer, 0.5);
+        pffAddLayer(buffer_from_built_up_small, getVisParams('#cc00cc'), 'Buffer: Small Built-up', visibleLayers.builtSmallBuffer, 0.5);
       if (enableBuiltUpLargeBuffer.getValue())
-        map.addLayer(buffer_from_built_up_large, getVisParams('#3333cc'), 'Buffer: Large Built-up', visibleLayers.builtLargeBuffer, 0.5);
+        pffAddLayer(buffer_from_built_up_large, getVisParams('#3333cc'), 'Buffer: Large Built-up', visibleLayers.builtLargeBuffer, 0.5);
     }
 
     // Processed binary inputs — what actually feeds the distance transforms.
     // Gated on master toggle (computation still happens regardless).
     // Order: agriculture (bottom), roads, small built-up, large built-up (top)
     if (addInputLayersToMap.getValue()) {
-      map.addLayer(agriculture.selfMask(), getVisParams('#b38f00'), 'Input: Agriculture',   visibleLayers.inputAgriculture, 0.9);
-      map.addLayer(roadsSmall.selfMask(),   getVisParams('#993d00'), 'Input: Roads',         visibleLayers.inputRoads,       0.9);
-      map.addLayer(builtUpSmall.selfMask(), getVisParams('#800080'), 'Input: Small Built-up',visibleLayers.inputBuiltupSmall,0.9);
+      pffAddLayer(agriculture.selfMask(), getVisParams('#b38f00'), 'Input: Agriculture',   visibleLayers.inputAgriculture, 0.9);
+      pffAddLayer(roadsSmall.selfMask(),   getVisParams('#993d00'), 'Input: Roads',         visibleLayers.inputRoads,       0.9);
+      pffAddLayer(builtUpSmall.selfMask(), getVisParams('#800080'), 'Input: Small Built-up',visibleLayers.inputBuiltupSmall,0.9);
       if (builtUpLarge) {
-        map.addLayer(builtUpLarge.selfMask(), getVisParams('#1a1a80'), 'Input: Large Built-up',visibleLayers.inputBuiltupLarge, 0.9);
+        pffAddLayer(builtUpLarge.selfMask(), getVisParams('#1a1a80'), 'Input: Large Built-up',visibleLayers.inputBuiltupLarge, 0.9);
       }
     }
 
@@ -5970,7 +6052,7 @@ map2.add(createDisclaimerPanel());
     }
     
     if (addInputLayersToMap.getValue() && enableSlope.getValue())
-      map.addLayer(slopeAreasToKeep.selfMask(), {palette: '#708090'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
+      pffAddLayer(slopeAreasToKeep.selfMask(), {palette: '#708090'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
     
     // Protected areas analysis (using cached category masks)
     var wdpaYearCutoff = current_year - years_protected;
@@ -6006,7 +6088,7 @@ map2.add(createDisclaimerPanel());
     var wdpaLabel = 'Input: Protected Areas (≤' + wdpaYearCutoff + ', ' +
       (selected_iucn_categories.length === 10 ? 'All' : selected_iucn_categories.join(', ')) + ')';
     if (addInputLayersToMap.getValue() && enableProtectedAreas.getValue())
-      map.addLayer(wdpa_filt_by_date_image, {palette: '#00cccc'}, wdpaLabel, visibleLayers.protectedAreas, 0.5);
+      pffAddLayer(wdpa_filt_by_date_image, {palette: '#00cccc'}, wdpaLabel, visibleLayers.protectedAreas, 0.5);
     
     // Add forest layer AFTER slope and WDPA so it appears above them
     if (useHansenTreecover) {
@@ -6021,21 +6103,26 @@ map2.add(createDisclaimerPanel());
         country_sel: country_sel
       };
       
-      // Add the Hansen layer to the map if not already added
-      var layers = map.layers();
-      var layerExists = false;
-      for (var i = 0; i < layers.length(); i++) {
-        if (layers.get(i) === hansenLayer) {
-          layerExists = true;
-          break;
+      // P1.26: gate Hansen tile-rendering path with skipMap. The
+      // map.layers().add() and updateHansenLayer() (which calls
+      // setEeObject) both trigger tile fetches.
+      if (!skipMap) {
+        // Add the Hansen layer to the map if not already added
+        var layers = map.layers();
+        var layerExists = false;
+        for (var i = 0; i < layers.length(); i++) {
+          if (layers.get(i) === hansenLayer) {
+            layerExists = true;
+            break;
+          }
         }
+        if (!layerExists) {
+          map.layers().add(hansenLayer);
+        }
+
+        // Initial render with current zoom
+        updateHansenLayer(map, mapName, hansenLayer);
       }
-      if (!layerExists) {
-        map.layers().add(hansenLayer);
-      }
-      
-      // Initial render with current zoom
-      updateHansenLayer(map, mapName, hansenLayer);
       
     } else {
       // P1.23a: skip layers that would visually duplicate the row
@@ -6061,15 +6148,15 @@ map2.add(createDisclaimerPanel());
                        (mapDeclCat === INPUT_CATEGORY_NATREG);
 
       if (mapShowTreeCover) {
-        map.addLayer(tree_cover_clip.selfMask(), binary_palegreen_palette,
+        pffAddLayer(tree_cover_clip.selfMask(), binary_palegreen_palette,
           "Input: Tree cover", visibleLayers.treeCover, 1);
       }
       if (mapShowForest) {
-        map.addLayer(forest_map_clip.selfMask(), binary_lightgreen_palette,
+        pffAddLayer(forest_map_clip.selfMask(), binary_lightgreen_palette,
           "Forest", visibleLayers.forest, 1);
       }
       if (mapShowNrf && forest_natreg_image !== null) {
-        map.addLayer(forest_natreg_image.selfMask(), binary_medgreen_palette,
+        pffAddLayer(forest_natreg_image.selfMask(), binary_medgreen_palette,
           'Naturally regenerating forest', visibleLayers.naturallyRegenerating, 1);
       }
     }
@@ -6114,7 +6201,7 @@ map2.add(createDisclaimerPanel());
 
     // Primary forest identification
     var all_forest_1_1_to_1_3 = combined_map.eq(2).or(combined_map.eq(3)).or(combined_map.eq(5));
-      map.addLayer(all_forest_1_1_to_1_3.selfMask(), binary_green_palette, "Forest outside buffers", visibleLayers.forestOutsideBuffers, 1);
+      pffAddLayer(all_forest_1_1_to_1_3.selfMask(), binary_green_palette, "Forest outside buffers", visibleLayers.forestOutsideBuffers, 1);
 
     // Large forest patches (connectivity filtering)
     var largeForestPatches;
@@ -6129,7 +6216,7 @@ map2.add(createDisclaimerPanel());
       // Skip refinement — all pre-connectivity forest becomes primary
       largeForestPatches = all_forest_1_1_to_1_3;
     }
-      map.addLayer(largeForestPatches.selfMask(), binary_darkgreen_palette, 'Primary Forest', visibleLayers.primaryForest, 1);
+      pffAddLayer(largeForestPatches.selfMask(), binary_darkgreen_palette, 'Primary Forest', visibleLayers.primaryForest, 1);
 
     // Additional datasets 
     
@@ -6145,18 +6232,18 @@ map2.add(createDisclaimerPanel());
     )
     .updateMask(country_and_buffer_mask).selfMask();
     //.clip(country_buffer)
-      map.addLayer(flii_class, {min: 2, max: 3, palette: ["orange", "blue"]}, "Reference: FLII (high/med)", visibleLayers.flii, 1);
+      pffAddLayer(flii_class, {min: 2, max: 3, palette: ["orange", "blue"]}, "Reference: FLII (high/med)", visibleLayers.flii, 1);
     
     var forestPersistence = ee.Image("projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020")
         .updateMask(country_and_buffer_mask).selfMask();
 
-    map.addLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)",0,1); //v0 2020 (Threshold:0.9)
+    pffAddLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)",0,1); //v0 2020 (Threshold:0.9)
 
 
     //european primary forests database    
     // var epfd_2018_polys = ee.FeatureCollection("HU_BERLIN/EPFD/V2/polygons");
     // var epfd_2018_image = ee.Image(0).paint(epfd_2018_polys, 1).int8().selfMask();
-    // map.addLayer(epfd_2018_image.updateMask(country_and_buffer_mask),{min:0, max:1, palette:["brown"]}, "EPFD 2018", 0, 1);
+    // pffAddLayer(epfd_2018_image.updateMask(country_and_buffer_mask),{min:0, max:1, palette:["brown"]}, "EPFD 2018", 0, 1);
 
     // Area calculations - store for later stats button
     var masked_tree_cover = tree_cover_clip.updateMask(country_clip);
@@ -6203,6 +6290,12 @@ map2.add(createDisclaimerPanel());
   previousState.country = selectedCountry;
   previousState.splitScreen = useSplitScreen;
   previousCountry = selectedCountry;
+
+  // P1.25: keep the floating legend in sync with the layer set we just
+  // added. Cheap UI-only op (no GEE compute) -- safe to run on every
+  // updateMap call. _legendRefreshFns is populated by createLegendPanel
+  // (each call pushes the legend's refreshLegend closure).
+  _legendRefreshFns.forEach(function(fn) { fn(); });
 }
 
 // Initial map update
