@@ -13,9 +13,11 @@ Compatible with QGIS >= 3.38 (native: / gdal: providers only).
 
 import os
 import shutil
+import time
 
 from qgis.core import (
     QgsProcessingAlgorithm,
+    QgsProcessingException,
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterVectorLayer,
     QgsProcessingParameterCrs,
@@ -25,6 +27,7 @@ from qgis.core import (
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterString,
     QgsProcessingParameterDefinition,
+    QgsProject,
 )
 
 from ..defaults import (
@@ -50,6 +53,251 @@ from ..utils import (
 # numpy / GDAL for the fast raster-algebra steps
 import numpy as np
 from osgeo import gdal
+
+
+# =============================================================================
+# P1.28: locked-file handling
+# =============================================================================
+# Windows holds OS-level locks on files for several reasons even when QGIS
+# itself doesn't have them open: OneDrive / Dropbox / iCloud sync, Windows
+# Defender real-time scan, File Explorer preview pane, and another QGIS
+# session. The plugin's delete-before-write pattern (os.remove + write)
+# breaks any time one of these holds a transient handle.
+#
+# These helpers + the preflight checks below let the run survive most of
+# those situations: auto-release layers we ourselves loaded into QgsProject,
+# retry os.remove with backoff (handles OneDrive sync windows), warn upfront
+# when the output folder is on a cloud-synced drive, and abort early if the
+# folder isn't writable at all.
+
+def _release_layers_at_path(path):
+    """Best-effort: remove any QgsProject layer at `path` so the file
+    is unlocked. Silent on failure -- caller's os.remove() will raise
+    the proper error if still locked."""
+    try:
+        proj = QgsProject.instance()
+        target = os.path.normcase(os.path.abspath(path))
+        for layer in list(proj.mapLayers().values()):
+            # GPKG layer sources can be 'path|layername=foo' -- strip the
+            # provider suffix before path comparison.
+            src = layer.source().split('|')[0]
+            if os.path.normcase(os.path.abspath(src)) == target:
+                proj.removeMapLayer(layer.id())
+    except Exception:
+        pass
+
+
+def _try_rename_aside(path):
+    """Try to rename `path` to a `.pff_old` sidecar -- sometimes succeeds
+    on Windows even when os.remove() fails, because rename uses a
+    different syscall path (DELETE+RENAME atomically) that doesn't need
+    the same access bits as plain delete. If rename works, the canonical
+    path is freed for new writes; the .pff_old leftover gets best-effort
+    deleted (silent if it fails).
+
+    Returns True if the rename succeeded, False otherwise.
+    """
+    if not os.path.exists(path):
+        return True  # already gone -- canonical path is free
+    junk = path + '.pff_old'
+    # Stale .pff_old from a prior run might still be locked too --
+    # best-effort delete; if it sticks around, we'll fail the rename
+    # below anyway.
+    if os.path.exists(junk):
+        try:
+            os.remove(junk)
+        except OSError:
+            pass
+    try:
+        os.rename(path, junk)
+    except OSError:
+        return False
+    try:
+        os.remove(junk)
+    except OSError:
+        pass  # locked .pff_old is harmless -- canonical path is free
+    return True
+
+
+def _safe_remove(path, attempts=10, delay_s=0.5, feedback=None):
+    """Best-effort delete for paths the run is about to overwrite.
+
+    P1.28a: Two strategies, in order:
+      1. Try renaming `path` aside to `.pff_old` (often succeeds on
+         Windows when plain delete fails -- different syscall path).
+      2. Retry os.remove() with exponential backoff for OneDrive sync,
+         Windows Defender, File Explorer preview locks. Auto-releases
+         QgsProject layers before each retry.
+
+    Default attempts bumped from 5 to 10 (~30s total wait with 1.5x
+    backoff) -- OneDrive sync windows on big GPKG files can be 20-30s.
+    Periodic progress feedback so users know the run isn't hung.
+
+    Raises RuntimeError with an actionable message if still locked.
+    """
+    if not os.path.exists(path):
+        return
+    # Strategy 1 -- the rename trick. Often resolves OneDrive-grabbed
+    # files in one syscall.
+    _release_layers_at_path(path)
+    if _try_rename_aside(path):
+        return
+    # Strategy 2 -- retried delete with progress messages.
+    last_err = None
+    notified = False
+    cur_delay = delay_s
+    for attempt in range(attempts):
+        _release_layers_at_path(path)
+        try:
+            os.remove(path)
+            return
+        except PermissionError as e:
+            last_err = e
+            if attempt < attempts - 1:
+                if feedback is not None and not notified:
+                    feedback.pushInfo(
+                        f"  (file '{os.path.basename(path)}' is locked; "
+                        f"retrying for up to ~30s -- likely OneDrive "
+                        "sync, antivirus, or File Explorer preview)")
+                    notified = True
+                # Periodic progress so user knows we're alive
+                elif feedback is not None and attempt > 0 and attempt % 3 == 0:
+                    feedback.pushInfo(
+                        f"  (still waiting for '{os.path.basename(path)}' "
+                        f"lock to release -- attempt {attempt + 1}/{attempts})")
+                time.sleep(cur_delay)
+                cur_delay *= 1.5  # gentle exponential backoff
+                # One last shot at the rename trick mid-retry: a sync
+                # window may have closed since the first attempt.
+                if attempt == attempts // 2 and _try_rename_aside(path):
+                    return
+    raise RuntimeError(
+        f"Cannot overwrite '{os.path.basename(path)}' after {attempts} "
+        f"attempts. The file is locked by another process. Common causes: "
+        f"OneDrive/Dropbox sync, antivirus scan, File Explorer preview, "
+        f"another QGIS session. Pause the syncing app or close the file "
+        f"and re-run. (original: {last_err})")
+
+
+def _is_cloud_synced_path(path):
+    """Heuristic: detect common cloud-sync folder names in the path.
+    Returns the matched provider name or None."""
+    if not path:
+        return None
+    norm = path.replace('\\', '/').lower()
+    # Match folder boundaries to avoid false positives in user names.
+    for marker, label in [
+        ('/onedrive', 'OneDrive'),
+        ('/dropbox', 'Dropbox'),
+        ('/google drive', 'Google Drive'),
+        ('/googledrive', 'Google Drive'),
+        ('/icloud drive', 'iCloud Drive'),
+        ('/icloudrive', 'iCloud Drive'),
+        ('/box/', 'Box'),
+    ]:
+        if marker in norm:
+            return label
+    # Also match OneDrive variants like "OneDrive - Company Name"
+    if '/onedrive ' in norm or norm.endswith('/onedrive'):
+        return 'OneDrive'
+    return None
+
+
+def _run_preflight_checks(output_folder, feedback):
+    """Run preflight checks on OUTPUT_FOLDER before STAGE 1. Emits
+    warnings for soft issues (continue), raises QgsProcessingException
+    for hard ones (abort early so the user doesn't waste compute).
+
+    Checks:
+      a) Cloud-sync detection (warn)
+      b) Write permission probe (abort if fails)
+      c) Free disk space (warn if <2 GB)
+      d) Pre-existing locked outputs in OUTPUT_FOLDER (warn; auto-
+         release any QgsProject layers we control)
+    """
+    feedback.pushInfo("=== PREFLIGHT CHECKS ===")
+
+    # (a) Cloud-sync detection
+    provider = _is_cloud_synced_path(output_folder)
+    if provider:
+        feedback.pushWarning(
+            f"Output folder is on a cloud-synced drive ({provider}). "
+            "File locks during sync can cause mid-run write failures. "
+            "If you hit a 'PermissionError' mid-run, either pause sync "
+            "for this folder or use a local path "
+            "(e.g. C:\\Users\\<you>\\Documents\\PFF_outputs).")
+
+    # (b) Write permission probe -- hard fail if folder isn't writable
+    try:
+        os.makedirs(output_folder, exist_ok=True)
+    except OSError as e:
+        raise QgsProcessingException(
+            f"Cannot create OUTPUT_FOLDER '{output_folder}'. "
+            f"Check the path and permissions. (original: {e})")
+    probe_path = os.path.join(output_folder, ".pff_preflight_probe")
+    try:
+        with open(probe_path, 'wb') as f:
+            f.write(b'pff')
+        os.remove(probe_path)
+    except OSError as e:
+        raise QgsProcessingException(
+            f"Cannot write to OUTPUT_FOLDER '{output_folder}'. "
+            "Check folder permissions / read-only flag. "
+            f"(original: {e})")
+
+    # (c) Free disk space
+    try:
+        usage = shutil.disk_usage(output_folder)
+        free_mb = usage.free / (1024 * 1024)
+        if free_mb < 2048:  # < 2 GB
+            feedback.pushWarning(
+                f"Only {free_mb:,.0f} MB free in output drive. PFF "
+                "outputs (intermediates + final rasters/vectors) can be "
+                "100s of MB per run; consider freeing space or using a "
+                "different drive.")
+    except OSError:
+        pass  # disk_usage on weird paths -- skip silently
+
+    # (d) Pre-existing locked outputs. Auto-release QgsProject layers
+    # we control; warn about any that remain locked. We probe a curated
+    # list of stable output filenames the run will overwrite.
+    candidate_subpaths = [
+        # Top-level canonical outputs
+        "intermediates/_vectorize/forest_full.gpkg",
+        "intermediates/_vectorize/primary_forest_full.gpkg",
+        "intermediates/_vectorize/primary_forest_polys_raw.gpkg",
+        "intermediates/_vectorize/forest_polys_raw.gpkg",
+        "intermediates/prepared/forest.tif",
+        "intermediates/prepared/dem.tif",
+        "intermediates/prepared/slope.tif",
+    ]
+    locked_remaining = []
+    for sub in candidate_subpaths:
+        p = os.path.join(output_folder, sub)
+        if not os.path.exists(p):
+            continue
+        try:
+            # Probe with append mode -- doesn't truncate, just opens for
+            # write to detect locks. Same lock semantics as os.remove on
+            # Windows.
+            with open(p, 'r+b'):
+                pass
+        except (PermissionError, OSError):
+            # Locked. Try to release any QgsProject layer at this path.
+            _release_layers_at_path(p)
+            try:
+                with open(p, 'r+b'):
+                    pass
+            except (PermissionError, OSError):
+                locked_remaining.append(os.path.basename(p))
+    if locked_remaining:
+        feedback.pushWarning(
+            "Some existing output files are locked by another process: "
+            + ", ".join(locked_remaining)
+            + ". The run will retry mid-run; if it fails, close the "
+            "file in any other application and re-run.")
+
+    feedback.pushInfo("Preflight checks complete.")
 
 
 class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
@@ -726,7 +974,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.10"
+    PFF_VERSION = "0.9.11"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -778,6 +1026,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         out_dir = ensure_dir(
             self.parameterAsString(parameters, self.OUTPUT_FOLDER, context))
+
+        # P1.28: preflight checks. Detects cloud-sync output folders +
+        # locked existing outputs upfront so users don't waste 1+
+        # minutes of analysis on a failure that was predictable. Hard
+        # failures (folder not writable) abort here; soft failures
+        # (cloud sync, low disk space) just emit warnings.
+        _run_preflight_checks(out_dir, feedback)
 
         # Output filename helper: builds top-level paths per Option D
         # naming. Uses _iso3 from above; closes over out_dir.
@@ -1232,14 +1487,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _drv = gdal.GetDriverByName("GTiff")
                 # Write clipped forest to prepared/forest.tif (different path
                 # from the scratch reproj source — no in-place overwrite).
-                if os.path.exists(prepared_forest_path):
-                    try:
-                        os.remove(prepared_forest_path)
-                    except OSError as e:
-                        raise RuntimeError(
-                            f"Cannot write '{os.path.basename(prepared_forest_path)}' — "
-                            "it is locked. Close any program using it and retry. "
-                            f"(original: {e})")
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(prepared_forest_path, feedback=feedback)
                 # Use _ds_out NOT _out -- _out is the helper closure for
                 # building output filenames (defined ~line 625). Naming
                 # this GDAL Dataset _out would shadow the closure for the
@@ -1490,14 +1739,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             _aarr = _ads.GetRasterBand(1).ReadAsArray().astype(np.uint8)
             _ads = None
             _farr_fra = ((_farr == 1) & (_aarr != 1)).astype(np.uint8)
-            if os.path.exists(forest_fra_path):
-                try:
-                    os.remove(forest_fra_path)
-                except OSError as e:
-                    raise RuntimeError(
-                        f"Cannot overwrite '{os.path.basename(forest_fra_path)}' — "
-                        "it is locked. Remove it from QGIS Layers panel and retry. "
-                        f"(original: {e})")
+            # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+            _safe_remove(forest_fra_path, feedback=feedback)
             _drv = gdal.GetDriverByName("GTiff")
             # _ds_out NOT _out -- avoid shadowing the closure helper
             _ds_out = _drv.Create(forest_fra_path, _fxsz, _fysz, 1,
@@ -1535,14 +1778,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Reflects the post-P1.18 forest_raw_path: FRA-strict version
         # when the toggle is on, thresholded tree cover otherwise.
         forest_baseline_top_path = _out("02b", "forest")
-        if os.path.exists(forest_baseline_top_path):
-            try:
-                os.remove(forest_baseline_top_path)
-            except OSError as e:
-                raise RuntimeError(
-                    f"Cannot overwrite '{os.path.basename(forest_baseline_top_path)}' — "
-                    "it is locked. Remove it from QGIS Layers panel and retry. "
-                    f"(original: {e})")
+        # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+        _safe_remove(forest_baseline_top_path, feedback=feedback)
         shutil.copy2(forest_raw_path, forest_baseline_top_path)
         feedback.pushInfo(
             f"Wrote Forest baseline to "
@@ -1595,15 +1832,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 # naturally regenerating forest, not a sibling.
                 forest_natreg_path = _out("02d", "naturally_regenerating_forest")
                 _drv = gdal.GetDriverByName("GTiff")
-                # Remove first so locked file gives a clear error.
-                if os.path.exists(forest_natreg_path):
-                    try:
-                        os.remove(forest_natreg_path)
-                    except OSError as e:
-                        raise RuntimeError(
-                            f"Cannot overwrite '{os.path.basename(forest_natreg_path)}' — "
-                            "it is locked. Remove it from QGIS Layers panel and retry. "
-                            f"(original: {e})")
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(forest_natreg_path, feedback=feedback)
                 # _ds_out NOT _out -- shadowing _out (the closure helper)
                 # would break downstream _out("step", "name") calls.
                 _ds_out = _drv.Create(forest_natreg_path, _fxsz, _fysz, 1,
@@ -1776,9 +2006,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 if _cds:
                     _cds = None
             if not use_cache:
-                # Delete stale cached file before recomputing
-                if os.path.exists(dp):
-                    os.remove(dp)
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(dp, feedback=feedback)
                 feedback.pushInfo(f"Computing distance for {name}...")
                 proximity(raster_path, dp, max_distance=max_dist,
                           context=context, feedback=feedback)
@@ -2314,15 +2543,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                         f"  Stamping {layer_name} with target CRS "
                         f"({target_crs_str})...")
                     _vt_options = ['-a_srs', target_crs_str]
-                if os.path.exists(polys_path):
-                    try:
-                        os.remove(polys_path)
-                    except OSError as e:
-                        raise RuntimeError(
-                            f"Cannot overwrite '{os.path.basename(polys_path)}' "
-                            "before final write. If it's open in QGIS, remove "
-                            f"the layer from the Layers panel and retry. "
-                            f"(original: {e})")
+                # P1.28: _safe_remove handles transient locks. The
+                # forest_full.gpkg failure on OneDrive paths happened
+                # right here -- the helper retries with backoff so a
+                # transient sync lock doesn't abort the whole run.
+                _safe_remove(polys_path, feedback=feedback)
                 gdal.VectorTranslate(
                     polys_path, polys_tmp,
                     format=vec_format,
@@ -2462,16 +2687,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     del _nested_arr
                     # Pre-flight check covered the canonical path; if
                     # locked we would have failed at run start.
-                    if os.path.exists(_canonical_forest_polys):
-                        try:
-                            os.remove(_canonical_forest_polys)
-                        except OSError as e:
-                            raise RuntimeError(
-                                f"Cannot remove existing "
-                                f"'{os.path.basename(_canonical_forest_polys)}' "
-                                "during nesting. If it's open in QGIS, "
-                                "remove the layer from the Layers panel "
-                                f"and retry. (original: {e})")
+                    # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                    _safe_remove(_canonical_forest_polys, feedback=feedback)
                     # Polygonise to scratch always; final pass through
                     # ogr2ogr applies -a_srs (and optional -simplify).
                     # Uniform CRS handling regardless of simplify state.
