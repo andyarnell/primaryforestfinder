@@ -1,5 +1,258 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.3.1";
+var PFF_SCRIPT_VERSION = "4.11.0";
+
+// Changes vs v4.8.4 (P1.23 -- Custom forest section + input declaration):
+//  - "Custom Forest" pulled out of the Source dropdown into its own
+//    discoverable checkbox-style panel (nationalForest), echoing the
+//    existing Custom road / built-up / agriculture / plantations /
+//    protected sections via createNationalAssetInputs. Most users
+//    never noticed the dropdown's Custom Forest option; the new
+//    section appears in the Tree Cover panel between the threshold
+//    sliders and the divider.
+//  - New panel-level "My tree cover represents:" declaration dropdown
+//    with four options: All tree cover / Forest only / Naturally
+//    regenerating forest / Primary forest. Plain-language labels;
+//    FRA mapping reachable via a small "ⓘ How does this map to FRA
+//    categories?" button that opens the existing About panel.
+//    Default value "All tree cover" preserves pre-P1.23 behaviour
+//    for users who don't engage with the dropdown.
+//  - Exclusion-toggle visibility now driven by the declaration:
+//      All tree cover           -> OLWTC + Planted forest both shown
+//      Forest only              -> Planted forest only
+//      Naturally regenerating   -> neither
+//      Primary forest           -> neither
+//    Hidden toggles are never applied in analysis (exclusionActive()
+//    helper guards against stale `true` values from earlier UI state).
+//  - Custom exclusion data section (renamed from "Custom plantations
+//    data") follows the same visibility rules. Variable name and
+//    saved-settings keys kept as nationalPlantations for backwards
+//    compat.
+//  - createNationalAssetInputs factory extended:
+//      * mode label "Add to global" renamed to "Add to global extent"
+//        everywhere (clearer about what's being unioned). Old saved
+//        settings carrying the legacy string are forward-migrated on
+//        load.
+//      * new optional config flag `allowAgreement: true` adds a third
+//        merge mode "Agreement with global" (intersection). Enabled
+//        for area-based raster sections (forest, plantations, agri,
+//        large built-up, protected). Skipped for vector-derived
+//        narrow features (roads, small built-up) where pixel-perfect
+//        alignment is unreliable without buffering.
+//  - Run-info table now records: declared input category, custom
+//    forest active flag + merge mode, plus the *effectively* applied
+//    exclusion state (via exclusionActive) instead of the raw checkbox
+//    value -- so the saved metadata matches the run.
+//  - About panel: rubber caveat updated to reference "Custom exclusion
+//    data" (was "Custom plantations override"); new orthogonality note
+//    clarifying that thresholds and declaration are independent
+//    (thresholds are biophysical filters; declaration is FRA semantic
+//    category).
+
+// Changes vs v4.8.3 ("Input: Forest" -> "Forest"):
+//  - Renamed map layer "Input: Forest" -> "Forest". Tree cover is
+//    the actual user input now (added v4.8.1); Forest is derived
+//    inside the tool (tree cover MINUS FRA agriculture). The
+//    "Input:" prefix was misleading.
+//  - Wiring updates to handle exact-match (not prefix-match) for
+//    'Forest' since plain 'Forest' as a prefix would over-match
+//    'Forest outside buffers' (a different layer):
+//      * LAYER_PREFIX_MAP: removed 'Forest' prefix entry
+//      * pffLayerNames: added 'Forest' as exact-match entry
+//      * pffPrefixes: removed 'Forest' (was 'Input: Forest')
+//      * nameToKey: added 'Forest' -> 'forest' explicit entry
+//      * syncVisibleLayersFromMap: prefix check replaced with exact
+//        check; layer-shown read switched to exact match
+//
+// Changes vs v4.8.2 (Tree cover stats):
+//  - Tree cover now reported in the stats panel as the top of the
+//    FRA progression: Tree cover -> Forest -> Naturally regenerating
+//    -> Primary forest. Matches the on-map progression.
+//  - Drive stats export gains a Tree cover row when "Export Statistics
+//    to Drive" is clicked.
+//  - latestMaskedTreeCover dict + reset wiring + storage at end of
+//    addLayersToMap, mirrored from the existing latestMasked* pattern.
+//
+// Changes vs v4.8.1 (legend refresh + button polish):
+//  - Legend refresh button enlarged to "↻ Refresh" text label
+//    (80x32, was 32x28 icon-only). Self-explanatory + easier to hit.
+//  - Bug fix: legend refresh was wiping the new "Input: Tree cover"
+//    layer because syncVisibleLayersFromMap()'s local NAME_TO_KEY
+//    dict didn't know about the treeCover key (added in v4.8.1).
+//    Each refresh reset visibleLayers.treeCover to false then never
+//    restored it. Added 'Input: Tree cover': 'treeCover' to the
+//    NAME_TO_KEY dict + a prefix match. Naturally regenerating
+//    forest also added (was missing too -- silent bug since v4.3.x
+//    that Tree cover exposed because it shared the issue).
+//  - Legend toggle button bumped to width 80, fontSize 11px to match.
+//
+// Changes vs v4.8.0:
+//  - New "Input: Tree cover" map layer + legend entry. Shows the
+//    thresholded tree cover BEFORE the P1.18 FRA-agriculture
+//    exclusion -- workshop users see the full FRA forest-derivation
+//    progression on the map: Tree cover -> Forest -> Naturally
+//    regenerating -> Forest outside buffers -> Primary.
+//  - tree_cover_clip variable saves forest_map_clip pre-P1.18 so the
+//    pre-FRA-filter layer survives even when FRA toggle is on.
+//  - New binary_palegreen_palette (#c8e6c9, Material Green 100)
+//    extends the light->dark green ramp at the broadest end.
+//  - visibleLayers.treeCover (default true), legend checkbox,
+//    LEGEND_ENTRIES, pffLayerNames cleanup, LAYER_PREFIX_MAP,
+//    nameToKey -- all wired so the layer participates in the
+//    standard show/hide + remove-on-update behaviour.
+
+// Changes vs v4.7.0 (P1.22 follow-up -- checkbox reorder + About FRA block):
+//  - Tree Cover panel: paired exclusion checkboxes reordered + relabelled
+//    to match the FRA forest-derivation flow:
+//      tree cover - plantations    = Forest (FRA Note 10 baseline)
+//      Forest    - planted forest = Naturally regenerating forest
+//    OLD                                       NEW
+//    "Exclude planted forest (derives ...)"    "Exclude plantations (e.g. oil
+//                                              palm, fruit, agroforestry)" -- FIRST
+//    "Exclude agriculture from Forest          "Exclude planted forest (e.g.
+//      baseline (FRA-aligned)"                  eucalyptus, pine, teak --
+//                                              timber/pulp/fibre)" -- SECOND
+//    Code logic + state management unchanged -- excludeAgriculture- and
+//    includePlantationsCheckbox kept their existing variable names + saved-
+//    settings keys for backward compat. Only labels + display order moved.
+//
+//  - About panel expanded with FRA 2025 definitions block (Forest / NRF /
+//    Primary Forest, verbatim from FAO), FRA Note 7 inclusions (rubber-wood,
+//    cork oak, Christmas trees) and Note 10 exclusions (oil palm, fruit,
+//    olive, agroforestry-with-crops). Plus a "How PFF outputs map to FRA"
+//    block with explicit ≈ proxies and the rubber caveat (SDPT v2 vs FRA
+//    Note 7 mismatch). Workshop users now have the canonical definitions
+//    in-app rather than hunting the FAO website.
+//
+//  - Plugin side mirrors the same reorder + relabel pair (PLANTATIONS_RASTER
+//    + EXCLUDE_PLANTATIONS now appear AFTER FRA_AGRICULTURE_RASTER + EXCLUDE_
+//    AGRICULTURE_FROM_FOREST in full_workflow.py initAlgorithm). Symbolic
+//    parameter names kept for backward compat with processing.run() callers.
+
+// Changes vs v4.6.0 (P1.22 -- terminology rename: Planted forest / Plantations):
+//  Per FRA Notes 7 + 10, the everyday word "plantation" actually fits
+//  agricultural tree crops (oil palm, fruit) BETTER than timber forestry
+//  plantations. Swap labels to match intuition:
+//
+//    OLD                                NEW
+//    "Plantations" layer (SDPT class 1) "Planted forest" (timber/pulp/fibre,
+//                                       e.g. eucalyptus, pine, teak)
+//    "FRA agriculture (tree-cover       "Plantations" (agricultural tree
+//      subset)" layer (SDPT class 2     crops, e.g. oil palm, fruit
+//      + Descals oil palm)              orchards, olive orchards,
+//                                       agroforestry-with-crops)
+//
+//  Filename renames (BREAKING):
+//    02c_plantations              -> 02c_planted_forest
+//    03a_agriculture_tree_cover_fra -> 03a_plantations_tree_crops
+//
+//  Stats panel "Plantations Included" -> "Planted Forest Excluded".
+//  Backward-compat: load-settings still reads old keys.
+//
+//  RUBBER CAVEAT (documented, not fixed): per FRA Note 7, rubber-wood
+//  plantations ARE forest. SDPT v2 puts rubber in class 2 (Tree Crops),
+//  so rubber-bearing pixels currently land in 03a_plantations_tree_crops
+//  rather than 02c_planted_forest. Workshop guide notes this -- users in
+//  rubber-heavy countries (Indonesia, Malaysia, Thailand) can supply a
+//  national rubber raster via the existing nationalPlantations override
+//  to add it to 02c. Rubber rerouting via FDAP is not used (FDAP has
+//  commission errors in primary forest -- see memory note).
+//
+//  PRIMARY FOREST honesty caveat (documented in About + workshop guide):
+//  PFF's 04a_primary_forest is a geographic-proxy filter. It DOES NOT
+//  directly check FRA Primary Forest's "native species" criterion or
+//  "no significant hunting/poaching/gathering" criterion. Treat as a
+//  starting point for FRA Primary Forest reporting, refined by national
+//  context.
+//
+//  NRF Note 4 caveat (documented): per FRA, naturally regenerated trees
+//  of introduced species count as Naturally Regenerating Forest. The
+//  tool can't distinguish volunteer regeneration from active planting,
+//  so abandoned planted-forest blocks where trees have volunteered
+//  appear in 02c_planted_forest rather than 02d_naturally_regenerating.
+//  National data on actively-managed planted forest can correct this.
+
+// Changes vs v4.5.0 (P1.20 -- FRA-correct plantations layer):
+//  - Plantations layer narrowed to SDPT class 1 only (FRA Planted
+//    Forest -- timber/pulp/fibre plantations: eucalyptus, pine, teak).
+//    Per FRA, tree crops (SDPT class 2 -- rubber, fruit, agroforestry)
+//    and Descals oil palm are agricultural land regardless of tree
+//    biology and now route through the agriculture aggregation
+//    instead. Affects:
+//      02c_plantations export                       (FRA Planted Forest only)
+//      02d_naturally_regenerating_forest derivation (= 02b - 02c, FRA-faithful)
+//    Behaviour: 02c_plantations area SHRINKS in oil-palm-heavy
+//    countries (Indonesia, Malaysia, Nigeria) -- now matches FRA
+//    Planted Forest reporting. 02d_naturally_regenerating_forest
+//    pixels unchanged from pre-P1.20 because P1.18 already excluded
+//    tree-cover-meeting agriculture at the baseline. 04a_primary_forest
+//    pixels unchanged -- agriculture aggregation explicitly includes
+//    tree crops + oil palm so disturbance buffering content is the
+//    same as before P1.20.
+//  - New helper modules/timeseriesAnthro.js processingPlantedForestSDPT()
+//    exposes SDPT class 1 (Planted Forests) as a separate layer.
+//    Sibling to processingTreeCropsSDPT() added in v4.5.0 prep.
+//  - processingPlantationsMosaic() retained for backwards compat but
+//    no longer called by pff_4.js -- consumers should migrate to
+//    processingPlantedForestSDPT() + processingTreeCropsSDPT() pair.
+//  - National plantations override (nationalPlantations.checkbox)
+//    semantics unchanged BUT users should now supply FRA Planted
+//    Forest only (not their full national "plantations" registry if
+//    that bundles tree crops). Workshop guide gains a one-paragraph
+//    note on the SDPT class 1 vs class 2 distinction.
+
+// Changes vs v4.4.0 (workflow-progression schema reorder):
+//  - File numbers now reflect "more removed = higher number" through
+//    the pipeline. Three swaps:
+//      02c plantations          (was 02d) -- INPUT for nat reg derivation
+//      02d naturally_regenerating_forest  (was 02c) -- output of (02b - 02c)
+//      03c pre_connectivity_primary_forest  (was 04b) -- output of Step 03
+//                                            tier logic (disturbance buffers
+//                                            + protection rescues), feeds
+//                                            into Step 04 viability filter
+//      03d combined_coded_raster  (was 04c) -- debug of Step 03 tier logic
+//      04a primary_forest        (unchanged) -- final output of Step 04
+//                                                ecological viability filter
+//  - Step 04 collapses to a single output (04a primary_forest), matching
+//    "Refine Output = ecological viability filter only".
+//  - Anthropogenic mask still at 04e for now -- spec says it should move
+//    to intermediates/ (no top-level number); flagged for follow-up batch.
+
+// Changes vs v4.3.1 (P1.18 -- FRA-aligned Forest baseline):
+//  - New checkbox "Exclude agriculture from Forest baseline
+//    (FRA-aligned)" in Tree Cover section, default ON (FRA-correct).
+//    When ticked, forest_map_clip is masked by NOT(Descals oil palm
+//    OR SDPT class 2 tree crops) BEFORE the P1.16 plantations
+//    subtraction. This narrows the Forest baseline (02b) to the
+//    FRA-strict definition: tree cover meeting biophysical
+//    thresholds AND not primarily agricultural land. Safe as a
+//    default because when SDPT class 2 / Descals are empty for a
+//    country, the mask is empty and the layer is unchanged.
+//  - Per FRA, "agriculture" here means the *tree-cover-meeting
+//    subset* only (oil palm, tree crops, agroforestry). The broader
+//    PFF buffered agriculture (cropland + pasture + everything for
+//    primary-forest disturbance) is intentionally NOT FRA-aligned --
+//    it serves a different role (proximity-based disturbance signal,
+//    not classification).
+//  - Behaviour change when on: 02b_forest area shrinks (agricultural
+//    tree cover removed at baseline). 02c_naturally_regenerating
+//    area also shrinks (inherits the narrower baseline). 04a_primary
+//    is essentially unchanged -- those pixels were already removed
+//    via disturbance buffering toward primary.
+//  - Run metadata bundle gains "FRA Agriculture Excluded from Forest"
+//    boolean. Settings save/load + reset wired. Backward-compat:
+//    older saved settings without this key default to false.
+//  - New helper modules/timeseriesAnthro.js processingTreeCropsSDPT()
+//    exposes SDPT class 2 (Tree Crops) as a separate layer so P1.18
+//    can use it without manually replicating the SDPT loading logic.
+//    Sets the stage for P1.20 (FRA-correct plantations refactor)
+//    which will reroute SDPT class 2 + Descals oil palm out of the
+//    plantations layer entirely.
+//  - **P1.18 must ship before P1.20** -- without it, P1.20's
+//    plantations rebucketing would leave 02c_naturally_regenerating
+//    containing agricultural tree cover (oil palm, rubber). With
+//    P1.18 first, the baseline already excludes that tree cover so
+//    P1.20 just refines what counts as "Planted forest" without
+//    re-introducing agricultural pixels into Naturally regenerating.
 
 // Changes vs v4.3.0 (P1.16 follow-up fixes):
 //  - Naturally regenerating forest layer was stacking on each
@@ -41,7 +294,7 @@ var PFF_SCRIPT_VERSION = "4.3.1";
 //  - New export tickbox "Naturally regenerating forest (02c)" in
 //    the Export-all panel. File name pattern:
 //    <iso3>_gee_02c_naturally_regenerating_forest_<y>_<s>m.tif.
-//  - Map: forest layer always labeled "Input: Forest" (no longer
+//  - Map: forest layer always labeled "Forest" (no longer
 //    conditionally relabeled to "Input: Forest (excl. plantations)").
 //    New "Naturally regenerating forest" map layer added when
 //    forest_natreg_image is produced -- default visible, palette
@@ -55,7 +308,7 @@ var PFF_SCRIPT_VERSION = "4.3.1";
 //    hierarchy (subset, not sibling). Both export to the Drive CSV
 //    as separate columns when "Export Statistics" is run.
 //  - Legend: new "Naturally regenerating forest" checkbox between
-//    "Input: Forest" and "Plantations" in the Layer Visibility panel.
+//    "Forest" and "Plantations" in the Layer Visibility panel.
 //  - Substep migration: input steps (02, 03) move from per-file
 //    unique-letter scheme to semantic category-letter scheme. Files
 //    that were unique-lettered in v4.2.0 now share a substep letter:
@@ -280,6 +533,12 @@ var IS_PUBLISHED_APP = false;
 
 var latestMaskedForest = {};
 var latestMaskedPrimaryForest = {};
+// Tree cover (thresholded, pre-FRA-filter) -- the broadest forest
+// layer in the FRA hierarchy. Stats panel reports it as the top of
+// the Tree cover -> Forest -> Nat Reg -> Primary progression.
+// Distinct from latestMaskedForest only when P1.18 FRA-agri toggle
+// is on (forest_map_clip got narrowed); otherwise both are equal.
+var latestMaskedTreeCover = {};
 // P1.16: separate dict for Naturally regenerating forest (Forest
 // minus Plantations). Populated only when "Exclude plantations" is
 // on and a plantations layer is available. Stats panel reads this
@@ -391,10 +650,12 @@ allWdpaCategories.forEach(function(cat) {
 // dark) and the other layers are notably lighter shades but still
 // distinguishable from each other. Plantations uses a distinct gold
 // (#d4a017) so planted forest reads as a different category.
+//   Tree cover (thresholded, pre-FRA)  binary_palegreen    #c8e6c9 (palest)
 //   Forest (FRA baseline)              binary_lightgreen   lightgreen (#90EE90)
 //   Naturally regenerating forest      binary_medgreen     #81c784 (Material 300)
 //   Forest outside buffers (pre-conn)  binary_green        #4caf50 (Material 500)
 //   Primary forest                     binary_darkgreen    #0b3d1f (very dark)
+var binary_palegreen_palette  = {min:0, max:1, palette:["white","#c8e6c9"]};
 var binary_lightgreen_palette = {min:0, max:1, palette:["white","lightgreen"]};
 var binary_medgreen_palette   = {min:0, max:1, palette:["white","#81c784"]};
 var binary_green_palette = {min:0, max:1, palette:["white","#4caf50"]};
@@ -784,11 +1045,46 @@ function unionForestPrep(analysisYear, treecoverPercentThreshold, treeHeightThre
   // Get both Hansen and GLAD forest layers
   var hansenForest = gfcHansenTreecoverPrep(analysisYear, treecoverPercentThreshold);
   var gladForest = gladLulcForestPrep(analysisYear, treeHeightThreshold);
-  
+
   // Either dataset (OR) — inclusive, maximum coverage
   var unionForest = hansenForest.or(gladForest);
-  
+
   return unionForest.rename("Union_" + analysisYear);
+}
+
+// P1.23: merge a custom forest layer (nationalForest) with the global
+// source forest_map according to the user-selected merge mode. Returns
+// the merged forest layer, or the original global forest_map unchanged
+// if Custom forest data is off / no asset for this year.
+//
+// Modes:
+//   - Replace global         : custom replaces global entirely
+//   - Add to global extent   : custom OR global (union)
+//   - Agreement with global  : custom AND global (intersection)
+function applyCustomForestMerge(globalForest, analysisYear) {
+  if (!nationalForest.checkbox.getValue()) return globalForest;
+  var customAsset = nationalForest.getAsset(analysisYear);
+  if (!customAsset) return globalForest;
+
+  var customForest;
+  try {
+    customForest = preprocessAsset(customAsset, nationalForest.getPreprocessingConfig());
+  } catch (e) {
+    print('Error loading custom forest asset for ' + analysisYear + '; falling back to global source.');
+    return globalForest;
+  }
+
+  var mode = nationalForest.modeSelect.getValue();
+  if (!globalForest || mode === 'Replace global') return customForest;
+  if (mode === 'Add to global extent') {
+    return globalForest.unmask(0).or(customForest.unmask(0)).selfMask();
+  }
+  if (mode === 'Agreement with global') {
+    return globalForest.unmask(0).and(customForest.unmask(0)).selfMask();
+  }
+  // Unknown mode -- keep global, log once for debug
+  print('Unknown nationalForest merge mode: ' + mode + ' — using global source.');
+  return globalForest;
 }
 
 ///to fix toggle shoukd work with
@@ -1108,6 +1404,7 @@ var visibleLayers = {
   // Analysis outputs
   primaryForest: true,         // Headline output (default on)
   forestOutsideBuffers: true,  // Supporting output: pre-connectivity (default on)
+  treeCover: true,             // Thresholded tree cover -- pre-FRA-filter baseline
   forest: true,                // Input forest -- FRA Forest baseline (default on)
   naturallyRegenerating: true, // P1.16: ≈ FRA Naturally regenerating forest (default on when produced)
   // Processed binary inputs (what feeds the distance transforms)
@@ -1134,6 +1431,7 @@ var visibleLayers = {
 function resetVisibleLayers() {
   visibleLayers.primaryForest = true;
   visibleLayers.forestOutsideBuffers = true;
+  visibleLayers.treeCover = true;
   visibleLayers.forest = true;
   visibleLayers.naturallyRegenerating = true;
   visibleLayers.inputRoads = false;
@@ -1156,7 +1454,12 @@ function resetVisibleLayers() {
 var LAYER_PREFIX_MAP = [
   {prefix: 'Input: Slope',       key: 'slope'},
   {prefix: 'Input: Protected',   key: 'protectedAreas'},
-  {prefix: 'Input: Forest',       key: 'Input: Forest'}
+  {prefix: 'Input: Tree cover',  key: 'treeCover'}
+  // Forest layer renamed from 'Input: Forest' to plain 'Forest' --
+  // no longer needs a prefix entry because its name is now static
+  // (no dynamic year/threshold suffix). Adding a 'Forest' prefix
+  // here would over-match 'Forest outside buffers'. Exact match in
+  // toggleLayerByName handles 'Forest' correctly.
 ];
 
 // Toggle a named layer on both maps without triggering a full recompute.
@@ -1194,7 +1497,12 @@ var updateLeftPanelWidth = function() {
   if (allCollapsed) {
     leftPanel.style().set({width: '150px'});
   } else {
-    leftPanel.style().set({width: '310px'});
+    // P1.23a: bumped 310 -> 340 to make room for the new Tree Cover
+    // widgets (Custom forest data + declaration dropdown + ⓘ +
+    // Custom exclusion data). At 310 the vertical scrollbar that
+    // appeared with the Custom forest section open ate enough
+    // horizontal space to clip the threshold-slider row.
+    leftPanel.style().set({width: '340px'});
   }
 };
 
@@ -1333,7 +1641,96 @@ var aboutContent = ui.Panel({
       'Designed to support national forest monitoring and reporting ' +
       '(e.g. FAO FRA) with transparent, reproducible methods.',
       {fontSize: '11px', margin: '0 0 8px 0'}),
-    ui.Label('Resources:', {fontWeight: 'bold', fontSize: '11px', margin: '0 0 2px 0'}),
+
+    // FRA definitions block — supplied verbatim from FAO FRA 2025 so
+    // workshop users know exactly what each output approximates. The
+    // tool's outputs are operational PROXIES (≈) of these categories;
+    // see "How PFF outputs map to FRA" below for caveats.
+    ui.Label('FRA 2025 definitions', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
+
+    ui.Label('FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
+    ui.Label(
+      'Land spanning more than 0.5 hectares with trees higher than ' +
+      '5 meters and a canopy cover of more than 10 percent, or trees ' +
+      'able to reach these thresholds in situ. It does not include ' +
+      'land that is predominantly under agricultural or urban land use.',
+      {fontSize: '10px', margin: '0 0 2px 4px'}),
+    ui.Label(
+      'Note 7 INCLUDES: rubber-wood, cork oak, Christmas tree plantations.',
+      {fontSize: '10px', margin: '0 0 2px 4px', color: '#2a7f2a'}),
+    ui.Label(
+      'Note 10 EXCLUDES: fruit tree plantations, oil palm, olive ' +
+      'orchards, agroforestry systems when crops are grown under ' +
+      'tree cover (Taungya is forest, where crops grow only during ' +
+      'early forest rotation).',
+      {fontSize: '10px', margin: '0 0 4px 4px', color: '#a0522d'}),
+
+    ui.Label('NATURALLY REGENERATING FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
+    ui.Label(
+      'Forest predominantly composed of trees established through ' +
+      'natural regeneration. Includes mixed stands where naturally ' +
+      'regenerated trees are the major part at maturity, and includes ' +
+      'naturally regenerated trees of introduced species.',
+      {fontSize: '10px', margin: '0 0 4px 4px'}),
+
+    ui.Label('PRIMARY FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
+    ui.Label(
+      'Naturally regenerating forest of native tree species, where ' +
+      'there are no clearly visible indications of human activities ' +
+      'and the ecological processes are not significantly disturbed. ' +
+      'Subset of Naturally regenerating forest. Includes managed ' +
+      'primary forest with minimum intervention, Indigenous and ' +
+      'community stewardship, and natural-disturbance signs (storms, ' +
+      'fire, pests). Excludes forests where hunting/poaching/gathering ' +
+      'has caused significant species loss.',
+      {fontSize: '10px', margin: '0 0 4px 4px'}),
+
+    ui.Label({
+      value: 'Full FRA 2025 definitions (FAO)',
+      style: {fontSize: '10px', color: 'blue', textDecoration: 'underline', margin: '0 0 8px 4px'},
+      targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
+    }),
+
+    ui.Label('How PFF outputs map to FRA (operational proxies, ≈)', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
+    ui.Label(
+      '02b_forest                   ≈ FRA Forest (when "Exclude ' +
+      'plantations" is on; tree cover MINUS FRA-aligned agriculture)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '02c_planted_forest           ≈ FRA Planted Forest (SDPT class 1)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '02d_naturally_regenerating   ≈ FRA NRF (= 02b - 02c)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '04a_primary_forest           ≈ FRA Primary Forest -- geographic ' +
+      'proxy filter only. Does NOT directly check FRA criteria for ' +
+      'native species or hunting/poaching/gathering pressure. Treat as ' +
+      'a starting point for FRA Primary Forest reporting.',
+      {fontSize: '10px', margin: '0 0 6px 4px'}),
+    // P1.23: thresholds vs declaration -- orthogonal axes.
+    ui.Label(
+      'Thresholds vs declaration (P1.23): the canopy / height ' +
+      'threshold sliders set BIOPHYSICAL criteria (what counts as a ' +
+      'tree-covered pixel). The "My tree cover represents:" dropdown ' +
+      'sets the FRA SEMANTIC category (does the layer already exclude ' +
+      'oil palm / planted forest / disturbance?). The two are ' +
+      'independent: a Hansen run with 70% canopy is still "All tree ' +
+      'cover" because it can include oil palm. PFF derives lower FRA ' +
+      'categories from higher ones via the exclusion toggles below ' +
+      'the dropdown.',
+      {fontSize: '10px', margin: '0 0 6px 4px', color: '#555'}),
+    ui.Label(
+      'Rubber caveat: FRA Note 7 lists rubber-wood as forest, but ' +
+      'SDPT v2 (the dataset behind the Planted forest layer) places ' +
+      'rubber in tree crops -- so rubber-bearing pixels currently land ' +
+      'in the Plantations layer. Many countries (Indonesia, Malaysia, ' +
+      'Thailand) report rubber as Planted Forest in FRA. Supply ' +
+      'national rubber data via the Custom exclusion data override to ' +
+      'reroute it.',
+      {fontSize: '10px', margin: '0 0 8px 4px', color: '#666'}),
+
+    ui.Label('Resources', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Label('Documentation — https://example.com/pff-docs', {fontSize: '11px', margin: '0 0 2px 4px'}),
     ui.Label('Source code — https://example.com/pff-source', {fontSize: '11px', margin: '0 0 2px 4px'}),
     ui.Label('Contact — primaryforestfinder@example.com', {fontSize: '11px', margin: '0 0 0 4px'})
@@ -1362,7 +1759,9 @@ var runButton = ui.Button({
     if (typeof areaStatsPanel !== 'undefined') {
       areaStatsPanel.clear();
     }
-    updateMap();
+    // P1.25: button-only flag triggers visibility reset inside updateMap
+    // so any layer the user had toggled off in the legend comes back on.
+    updateMap({fromUpdateAnalysisButton: true});
   },
   style: {
     fontWeight: 'bold',
@@ -1373,6 +1772,33 @@ var runButton = ui.Button({
     color: '#333333'
   }
 });
+
+// P1.26: "Disable map" mode for slow internet connections. When ticked,
+// addLayersToMap() skips every map.addLayer() / map.layers().add() call
+// -- no tile fetches at all -- but the analysis cache (latestMasked*)
+// still populates. So Update Analysis still runs the server-side
+// compute graph (lazily), and Export All Layers / Export Statistics to
+// Drive still queue tasks containing Primary Forest + Pre-connectivity.
+// On-the-fly Show Area Statistics is also disabled (it uses .evaluate()
+// roundtrips per layer/year); user is steered to Export Statistics to
+// Drive instead, which queues server-side without immediate roundtrips.
+// Save/Load Settings + Download Run Metadata stay enabled (single small
+// JSON downloads, fast even on slow connections).
+var disableMapCheckbox = ui.Checkbox({
+  label: 'Disable map (low internet)',
+  value: false,
+  onChange: function(v) {
+    disableMapHint.style().set('shown', v);
+    markNeedsUpdate();
+  },
+  style: {fontSize: '11px', margin: '4px 8px 0 8px'}
+});
+var disableMapHint = ui.Label(
+  'Map preview off — Update Analysis + Export to Drive still work. ' +
+  'On-the-fly Show Stats disabled; use Export Statistics to Drive instead.',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic',
+   margin: '0 8px 4px 24px', shown: false}
+);
 
 // Track if parameters have changed since last update
 var needsUpdate = false;
@@ -1535,7 +1961,13 @@ function processForestAreaStats(image, name, year, scale, exportToDrive, country
       "Years Protected": years_protected,
       // "Fast Buffer Used": fastBuffer ? "Yes" : "No",
       "Strict IUCN Categories": selected_iucn_categories.join(", "),
-      "Plantations Included": includePlantationsCheckbox.getValue() ? "No" : "Yes"
+      // P1.23: report what was *effectively* applied (exclusionActive)
+      // so the metadata reflects the analysis run, not stale UI state.
+      "Plantations Included": exclusionActive(includePlantationsCheckbox, includePlantationsPanel) ? "No" : "Yes",
+      "FRA Agriculture Excluded from Forest": exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel) ? "Yes" : "No",
+      "Input Category (declared)": inputCategorySelect.getValue(),
+      "Custom Forest Asset Active": nationalForest.checkbox.getValue() ? "Yes" : "No",
+      "Custom Forest Merge Mode": nationalForest.checkbox.getValue() ? nationalForest.modeSelect.getValue() : ""
     });
     
     Export.table.toDrive({
@@ -1554,6 +1986,19 @@ var showStatsButton = ui.Button({
   onClick: function() {
     showStatsButton.setLabel('↻ Show Area\nStatistics');
     areaStatsPanel.clear();
+    // P1.26: in "Disable map" mode, on-the-fly stats are disabled
+    // because each layer/year does a server-side .evaluate() roundtrip
+    // -- bad on slow connections. Steer the user to Export Statistics
+    // to Drive instead, which queues a server-side task.
+    if (disableMapCheckbox.getValue()) {
+      areaStatsPanel.add(ui.Label(
+        'On-the-fly Show Area Statistics is disabled in low-internet mode. ' +
+        'Use "Export Statistics to Drive" below -- it queues a server-side ' +
+        'task and the CSV waits in your Drive for later pickup.',
+        {color: '#b58105', fontSize: '11px', fontStyle: 'italic',
+         margin: '0 0 6px 0'}));
+      return;
+    }
     var selectedCountry = countrySelector.getValue();
     if (!selectedCountry) {
       areaStatsPanel.add(ui.Label('Please select a country first.'));
@@ -1595,14 +2040,43 @@ var showStatsButton = ui.Button({
       var calcLabel = ui.Label('  Calculating total forest area...', {color: '#888', fontStyle: 'italic'});
       yearPanel.add(calcLabel);
 
-      // Track pending calculations for this year. P1.16: Forest is
-      // always counted; Naturally regenerating forest counted when
-      // produced; Primary counted when produced. Per FRA, Primary is
-      // a SUBSET of Naturally regenerating (not a sibling category).
-      var hasNatreg = latestMaskedNaturallyRegenerating[year] !== undefined;
-      var pending = 1
+      // P1.23a: only show rows for distinct refinement steps. A row is
+      // suppressed when its content would be identical to the row
+      // above it (e.g. Forest == Tree cover when OLWTC toggle is off).
+      // Resulting cascades:
+      //   declared "All tree cover":  Tree, Forest (if OLWTC on), NRF (if planted on), Primary
+      //   declared "Forest only":     Forest, NRF (if planted on), Primary
+      //   declared "Naturally regen": NRF, Primary
+      //   declared "Primary":         Primary
+      var declCat = inputCategorySelect.getValue();
+      var olwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+      var plantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
+      var showTreeCoverRow = (declCat === INPUT_CATEGORY_ALL);
+      // Forest is distinct only when OLWTC was applied (declared ALL)
+      // or when input IS forest (declared Forest).
+      var showForestRow = (declCat === INPUT_CATEGORY_ALL && olwtcApplied) ||
+                          (declCat === INPUT_CATEGORY_FOREST);
+      // NRF is distinct only when planted was applied (declared ALL or
+      // Forest) or when input IS NRF (declared NRF).
+      var showNrfRow = ((declCat === INPUT_CATEGORY_ALL ||
+                         declCat === INPUT_CATEGORY_FOREST) && plantedApplied) ||
+                       (declCat === INPUT_CATEGORY_NATREG);
+      // Primary row always shown when produced.
+
+      // Track pending calculations for this year.
+      var hasTreeCover = showTreeCoverRow && latestMaskedTreeCover[year] !== undefined;
+      var hasForest    = showForestRow    && latestMaskedForest[year] !== undefined;
+      var hasNatreg    = showNrfRow       && latestMaskedNaturallyRegenerating[year] !== undefined;
+      var pending = (hasTreeCover ? 1 : 0)
+        + (hasForest ? 1 : 0)
         + (hasNatreg ? 1 : 0)
         + (latestMaskedPrimaryForest[year] ? 1 : 0);
+      if (pending === 0) {
+        // Edge case: user declared Primary but primary not produced yet
+        yearPanel.remove(calcLabel);
+        yearPanel.add(ui.Label('  (no rows to display)', {fontSize: '11px', color: '#888'}));
+        return;
+      }
       var checkDone = function() {
         pending--;
         if (pending === 0) {
@@ -1610,18 +2084,29 @@ var showStatsButton = ui.Button({
         }
       };
 
+      // Tree cover (thresholded, pre-FRA) is the broadest layer --
+      // shown first to anchor the FRA progression: Tree cover ->
+      // Forest -> Naturally regenerating -> Primary.
+      if (hasTreeCover) {
+        processForestAreaStats(latestMaskedTreeCover[year], 'Tree cover', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
+          calcLabel.setValue('  Calculating forest area...');
+          checkDone();
+        });
+      }
       // P1.16: Forest baseline always reports as "Forest" (≈ FRA).
       // The conditional "Naturally regenerating forest" relabel was
       // removed -- when the nat reg derivation runs, it gets its
       // own row below.
-      processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
-        if (hasNatreg) {
-          calcLabel.setValue('  Calculating naturally regenerating forest area...');
-        } else if (latestMaskedPrimaryForest[year]) {
-          calcLabel.setValue('  Calculating primary forest area...');
-        }
-        checkDone();
-      });
+      if (hasForest) {
+        processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
+          if (hasNatreg) {
+            calcLabel.setValue('  Calculating naturally regenerating forest area...');
+          } else if (latestMaskedPrimaryForest[year]) {
+            calcLabel.setValue('  Calculating primary forest area...');
+          }
+          checkDone();
+        });
+      }
       if (hasNatreg) {
         processForestAreaStats(latestMaskedNaturallyRegenerating[year], 'Naturally regenerating forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
           if (latestMaskedPrimaryForest[year]) {
@@ -1641,10 +2126,15 @@ var showStatsButton = ui.Button({
 
 // Helper to get native resolution string based on selected forest data source
 function getNativeResolutionText() {
+  // P1.23: Custom Forest is no longer a Source-dropdown option; if the
+  // user has supplied a custom forest layer it overrides/merges with
+  // the global source (see nationalForest), so report the global-source
+  // resolution + a note that the effective resolution depends on the
+  // custom asset.
+  if (nationalForest.checkbox.getValue()) return 'unknown (custom asset)';
   var src = treecoverSourceSelect.getValue();
   if (src === 'Hansen GFC') return '~30m (Hansen GFC)';
   if (src === 'GLAD LULC') return '~30m (GLAD LULC)';
-  if (src === 'Custom Forest') return 'unknown (custom asset)';
   return '~30m (Hansen GFC & GLAD LULC)';
 }
 
@@ -1758,14 +2248,26 @@ var exportStatsButton = ui.Button({
       return;
     }
     var exportScale = statsScaleSlider.getValue();
+    // P1.23a: same redundant-row rules as the on-the-fly stats panel
+    // so the exported CSV matches what's displayed.
+    var exportDeclCat = inputCategorySelect.getValue();
+    var exportOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+    var exportPlantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
+    var exportShowTreeCover = (exportDeclCat === INPUT_CATEGORY_ALL);
+    var exportShowForest = (exportDeclCat === INPUT_CATEGORY_ALL && exportOlwtcApplied) ||
+                           (exportDeclCat === INPUT_CATEGORY_FOREST);
+    var exportShowNrf = ((exportDeclCat === INPUT_CATEGORY_ALL ||
+                          exportDeclCat === INPUT_CATEGORY_FOREST) && exportPlantedApplied) ||
+                        (exportDeclCat === INPUT_CATEGORY_NATREG);
     Object.keys(latestMaskedForest).forEach(function(year) {
       var yearInt = parseInt(year);
-      // P1.16: Forest baseline always exports as "Forest". When
-      // naturally regenerating forest is also produced, export as a
-      // separate table -- gives the user CSV columns for both FRA
-      // categories.
-      processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, exportScale, true, selectedCountry);
-      if (latestMaskedNaturallyRegenerating[year]) {
+      if (exportShowTreeCover && latestMaskedTreeCover[year]) {
+        processForestAreaStats(latestMaskedTreeCover[year], 'Tree cover', yearInt, exportScale, true, selectedCountry);
+      }
+      if (exportShowForest) {
+        processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, exportScale, true, selectedCountry);
+      }
+      if (exportShowNrf && latestMaskedNaturallyRegenerating[year]) {
         processForestAreaStats(latestMaskedNaturallyRegenerating[year], 'Naturally regenerating forest', yearInt, exportScale, true, selectedCountry);
       }
       if (latestMaskedPrimaryForest[year]) {
@@ -1812,18 +2314,19 @@ var exportChkStyle = {fontSize: '11px', margin: '1px 0'};
 var exportChk_final           = ui.Checkbox({label: 'Primary forest (final)',        value: true,  style: exportChkStyle});
 var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-connectivity forest',       value: true,  style: exportChkStyle});
 var exportChk_inputForest     = ui.Checkbox({label: 'Input forest (02b)',            value: true,  style: exportChkStyle});
-var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02c)', value: true,  style: exportChkStyle});
+var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02d)', value: true,  style: exportChkStyle});
 var exportChk_roads           = ui.Checkbox({label: 'Roads',                         value: true,  style: exportChkStyle});
 var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up (small)',              value: true,  style: exportChkStyle});
 var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up (large)',              value: true,  style: exportChkStyle});
 var exportChk_agriculture     = ui.Checkbox({label: 'Agriculture',                   value: true,  style: exportChkStyle});
-var exportChk_plantations     = ui.Checkbox({label: 'Plantations',                   value: true,  style: exportChkStyle});
+var exportChk_plantations     = ui.Checkbox({label: 'Planted forest (timber/pulp/fibre, 02c)', value: true,  style: exportChkStyle});
+var exportChk_fraAgriculture  = ui.Checkbox({label: 'Plantations (agri tree crops, 03a)', value: false, style: exportChkStyle});
 var exportChk_dem             = ui.Checkbox({label: 'DEM',                           value: true,  style: exportChkStyle});
 var exportChk_slope           = ui.Checkbox({label: 'Slope',                         value: false, style: exportChkStyle});
 var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas (binary image)', value: true,  style: exportChkStyle});
 var exportChk_protVector      = ui.Checkbox({label: 'Protected areas (vector)',      value: false, style: exportChkStyle});
 var exportChk_aoi             = ui.Checkbox({label: 'AOI boundary (vector)',         value: true,  style: exportChkStyle});
-var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (treecover + loss)', value: false, style: exportChkStyle});
+var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (tree cover + loss)', value: false, style: exportChkStyle});
 var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height',              value: false, style: exportChkStyle});
 var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata JSON (config + run snapshot)', value: true,  style: exportChkStyle});
 
@@ -1832,7 +2335,7 @@ var exportSelectPanel = ui.Panel({
     ui.Label('Select layers to export:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_naturallyRegenerating],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_roads, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations],
+    ui.Panel([exportChk_roads, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations, exportChk_fraAgriculture],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
     ui.Panel([exportChk_dem, exportChk_slope, exportChk_protLegal, exportChk_protVector, exportChk_aoi],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
@@ -2104,11 +2607,12 @@ function exportRastersToDrive() {
   uniqueYears.forEach(function(analysisYear) {
 
     // ── 1 — Forest (as configured in the app) ──
+    // P1.23: forest_map is always derived from the Source dropdown;
+    // a custom forest layer (nationalForest) is then merged in via
+    // its mode (Replace global / Add to global extent / Agreement
+    // with global). See applyCustomForestMerge() below.
     var forest_map;
-    var customForestAsset = forestAssets.getAsset(analysisYear);
-    if (treecoverSourceSelect.getValue() === 'Custom Forest' && customForestAsset) {
-      forest_map = preprocessAsset(customForestAsset, forestAssets.getPreprocessingConfig());
-    } else if (useAgreementForest) {
+    if (useAgreementForest) {
       forest_map = agreementForestPrep(analysisYear, treecoverPercentThreshold, treecoverHeightThreshold);
     } else if (useUnionForest) {
       forest_map = unionForestPrep(analysisYear, treecoverPercentThreshold, treecoverHeightThreshold);
@@ -2117,6 +2621,7 @@ function exportRastersToDrive() {
     } else if (useHansenTreecover) {
       forest_map = gfcHansenTreecoverPrep(analysisYear, treecoverPercentThreshold);
     }
+    forest_map = applyCustomForestMerge(forest_map, analysisYear);
     if (!forest_map) {
       exportRasterStatusLabel.setValue('No forest data selected.');
       return;
@@ -2189,34 +2694,89 @@ function exportRastersToDrive() {
     var pastureDatasetSel = pastureDatasetFF.filter(ee.Filter.eq("year", analysisYear)).first().updateMask(country_and_buffer_mask);
     var oilPalmDescalsCollection = timeseriesAnthroModule.processingOilPalmDescals();
     var oilPalmDescalsSel = ee.Image(oilPalmDescalsCollection.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask);
-    var plantationsMosaicStatic = timeseriesAnthroModule.processingPlantationsMosaic().updateMask(country_and_buffer_mask);
-    var allPlantationsSel = plantationsMosaicStatic.unmask().where(oilPalmDescalsSel.eq(1), 1).updateMask(country_and_buffer_mask);
+    // P1.20: Plantations layer = SDPT class 1 only (FRA Planted Forest --
+    // timber/pulp/fibre plantations like eucalyptus, pine, teak). SDPT
+    // class 2 (tree crops -- rubber, fruit, agroforestry) and Descals
+    // oil palm now route through the agriculture aggregation instead,
+    // per FRA: those are agricultural land regardless of tree biology.
+    // Net 04a_primary_forest pixels unchanged (everything is still in
+    // the disturbance bucket), but 02c_plantations export and the
+    // 02d_naturally_regenerating_forest derivation are now FRA-faithful.
+    var plantedForestSDPT = timeseriesAnthroModule.processingPlantedForestSDPT()
+        .updateMask(country_and_buffer_mask);
+    var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
+        .updateMask(country_and_buffer_mask);
+    var allPlantationsSel = plantedForestSDPT;
     if (exportChk_plantations.getValue()) {
-      // Separate plantations export so the QGIS plugin can echo the GEE
-      // "Exclude plantations" logic (forest AND NOT plantations). Enables
-      // full FRA stats cascade (Forest → Nat. regen. forest → Primary forest).
+      // 02c_planted_forest export = FRA Planted Forest only (SDPT class 1).
+      // Plugin mirrors this when consumed -- "exclude planted forest" =
+      // exclude FRA Planted Forest (timber, pulp, fibre).
+      // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 (tree crops), so
+      // rubber is NOT in this layer. Per FRA Note 7, rubber-wood
+      // plantations ARE forest -- supply national rubber via
+      // nationalPlantations override to add it.
       doExport(allPlantationsSel.unmask(0).toByte(),
-        mkExportName('02d', 'plantations_' + analysisYear + '_' + s), folder);
+        mkExportName('02c', 'planted_forest_' + analysisYear + '_' + s), folder);
     }
-    // P1.16: 02c_naturally_regenerating_forest export. Derived from
-    // the FRA Forest baseline minus plantations -- gives users a
-    // ready-made Naturally Regenerating Forest layer matching the
-    // analysis-side forest_natreg_image. Gate is purely on the export
-    // tickbox; we always have allPlantationsSel available here, so the
-    // user can request the derivation regardless of whether "Exclude
-    // plantations" is on in the analysis pane.
+    // 02d_naturally_regenerating_forest export.
+    // P1.23a: respect the panel-level declaration. If the user has
+    // declared the input is already at NRF or Primary level, the input
+    // IS the NRF -- don't subtract plantations again (would be a no-op
+    // at best, double-subtraction at worst). Otherwise (declaration =
+    // Tree cover or Forest), derive NRF as Forest minus Planted Forest,
+    // matching the analysis-side forest_natreg_image construction.
     if (exportChk_naturallyRegenerating.getValue()) {
-      var natRegExport = forest_map
-        .updateMask(allPlantationsSel.unmask().not())
+      var declCat = inputCategorySelect.getValue();
+      var inputIsAtOrPastNRF = (declCat === INPUT_CATEGORY_NATREG ||
+                                declCat === INPUT_CATEGORY_PRIMARY);
+      var natRegBase = inputIsAtOrPastNRF
+        ? forest_map  // input already excludes planted forest per declaration
+        : forest_map.updateMask(allPlantationsSel.unmask().not());
+      var natRegExport = natRegBase
         .updateMask(country_and_buffer_mask)
         .unmask(0);
       doExport(natRegExport,
-        mkExportName('02c', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('02d', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
+    }
+    // P1.22 (was P1.18 export): "Plantations" (agricultural tree crops)
+    // = Descals oil palm + SDPT class 2. Per FRA Note 10 these are
+    // agricultural land regardless of tree biology -- e.g. oil palm,
+    // fruit orchards, olive orchards, agroforestry-with-crops. The
+    // everyday word "plantation" actually fits these crops better than
+    // forestry timber plantations (which we now call "Planted forest").
+    // Distinct from the broader 03a_agriculture (cropland + pasture +
+    // everything for primary-forest disturbance buffering). Plugin
+    // users can consume this layer to apply the FRA-strict Forest
+    // baseline derivation when running standalone. Default off -- only
+    // export when explicitly requested.
+    // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 so it lands here,
+    // but per FRA Note 7 rubber-wood is forest. Workshop users should
+    // be aware. National rubber data via nationalPlantations override
+    // can correct this in the analysis pipeline.
+    if (exportChk_fraAgriculture.getValue()) {
+      var fraAgriExport = oilPalmDescalsSel.unmask()
+        .or(treeCropsSDPT.unmask())
+        .updateMask(country_and_buffer_mask)
+        .unmask(0)
+        .toByte();
+      doExport(fraAgriExport,
+        mkExportName('03a', 'plantations_tree_crops_' + analysisYear + '_' + s), folder);
     }
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
     var croplandGladCollectionFF = forwardFillBinaryTimeSeries(croplandGladCollection, years);
     var croplandGladSel = ee.Image(croplandGladCollectionFF.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask);
-    var agriculture = pastureDatasetSel.or(allPlantationsSel.unmask()).or(croplandGladSel);
+    // P1.20: agriculture aggregation now explicitly includes the
+    // tree-cover-meeting agricultural sources (tree crops + oil palm)
+    // since allPlantationsSel no longer carries them. Plus planted
+    // forest stays in the buffering bucket -- for primary-forest
+    // disturbance purposes large managed plantations DO disturb
+    // adjacent natural forest (logging access, edge effects), even
+    // though FRA classifies them as forest.
+    var agriculture = pastureDatasetSel
+                        .or(plantedForestSDPT.unmask())   // SDPT class 1 -- buffered for primary
+                        .or(treeCropsSDPT.unmask())       // SDPT class 2 -- FRA agriculture
+                        .or(oilPalmDescalsSel.unmask())   // Descals oil palm -- FRA agriculture
+                        .or(croplandGladSel);             // GLAD croplands
     if (exportChk_agriculture.getValue()) {
       doExport(agriculture.unmask(0), mkExportName('03a', 'agriculture_' + analysisYear + '_' + s), folder);
     }
@@ -2224,7 +2784,7 @@ function exportRastersToDrive() {
     // ── 4 — Pre-connectivity Forest & Primary Forest (from analysis cache) ──
     if (exportChk_preConnectivity.getValue() && latestPreConnectivityForest[analysisYear]) {
       doExport(latestPreConnectivityForest[analysisYear].unmask(0),
-        mkExportName('04b', 'pre_connectivity_primary_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('03c', 'pre_connectivity_primary_forest_' + analysisYear + '_' + s), folder);
     }
     if (exportChk_final.getValue() && latestMaskedPrimaryForest[analysisYear]) {
       doExport(latestMaskedPrimaryForest[analysisYear].unmask(0),
@@ -2827,32 +3387,65 @@ var treecoverHeightPanel = ui.Panel({
   style: {margin: '0px', shown: true}
 });
 
-// Dropdown for treecover source — Custom Forest is a permanent peer option
+// Dropdown for treecover source. P1.23: "Custom Forest" was pulled out
+// of this dropdown into its own discoverable checkbox section (see
+// nationalForest below) -- echoes the other custom-data sections
+// (nationalAgri, nationalPlantations, etc.) and is far more findable
+// than being buried as a 5th dropdown option.
 var treecoverSourceSelect = ui.Select({
-  items: ['Hansen GFC', 'GLAD LULC', 'Agreement (Hansen & GLAD)', 'Combined extent (Hansen | GLAD)', 'Custom Forest'],
+  items: ['Hansen GFC', 'GLAD LULC', 'Agreement (Hansen & GLAD)', 'Combined extent (Hansen | GLAD)'],
   value: 'GLAD LULC',
-  onChange: function(value) {
-    var isCustom = (value === 'Custom Forest');
-    var isHansen = (value === 'Hansen GFC');
-    var isGlad   = (value === 'GLAD LULC');
-    treecoverPanel.style().set('shown', isHansen || (!isGlad && !isCustom));
-    treecoverHeightPanel.style().set('shown', isGlad || (!isHansen && !isCustom));
-    forestAssets.setShown(isCustom);
-    if (isCustom) updateVisibleAssetInputs();
+  onChange: function() {
+    // P1.24: visibility branching (source -> threshold panels, plus
+    // hide-on-Replace-global) is owned by updateGlobalForestInputsVisibility().
+    updateGlobalForestInputsVisibility();
     markNeedsUpdate();
   }
 });
 
-// Custom forest asset inputs using reusable factory
-// Accepts GEE asset IDs (users/..., projects/...) or gs:// Cloud Storage COG URIs
-var forestAssets = createYearAssetInputs({
-  placeholder: 'users/username/forestAsset or gs://bucket/file.tif'
+// P1.23: Custom forest asset inputs are now created via the standard
+// createNationalAssetInputs factory below (see `nationalForest`),
+// echoing the discoverable checkbox-style pattern of every other
+// custom-data section. The old createYearAssetInputs-based forestAssets
+// has been retired.
+
+// P1.22: paired checkboxes follow the FRA forest-derivation flow:
+//   tree cover - plantations    = Forest (FRA baseline)
+//   Forest    - planted forest = Naturally regenerating forest
+// "Plantations" here means agricultural tree crops (oil palm, fruit,
+// agroforestry) per FRA Note 10. "Planted forest" means timber/pulp/
+// fibre plantations (eucalyptus, pine, teak) per FRA Note 7.
+// (Rubber is country-dependent in FRA reporting -- see About panel.)
+// P1.24: outcome-framed labels.
+// P1.25: examples now inline in the label (FRA-aligned "other land
+// with tree cover" wording), so the standalone italic hint that lived
+// here in P1.24 is redundant and removed. Wrapper panel kept (single
+// child) so updateInputCategoryVisibility() still toggles via the
+// wrapper and exclusionActive(checkbox, wrapper) keeps working.
+var excludeAgricultureFromForestCheckbox = ui.Checkbox({
+  label: 'Refine to forest (exclude other land with tree cover, e.g. oil palm, orchards etc)',
+  value: true,
+  onChange: function() { markNeedsUpdate(); }
+});
+var excludeAgriPanel = ui.Panel({
+  widgets: [excludeAgricultureFromForestCheckbox],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {margin: '0'}
 });
 
 var includePlantationsCheckbox = ui.Checkbox({
-  label: 'Exclude plantations from treecover',
+  label: 'Refine to naturally regenerating forest (exclude planted forest)',
   value: true,
   onChange: function() { markNeedsUpdate(); }
+});
+var includePlantationsHint = ui.Label(
+  'e.g. eucalyptus, pine, teak — timber/pulp/fibre',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 4px 22px'}
+);
+var includePlantationsPanel = ui.Panel({
+  widgets: [includePlantationsCheckbox, includePlantationsHint],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {margin: '0'}
 });
 
 // Function to update which asset inputs are visible based on selected years
@@ -2860,8 +3453,8 @@ function updateVisibleAssetInputs() {
   var useSplitScreen = enableSplitScreenCheckbox.getValue();
   var year1 = parseInt(yearSelector1.getValue());
   var year2 = parseInt(yearSelector2.getValue());
-  
-  forestAssets.updateVisibility(useSplitScreen, year1, year2);
+
+  nationalForest.updateVisibility(useSplitScreen, year1, year2);
   nationalRoads.updateVisibility(useSplitScreen, year1, year2);
   nationalBuiltupSmall.updateVisibility(useSplitScreen, year1, year2);
   nationalBuiltupLarge.updateVisibility(useSplitScreen, year1, year2);
@@ -2879,13 +3472,33 @@ function updateVisibleAssetInputs() {
 // =============================================================================
 // Factory for per-year custom asset inputs (mirrors createYearAssetInputs).
 // Returns {checkbox, modeSelect, panel, getAsset(year), updateVisibility(split,y1,y2), setShown(bool), reset()}
+//
+// P1.23 changes:
+//  - Renamed mode label "Add to global" -> "Add to global extent"
+//    (clearer about what's being unioned).
+//  - New optional `allowAgreement` config flag adds a third merge mode
+//    "Agreement with global" (intersection -- pixel must be in BOTH
+//    custom AND global). Off by default; opt-in per dataset because
+//    pixel alignment is unreliable for vector-derived layers (roads,
+//    small built-up) without buffering.
+//
+// Backwards-compat for saved settings: if a saved setting still has the
+// old value 'Add to global', it is mapped to 'Add to global extent' on
+// load. See applySavedSettings handling at line ~4535.
 function createNationalAssetInputs(config) {
-  var label      = config.label;
-  var placeholder = config.placeholder || 'users/me/asset  (binary 0/1)';
-  var defaultMode = config.defaultMode || 'Add to global';
+  var label          = config.label;
+  var placeholder    = config.placeholder || 'users/me/asset  (binary 0/1)';
+  var defaultMode    = config.defaultMode || 'Add to global extent';
+  var allowAgreement = config.allowAgreement === true;
+
+  // Forward-migrate the old mode string in case a caller still passes it.
+  if (defaultMode === 'Add to global') defaultMode = 'Add to global extent';
+
+  var modeItems = ['Add to global extent', 'Replace global'];
+  if (allowAgreement) modeItems.push('Agreement with global');
 
   var modeSelect = ui.Select({
-    items: ['Add to global', 'Replace global'], value: defaultMode,
+    items: modeItems, value: defaultMode,
     onChange: function() { markNeedsUpdate(); },
     style: {shown: false, fontSize: '10px', margin: '0 0 0 4px'}
   });
@@ -3003,12 +3616,28 @@ function createNationalAssetInputs(config) {
 
 // Each accepts GEE asset IDs (users/..., projects/...) or gs:// Cloud Storage COG URIs.
 // Use ⚙ Preprocessing to configure source type, band, classes, or threshold.
-var nationalRoads      = createNationalAssetInputs({label: 'Custom road data',            defaultMode: 'Add to global',  placeholder: 'users/me/roads or gs://bucket/roads.tif'});
-var nationalBuiltupSmall = createNationalAssetInputs({label: 'Custom small built-up data',  defaultMode: 'Add to global',  placeholder: 'users/me/builtup_small or gs://...'});
-var nationalBuiltupLarge = createNationalAssetInputs({label: 'Custom large built-up data',  defaultMode: 'Add to global',  placeholder: 'users/me/builtup_large or gs://...'});
-var nationalAgri       = createNationalAssetInputs({label: 'Custom agriculture data',     defaultMode: 'Replace global', placeholder: 'users/me/agri or gs://bucket/agri.tif'});
-var nationalPlantations= createNationalAssetInputs({label: 'Custom plantations data',     defaultMode: 'Replace global', placeholder: 'users/me/plantations or gs://bucket/plantations.tif'});
-var nationalProtected  = createNationalAssetInputs({label: 'Custom protected areas data', defaultMode: 'Add to global',  placeholder: 'users/me/protected or gs://bucket/protected.tif'});
+//
+// P1.23: allowAgreement is opt-in per dataset. Enabled for area-based
+// raster datasets where pixel-for-pixel intersection is meaningful
+// (forest, plantations/exclusion, agri, large built-up, protected).
+// Disabled for vector-derived narrow features (roads, small built-up)
+// because rasterised vectors rarely align pixel-perfectly between
+// independent sources, so unbuffered Agreement would yield near-empty
+// results -- adding a ~100 m alignment buffer is deferred to a later batch.
+var nationalForest     = createNationalAssetInputs({label: 'Custom forest data',          defaultMode: 'Replace global', placeholder: 'users/me/forest or gs://bucket/forest.tif', allowAgreement: true});
+var nationalRoads      = createNationalAssetInputs({label: 'Custom road data',            defaultMode: 'Add to global extent',  placeholder: 'users/me/roads or gs://bucket/roads.tif'});
+var nationalBuiltupSmall = createNationalAssetInputs({label: 'Custom small built-up data',  defaultMode: 'Add to global extent',  placeholder: 'users/me/builtup_small or gs://...'});
+var nationalBuiltupLarge = createNationalAssetInputs({label: 'Custom large built-up data',  defaultMode: 'Add to global extent',  placeholder: 'users/me/builtup_large or gs://...', allowAgreement: true});
+var nationalAgri       = createNationalAssetInputs({label: 'Custom agriculture data',     defaultMode: 'Replace global', placeholder: 'users/me/agri or gs://bucket/agri.tif', allowAgreement: true});
+// P1.23: renamed user-facing label from "Custom plantations data" to
+// "Custom exclusion data" -- the same input feeds both exclusion
+// toggles above it (Exclude plantations + Exclude planted forest), and
+// PFF's "plantations" bucket already spans more than FRA Plantation
+// forest (oil palm, orchards, agroforestry, planted forest). Variable
+// name and serialised settings keys kept as nationalPlantations for
+// backwards compatibility with saved settings.
+var nationalPlantations= createNationalAssetInputs({label: 'Custom exclusion data',        defaultMode: 'Replace global', placeholder: 'users/me/exclusion or gs://bucket/exclusion.tif (oil palm / orchards / planted forest)', allowAgreement: true});
+var nationalProtected  = createNationalAssetInputs({label: 'Custom protected areas data', defaultMode: 'Add to global extent',  placeholder: 'users/me/protected or gs://bucket/protected.tif', allowAgreement: true});
 
 // Slope is non-temporal — single textbox kept intentionally
 var useCustomSlopeCheckbox = ui.Checkbox({
@@ -3020,6 +3649,95 @@ var customSlopeInput = ui.Textbox({
   placeholder: 'users/me/custom_slope  (0–90 degrees)',
   style: {shown: false, fontSize: '10px', stretch: 'horizontal', margin: '2px 0 0 12px'}
 });
+
+// =============================================================================
+// P1.23: INPUT-CATEGORY DECLARATION (panel level)
+// Lets the user declare what their tree cover layer represents on the
+// FRA hierarchy. Plain-language labels in the main UI; FRA mapping in
+// the About panel via the ⓘ link. Drives visibility of the OLWTC and
+// planted-forest exclusion toggles uniformly for all sources (Hansen,
+// GLAD, Agreement, Combined, or Custom forest data). Default value
+// "All tree cover" preserves pre-P1.23 behaviour for users who don't
+// engage with the dropdown.
+// =============================================================================
+
+// Plain-language input category labels (kept short enough to fit panel)
+// P1.25: FRA-aligned phrasing. "Other land with tree cover" is the
+// FRA 2025 category name (Note 10 + section 1e of the FRA Terms doc)
+// for the non-Forest tree-cover bucket -- palms, orchards,
+// agroforestry, urban trees. Surfacing the FRA term in the dropdown
+// trains workshop users on the vocabulary they'll need when reporting.
+var INPUT_CATEGORY_ALL    = 'Tree cover (includes oil palm, orchards, agroforestry etc)';
+var INPUT_CATEGORY_FOREST = 'Forest (excludes other land with tree cover e.g. oil palm, orchards, agroforestry etc)';
+var INPUT_CATEGORY_NATREG = 'Naturally regenerating forest (also excludes planted forest)';
+var INPUT_CATEGORY_PRIMARY= 'Primary forest (for comparison/further analysis)';
+
+var inputCategorySelect = ui.Select({
+  items: [INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST, INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY],
+  value: INPUT_CATEGORY_ALL,
+  onChange: function() {
+    updateInputCategoryVisibility();
+    markNeedsUpdate();
+  },
+  style: {stretch: 'horizontal', fontSize: '11px'}
+});
+
+// ⓘ link opens the existing About panel (which already contains the
+// FRA 2025 definitions block + "How PFF outputs map to FRA"). Using
+// a small Button rather than a Label because GEE ui.Label.onClick is
+// not exposed -- targetUrl-only -- so we need a Button for in-app
+// actions. Style is kept understated so it reads as a link, not a
+// chunky action button.
+var inputCategoryFraInfo = ui.Button({
+  label: 'ⓘ How does this map to FRA categories?',
+  onClick: function() {
+    aboutContent.style().set({shown: true});
+  },
+  style: {fontSize: '10px', padding: '2px 6px', margin: '0 0 0 4px',
+          backgroundColor: '#f4f8ff'}
+});
+
+var inputCategoryRow = ui.Panel({
+  widgets: [
+    createCompactRow('My tree cover represents:', inputCategorySelect),
+    inputCategoryFraInfo
+  ],
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {margin: '4px 0'}
+});
+
+// Visibility logic: the declaration drives which exclusion toggles
+// are still meaningful. Hidden toggles are bypassed in analysis via
+// exclusionActive() so a stale `true` value doesn't accidentally apply.
+function updateInputCategoryVisibility() {
+  var v = inputCategorySelect.getValue();
+  var showOlwtc   = (v === INPUT_CATEGORY_ALL);
+  var showPlanted = showOlwtc || (v === INPUT_CATEGORY_FOREST);
+
+  // P1.24: hide wrapper panels (checkbox + italic hint) together,
+  // not the bare checkboxes -- otherwise the hint orphans below.
+  excludeAgriPanel.style().set('shown', showOlwtc);
+  includePlantationsPanel.style().set('shown', showPlanted);
+  nationalPlantations.setShown(showOlwtc || showPlanted);
+}
+
+// P1.23: ensure the toggles match the default declaration on startup.
+// Without this, the exclusion checkboxes render in their default state
+// (both shown) which happens to match INPUT_CATEGORY_ALL anyway -- but
+// being explicit makes the relationship visible and protects against
+// future default changes.
+updateInputCategoryVisibility();
+
+// Helper: a hidden exclusion checkbox should never apply, even if its
+// underlying value is still `true`. Used at every analysis branch
+// that reads excludeAgricultureFromForestCheckbox / includePlantationsCheckbox.
+// P1.24: now accepts an optional wrapper panel -- visibility is toggled
+// on the wrapper (so checkbox + hint label hide together), so we must
+// read the wrapper's shown state, not the bare checkbox.
+function exclusionActive(checkbox, wrapper) {
+  var visTarget = wrapper || checkbox;
+  return visTarget.style().get('shown') !== false && checkbox.getValue();
+}
 
 // =============================================================================
 // COLLAPSIBLE PANELS (pff_layout style)
@@ -3056,19 +3774,94 @@ var datesPanelCollapsible = ui.Panel({
 });
 
 // TREE COVER PANEL
+// P1.23 layout:
+//   1. Source dropdown (global default: Hansen / GLAD / Agreement / Combined)
+//   2. Threshold sliders (canopy or height, depending on source)
+//   3. Custom forest data section (echoes other custom-data sections;
+//      tickbox-driven, with mode-select for Replace/Add extent/Agreement)
+//   4. Panel-level "My tree cover represents:" declaration dropdown +
+//      ⓘ FRA mapping link. Drives visibility of the toggles below.
+//   5. Divider
+//   6. Conditional exclusion toggles (OLWTC, planted forest) and the
+//      Custom exclusion data section.
+// P1.24: bound to a variable so updateGlobalForestInputsVisibility()
+// can hide the whole row (label + dropdown) when custom forest is in
+// 'Replace global' mode.
+var treecoverSourceRow = createCompactRow('Source:', treecoverSourceSelect);
+
+// P1.24: status note that appears in the gap left by the hidden global
+// controls when custom forest replaces them. Default hidden.
+var globalSourceHiddenNote = ui.Label(
+  'Global tree-cover source not in use — custom forest replaces it.',
+  {fontSize: '10px', color: '#666', fontStyle: 'italic',
+   margin: '4px 0 4px 4px', shown: false}
+);
+
 var treeCoverContent = ui.Panel({
   widgets: [
     ui.Label('Define Tree Cover:', {fontWeight: 'bold', margin: '0 0 4px 0'}),
-    createCompactRow('Source:', treecoverSourceSelect),
+    treecoverSourceRow,
     treecoverPanel,
     treecoverHeightPanel,
-    forestAssets.panel,
+    nationalForest.panel,
+    globalSourceHiddenNote,
+    inputCategoryRow,
     ui.Panel({style: {height: '1px', backgroundColor: '#ddd', margin: '6px 0', stretch: 'horizontal'}}),
-    includePlantationsCheckbox,
+    // FRA-aligned exclusion order: plantations (agri tree crops) first,
+    // then planted forest (timber). See FRA notes in About panel.
+    // P1.24: wrappers carry the checkbox + italic example hint together.
+    excludeAgriPanel,
+    includePlantationsPanel,
     nationalPlantations.panel
   ],
   style: {shown: false, padding: '8px'}
 });
+
+// =============================================================================
+// P1.24: GLOBAL FOREST INPUTS VISIBILITY
+// When a user supplies a custom forest layer in 'Replace global' mode,
+// the global tree-cover Source dropdown + threshold panels are inert
+// (the global layer is fully bypassed). Hide them and show a small
+// status note in the gap so the user knows why -- and isn't tempted
+// to fiddle with knobs that have no effect.
+//
+// Single source of truth: the existing source-driven threshold-panel
+// toggle (formerly inline in treecoverSourceSelect.onChange) is folded
+// into this helper too, so both paths can't disagree.
+// =============================================================================
+function updateGlobalForestInputsVisibility() {
+  var customActive = nationalForest.checkbox.getValue();
+  var mode         = nationalForest.modeSelect.getValue();
+  var hideGlobal   = customActive && mode === 'Replace global';
+
+  treecoverSourceRow.style().set('shown', !hideGlobal);
+  globalSourceHiddenNote.style().set('shown', hideGlobal);
+
+  if (hideGlobal) {
+    treecoverPanel.style().set('shown', false);
+    treecoverHeightPanel.style().set('shown', false);
+  } else {
+    // Restore source-driven sub-visibility (was the original logic
+    // inside treecoverSourceSelect.onChange).
+    var src = treecoverSourceSelect.getValue();
+    var isHansen = (src === 'Hansen GFC');
+    var isGlad   = (src === 'GLAD LULC');
+    treecoverPanel.style().set('shown',       isHansen || !isGlad);
+    treecoverHeightPanel.style().set('shown', isGlad   || !isHansen);
+  }
+}
+
+// Re-evaluate global-controls visibility whenever the custom-forest
+// section changes state. Multiple onChange handlers stack in GEE UI,
+// so this composes cleanly with the factory's internal handler at
+// L3470 (which toggles the mode-select and year inputs).
+nationalForest.checkbox.onChange(updateGlobalForestInputsVisibility);
+nationalForest.modeSelect.onChange(updateGlobalForestInputsVisibility);
+
+// Initial sync at startup -- mirrors the pattern at line 3683 for
+// updateInputCategoryVisibility(). Placed after treeCoverContent so
+// treecoverSourceRow / globalSourceHiddenNote are in scope.
+updateGlobalForestInputsVisibility();
 
 var treeCoverToggle = ui.Button({
   label: '▶ 2. Tree Cover',
@@ -3372,9 +4165,10 @@ function createFloatingLayerPanel() {
       ui.Label('─────────────────', {color: 'gray'}),
       ui.Checkbox({label: 'Primary Forest',        value: visibleLayers.primaryForest,       onChange: function(v) { visibleLayers.primaryForest       = v; toggleLayerByName('Primary Forest', v); }}),
       ui.Checkbox({label: 'Forest Outside Buffers', value: visibleLayers.forestOutsideBuffers, onChange: function(v) { visibleLayers.forestOutsideBuffers = v; toggleLayerByName('Forest outside buffers', v); }}),
+      ui.Checkbox({label: 'Input: Tree cover',      value: visibleLayers.treeCover,            onChange: function(v) { visibleLayers.treeCover            = v; toggleLayerByName('Input: Tree cover', v); }}),
       ui.Checkbox({label: 'Naturally regenerating forest', value: visibleLayers.naturallyRegenerating, onChange: function(v) { visibleLayers.naturallyRegenerating = v; toggleLayerByName('Naturally regenerating forest', v); }}),
-      ui.Checkbox({label: 'Input: Forest',            value: visibleLayers.forest,               onChange: function(v) { visibleLayers.forest               = v; toggleLayerByName('Input: Forest', v); }}),
-      ui.Checkbox({label: 'Plantations',            value: visibleLayers.plantations,          onChange: function(v) { visibleLayers.plantations          = v; toggleLayerByName('Plantations', v); }}),
+      ui.Checkbox({label: 'Forest',            value: visibleLayers.forest,               onChange: function(v) { visibleLayers.forest               = v; toggleLayerByName('Forest', v); }}),
+      ui.Checkbox({label: 'Planted forest',         value: visibleLayers.plantations,          onChange: function(v) { visibleLayers.plantations          = v; toggleLayerByName('Planted forest', v); }}),
       ui.Label(''),
       ui.Label('Disturbance inputs:', {fontWeight: 'bold'}),
       ui.Checkbox({label: 'Agriculture',  value: visibleLayers.inputAgriculture,  onChange: function(v) { visibleLayers.inputAgriculture  = v; toggleLayerByName('Input: Agriculture', v); }}),
@@ -3444,13 +4238,17 @@ function createLegendItem(color, label) {
 
 // Canonical legend definition: visibleLayers key → [colour, label]
 var LEGEND_ENTRIES = [
-  // Forest group ordered headline-first then dark -> light through the
-  // green ramp, with Plantations last (different category, gold).
-  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',         group: 'Forest'},
-  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
+  // Forest group ordered to match the FRA forest-derivation workflow:
+  // Input: Forest (tree cover) -> Naturally regenerating forest ->
+  // Forest outside buffers -> Primary forest. Light -> dark green ramp
+  // reinforces "input -> increasingly refined output". Planted forest
+  // last as a sibling category (gold, not in the green ramp).
+  {key: 'treeCover',             color: '#c8e6c9', label: 'Input: Tree cover',     group: 'Forest'},
+  {key: 'forest',                color: '#90EE90', label: 'Forest',          group: 'Forest'},
   {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
-  {key: 'forest',                color: '#90EE90', label: 'Input: Forest',          group: 'Forest'},
-  {key: 'plantations',           color: '#d4a017', label: 'Plantations',            group: 'Forest'},
+  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
+  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',         group: 'Forest'},
+  {key: 'plantations',           color: '#d4a017', label: 'Planted forest',         group: 'Forest'},
   {key: 'agriBuffer',          color: '#ffcc00', label: 'Buffer: Agriculture',    group: 'Human Influence'},
   {key: 'roadSmallBuffer',     color: '#ff6600', label: 'Buffer: Roads',          group: 'Human Influence'},
   {key: 'builtSmallBuffer',    color: '#cc00cc', label: 'Buffer: Small Built-up', group: 'Human Influence'},
@@ -3489,8 +4287,10 @@ function createLegendPanel() {
     var NAME_TO_KEY = {
       'Primary Forest': 'primaryForest',
       'Forest outside buffers': 'forestOutsideBuffers',
-      'Input: Forest': 'forest',
-      'Plantations': 'plantations',
+      'Input: Tree cover': 'treeCover',
+      'Forest': 'forest',
+      'Naturally regenerating forest': 'naturallyRegenerating',
+      'Planted forest': 'plantations',
       'Buffer: Agriculture': 'agriBuffer',
       'Buffer: Roads': 'roadSmallBuffer',
       'Buffer: Small Built-up': 'builtSmallBuffer',
@@ -3510,7 +4310,9 @@ function createLegendPanel() {
       if (name.indexOf('Input: Slope') === 0) visibleLayers.slope = true;
       if (name.indexOf('Input: Protected') === 0) visibleLayers.protectedAreas = true;
       if (name.indexOf('Reference: FLII') === 0) visibleLayers.flii = true;
-      if (name.indexOf('Input: Forest') === 0) visibleLayers.forest = true;
+      if (name.indexOf('Input: Tree cover') === 0) visibleLayers.treeCover = true;
+      // 'Forest' handled by exact match in NAME_TO_KEY above -- no
+      // prefix here, would over-match 'Forest outside buffers'.
     });
   }
 
@@ -3555,12 +4357,13 @@ function createLegendPanel() {
   });
 
   var legendRefreshButton = ui.Button({
-    label: '↻',
+    label: '↻ Refresh',
     onClick: refreshLegend,
-    // Bumped from 24x24/10px (icon was rendering off-canvas in some
-    // QGIS browser combos) to 32x28/14px so ↻ shows reliably. Toggle
-    // button (72px) still fits alongside in the 180px legend strip.
-    style: {fontSize: '14px', padding: '2px 6px', margin: '4px 0 4px 2px', width: '32px', height: '28px'}
+    // Bumped to 80x32 with text label "↻ Refresh" so the button is
+    // visibly clickable and self-explanatory. Earlier versions used
+    // a tiny 24x24 icon-only button that was hard to find/hit and
+    // the ↻ glyph didn't always render.
+    style: {fontSize: '11px', padding: '2px 6px', margin: '4px 0 4px 2px', width: '80px', height: '32px'}
   });
 
   var legendToggleButton = ui.Button({
@@ -3570,7 +4373,7 @@ function createLegendPanel() {
       legendContent.style().set({shown: !isShown});
       legendToggleButton.setLabel(isShown ? '▶ Legend' : '▼ Legend');
     },
-    style: {width: '72px', padding: '4px', margin: '4px'}
+    style: {width: '80px', padding: '4px', margin: '4px', fontSize: '11px'}
   });
 
   return ui.Panel({
@@ -3753,11 +4556,13 @@ function resetToDefaults() {
   
   // Reset plantations and custom assets
   includePlantationsCheckbox.setValue(true);
-  if (treecoverSourceSelect.getValue() === 'Custom Forest') {
-    treecoverSourceSelect.setValue('GLAD LULC');
-  }
+  excludeAgricultureFromForestCheckbox.setValue(true);  // P1.18 default on (FRA-correct)
+  // P1.23: reset declaration to default ("All tree cover" semantics)
+  inputCategorySelect.setValue(INPUT_CATEGORY_ALL);
+  updateInputCategoryVisibility();
 
   // Reset national data overrides
+  nationalForest.reset();
   nationalRoads.reset();
   nationalBuiltupSmall.reset();
   nationalBuiltupLarge.reset();
@@ -3862,7 +4667,7 @@ var downloadsPanel = ui.Panel({
 
 // Left panel with collapsible sections and scroll
 var leftPanel = ui.Panel({
-  widgets: [runButton, resetSettingsButton, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
+  widgets: [runButton, resetSettingsButton, disableMapCheckbox, disableMapHint, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {width: '150px', backgroundColor: 'rgba(255, 255, 255, 0.95)', padding: '2px', maxHeight: '600px'}
 });
@@ -3909,15 +4714,18 @@ function collectSettings() {
   'Use Agreement Forest': (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)'),
   'Use Combined Extent Forest': (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)'),
     'Exclude Plantations': includePlantationsCheckbox.getValue(),
+    'Exclude Agriculture from Forest (FRA)': excludeAgricultureFromForestCheckbox.getValue(),
     'WDPA Preset': wdpaPresetSelect.getValue(),
     'WDPA Established Before': wdpaYearSlider.getValue(),
     'WDPA Selected Categories': selected_iucn_categories.join(', '),
+    'Custom Forest Mode': nationalForest.modeSelect.getValue(),  // P1.23
     'Custom Roads Mode': nationalRoads.modeSelect.getValue(),
     'Custom BuiltUp Small Mode': nationalBuiltupSmall.modeSelect.getValue(),
     'Custom BuiltUp Large Mode': nationalBuiltupLarge.modeSelect.getValue(),
     'Custom Agri Mode': nationalAgri.modeSelect.getValue(),
     'Custom Plantations Mode': nationalPlantations.modeSelect.getValue(),
     'Custom Protected Mode': nationalProtected.modeSelect.getValue(),
+    'Input Category': inputCategorySelect.getValue(),  // P1.23 declaration
     'Custom Slope Asset': useCustomSlopeCheckbox.getValue() ? customSlopeInput.getValue() : '',
     'Use Master Buffer': useMasterBufferCheckbox.getValue(),
     'Master Buffer (m)': masterBufferSlider.getValue(),
@@ -3932,18 +4740,15 @@ function collectSettings() {
     'Export Run Metadata JSON': exportChk_runMetadata.getValue()
   };
 
-  // Add custom forest asset inputs if used
-  if (treecoverSourceSelect.getValue() === 'Custom Forest') {
-    years.forEach(function(year) {
-      var assetInputValue = forestAssets.getAsset(year);
-      if (assetInputValue) {
-        settings['Custom Forest Asset ' + year] = assetInputValue;
-      }
-    });
-  }
+  // P1.23: Custom forest asset is now serialised via the standard
+  // nationalDatasets map below (key 'Custom Forest'). The legacy
+  // 'Custom Forest Asset YEAR' top-level keys are still emitted by
+  // the loop above for backwards compatibility with earlier saved
+  // settings via the same generic per-year asset path.
 
   // Add custom asset inputs per year
   var nationalDatasets = {
+    'Custom Forest': nationalForest,                // P1.23
     'Custom Roads': nationalRoads,
     'Custom BuiltUp Small': nationalBuiltupSmall,
     'Custom BuiltUp Large': nationalBuiltupLarge,
@@ -4118,16 +4923,29 @@ function applySettings(settings) {
     includePlantationsCheckbox.setValue(!settings['Include Plantations']);
   }
 
-  if (treecoverSourceSelect.getValue() === 'Custom Forest') {
-    years.forEach(function(year) {
-      if (settings['Custom Forest Asset ' + year]) {
-        forestAssets.inputs[year].setValue(settings['Custom Forest Asset ' + year]);
-      }
-    });
+  // P1.18: FRA-aligned Forest baseline toggle
+  if (settings['Exclude Agriculture from Forest (FRA)'] !== undefined) {
+    excludeAgricultureFromForestCheckbox.setValue(
+      settings['Exclude Agriculture from Forest (FRA)']);
+  }
+
+  // P1.23: declared input category. Default to "All tree cover" if
+  // missing (preserves pre-P1.23 saved-settings behaviour).
+  if (settings['Input Category']) {
+    var savedCat = settings['Input Category'];
+    // Validate against known options before applying
+    if ([INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST,
+         INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY].indexOf(savedCat) >= 0) {
+      inputCategorySelect.setValue(savedCat);
+    }
   }
 
   // Restore custom asset overrides (per-year)
+  // P1.23: nationalForest joined this map, replacing the legacy
+  // 'Custom Forest Asset YEAR' top-level keys path. Backwards compat
+  // for old saved settings handled below.
   var nationalRestoreMap = {
+    'Custom Forest': nationalForest,
     'Custom Roads': nationalRoads,
     'Custom BuiltUp Small': nationalBuiltupSmall,
     'Custom BuiltUp Large': nationalBuiltupLarge,
@@ -4145,7 +4963,12 @@ function applySettings(settings) {
     if (hasAny) {
       obj.checkbox.setValue(true);
       obj.modeSelect.style().set('shown', true);
-      if (settings[modeKey]) obj.modeSelect.setValue(settings[modeKey]);
+      if (settings[modeKey]) {
+        var savedMode = settings[modeKey];
+        // P1.23: forward-migrate the old mode label
+        if (savedMode === 'Add to global') savedMode = 'Add to global extent';
+        obj.modeSelect.setValue(savedMode);
+      }
       var assetsByYear = {};
       years.forEach(function(year) {
         if (settings[key + ' Asset ' + year]) assetsByYear[year] = settings[key + ' Asset ' + year];
@@ -4159,6 +4982,9 @@ function applySettings(settings) {
       obj.setShown(true);
     }
   });
+  // P1.23: refresh exclusion-toggle visibility now that declaration
+  // and other fields have been restored.
+  updateInputCategoryVisibility();
   if (settings['Custom Slope Asset']) {
     useCustomSlopeCheckbox.setValue(true);
     customSlopeInput.setValue(settings['Custom Slope Asset']);
@@ -4312,7 +5138,13 @@ ui.util.setInterval(function() {
 
 // Main update function
 
-function updateMap()  { 
+function updateMap(opts)  {
+  // P1.25: opts.fromUpdateAnalysisButton flag toggles two button-only
+  // behaviours (visibility reset, see below). All other callers
+  // (country/year change, applySettings, initial load) call updateMap()
+  // with no args -- they keep current behaviour and preserve the user's
+  // per-layer toggles.
+  opts = opts || {};
   markUpToDate();
   // Clear stale on-the-fly stats whenever parameters change
   areaStatsPanel.clear();
@@ -4322,8 +5154,10 @@ function updateMap()  {
   var analysisYear2 = parseInt(yearSelector2.getValue());
 
   // Reset stored forest data so only currently-active years appear in stats
+  latestMaskedTreeCover = {};
   latestMaskedForest = {};
   latestMaskedPrimaryForest = {};
+  latestMaskedNaturallyRegenerating = {};
   latestPreConnectivityForest = {};
   latestTier1Undisturbed = {};
   latestTier2Steep = {};
@@ -4422,6 +5256,13 @@ function updateMap()  {
     linker = null;
     splitPanel = null;
 
+    // P1.26: clear legend-refresh closures from previous maps. Each
+    // createLegendPanel() call below pushes a new closure to
+    // _legendRefreshFns; without this cleanup, every mode rebuild
+    // leaks one fn referencing a now-orphaned panel. Cheap to keep
+    // around individually, but accumulates across many mode toggles.
+    _legendRefreshFns.length = 0;
+
     if (requestedMode === 'split') {
       // Recreate maps fresh
       map1 = ui.Map();
@@ -4495,13 +5336,16 @@ map2.add(createDisclaimerPanel());
     var pffLayerNames = [
       'Buffer: Roads', 'Buffer: Small Built-up', 'Buffer: Large Built-up',
       'Buffer: Agriculture', 'Input: Roads', 'Input: Small Built-up',
-      'Input: Large Built-up', 'Input: Agriculture', 'Plantations',
+      'Input: Large Built-up', 'Input: Agriculture', 'Planted forest',
+      'Input: Tree cover', 'Forest',
       'Naturally regenerating forest',
       'Forest outside buffers', 'Primary Forest',
       'Reference: FLII (high/med)', 'Reference: Forest Persistence (FDaP)'
     ];
     // Also match dynamic names like "Slope > 45°", "WDPA ..."
-    var pffPrefixes = ['Input: Slope', 'Input: Protected', 'Hansen ', 'Input: Forest'];
+    // 'Forest' NOT in prefixes -- would over-match 'Forest outside buffers'.
+    // Exact match via pffLayerNames handles it.
+    var pffPrefixes = ['Input: Slope', 'Input: Protected', 'Hansen ', 'Input: Tree cover'];
     function isPffLayer(name) {
       if (pffLayerNames.indexOf(name) !== -1) return true;
       for (var p = 0; p < pffPrefixes.length; p++) {
@@ -4513,8 +5357,10 @@ map2.add(createDisclaimerPanel());
     var nameToKey = {
       'Primary Forest': 'primaryForest',
       'Forest outside buffers': 'forestOutsideBuffers',
+      'Input: Tree cover': 'treeCover',
+      'Forest': 'forest',
       'Naturally regenerating forest': 'naturallyRegenerating',
-      // 'Input: Forest' handled via prefix matching below
+      // 'Forest' handled via prefix matching below
       'Input: Roads': 'inputRoads',
       'Input: Small Built-up': 'inputBuiltupSmall',
       'Input: Large Built-up': 'inputBuiltupLarge',
@@ -4523,7 +5369,7 @@ map2.add(createDisclaimerPanel());
       'Buffer: Small Built-up': 'builtSmallBuffer',
       'Buffer: Large Built-up': 'builtLargeBuffer',
       'Buffer: Agriculture': 'agriBuffer',
-      'Plantations': 'plantations',
+      'Planted forest': 'plantations',
       'Reference: FLII (high/med)': 'flii'
     };
     function syncAndRemovePffLayers(m) {
@@ -4538,7 +5384,7 @@ map2.add(createDisclaimerPanel());
         var lname = layer.getName();
         if (lname.indexOf('Input: Slope') === 0) visibleLayers.slope = layer.getShown();
         if (lname.indexOf('Input: Protected') === 0) visibleLayers.protectedAreas = layer.getShown();
-        if (lname.indexOf('Input: Forest') === 0) visibleLayers.forest = layer.getShown();
+        if (lname === 'Forest') visibleLayers.forest = layer.getShown();
       }
       // Second pass: remove PFF layers
       for (var j = layers.length() - 1; j >= 0; j--) {
@@ -4548,7 +5394,17 @@ map2.add(createDisclaimerPanel());
     syncAndRemovePffLayers(map1);
     syncAndRemovePffLayers(map2);
   }
-  
+
+  // P1.25: when triggered by the Update Analysis button, restore default
+  // layer visibility so freshly-added layers show on the map. Layers the
+  // user had toggled off in the legend come back -- "fresh analysis =
+  // fresh view." Placed AFTER syncAndRemovePffLayers so its writeback
+  // to visibleLayers (from the soon-to-be-removed layers' shown-state)
+  // doesn't overwrite the reset.
+  if (opts.fromUpdateAnalysisButton) {
+    resetVisibleLayers();
+  }
+
   // After rebuild or clear, ensure maps are centered to avoid default USA view
   // Priority: restore last view if available; otherwise center on selected country
   var centroid = country_sel.geometry().centroid().coordinates().getInfo();
@@ -4694,46 +5550,51 @@ map2.add(createDisclaimerPanel());
   
   // Function to add layers to a map for a given year
   function addLayersToMap(map, analysisYear) {
-    // Forest cover processing - with custom asset support
-     var forest_map;
-    
-    // Check if a custom forest asset is provided
-    var customForestAsset = forestAssets.getAsset(analysisYear);
-    if (treecoverSourceSelect.getValue() === 'Custom Forest' && customForestAsset) {
-      try {
-        forest_map = preprocessAsset(customForestAsset, forestAssets.getPreprocessingConfig());
-        print('Using custom forest asset for ' + analysisYear + ': ' + customForestAsset);
-      } catch (e) {
-        print('Error loading custom forest asset. Using fallback forest data.');
-        e;
-      }
+    // P1.26: "Disable map" mode -- when on, skip every pffAddLayer()
+    // call. The lazy ee.Image graph still gets built (cheap, no
+    // roundtrip) and the latestMasked* caches still populate, so
+    // Export All Layers / Export Statistics to Drive can still queue
+    // tasks containing Primary Forest + Pre-connectivity. Only the
+    // visual preview is skipped.
+    var skipMap = disableMapCheckbox.getValue();
+    function pffAddLayer() {
+      if (skipMap) return;
+      // .apply lets us forward whatever args the call site passed
+      // (varies in arity across the addLayersToMap call sites).
+      map.addLayer.apply(map, arguments);
     }
-    
-    // If no custom asset is set or it fails, select an alternative dataset
-    if (!forest_map) {
-      if (useAgreementForest) {
-        forest_map = agreementForestPrep(analysisYear, treecoverPercentThreshold, treecoverHeightThreshold);
-      } else if (useUnionForest) {
-        forest_map = unionForestPrep(analysisYear, treecoverPercentThreshold, treecoverHeightThreshold);
-      } else if (useGladLulcForest) {
-        forest_map = gladLulcForestPrep(analysisYear,treecoverHeightThreshold);
-      } 
-      // Uncomment when needed
-      // else if (useGlcFlsd30Forest) {
-      //   forest_map = glc_flsd30_forest;
-      //   print('Using GLC FLSD30 forest data for ' + analysisYear);
-      // } 
-      // else if (useEsaCciForest) {
-      //   forest_map = esa_cci_forest;
-      //   print('Using ESA CCI forest data for ' + analysisYear);
-      // } 
-      else if (useHansenTreecover) {
-        // var treecoverPercentThreshold = 10
-        forest_map = gfcHansenTreecoverPrep(analysisYear,treecoverPercentThreshold);
-        //debug print('Using Hansen Treecover data for ' + analysisYear);
-      } 
+
+    // P1.23: forest_map is always derived from the Source dropdown
+    // first; if Custom forest data is on, applyCustomForestMerge then
+    // combines it with the global source according to the user-chosen
+    // merge mode (Replace global / Add to global extent / Agreement
+    // with global). Replaces the pre-P1.23 'Custom Forest' source-dropdown
+    // branch.
+    var forest_map;
+    if (useAgreementForest) {
+      forest_map = agreementForestPrep(analysisYear, treecoverPercentThreshold, treecoverHeightThreshold);
+    } else if (useUnionForest) {
+      forest_map = unionForestPrep(analysisYear, treecoverPercentThreshold, treecoverHeightThreshold);
+    } else if (useGladLulcForest) {
+      forest_map = gladLulcForestPrep(analysisYear,treecoverHeightThreshold);
     }
-    
+    // Uncomment when needed
+    // else if (useGlcFlsd30Forest) {
+    //   forest_map = glc_flsd30_forest;
+    //   print('Using GLC FLSD30 forest data for ' + analysisYear);
+    // }
+    // else if (useEsaCciForest) {
+    //   forest_map = esa_cci_forest;
+    //   print('Using ESA CCI forest data for ' + analysisYear);
+    // }
+    else if (useHansenTreecover) {
+      // var treecoverPercentThreshold = 10
+      forest_map = gfcHansenTreecoverPrep(analysisYear,treecoverPercentThreshold);
+      //debug print('Using Hansen Treecover data for ' + analysisYear);
+    }
+
+    forest_map = applyCustomForestMerge(forest_map, analysisYear);
+
     // Final check: If no forest dataset was selected, print a warning
     if (!forest_map) {
       print("No forest data selected — skipping layer build for " + analysisYear);
@@ -4758,13 +5619,13 @@ map2.add(createDisclaimerPanel());
     // }).union() :
     // country_sel.buffer(country_buffer_threshold);
     
-    // map.addLayer(country_buffer)
+    // pffAddLayer(country_buffer)
     
     
     // var country_and_buffer_mask = ee.Image(1).clip(country_buffer);
     // var forest_map_clip = forest_map.clip(country_buffer);
     
-    // map.addLayer(forest_map_clip, binary_lightgreen_palette, "Forest", 0, 1);
+    // pffAddLayer(forest_map_clip, binary_lightgreen_palette, "Forest", 0, 1);
     
     /////////
     // Anthropogenic features
@@ -4781,34 +5642,81 @@ map2.add(createDisclaimerPanel());
     var pastureDatasetSel = pastureDatasetFF.filter(ee.Filter.eq("year", analysisYear)).first().updateMask(country_and_buffer_mask)
     var oilPalmDescalsCollection = timeseriesAnthroModule.processingOilPalmDescals();
     var oilPalmDescalsSel = ee.Image(oilPalmDescalsCollection.filter(ee.Filter.eq("year", analysisYear)).first()).updateMask(country_and_buffer_mask)
-    var plantationsMosaicStatic = timeseriesAnthroModule.processingPlantationsMosaic().updateMask(country_and_buffer_mask)
-    var allPlantationsSel = plantationsMosaicStatic.unmask().where(oilPalmDescalsSel.eq(1), 1).updateMask(country_and_buffer_mask)
+    // P1.20: Plantations layer = SDPT class 1 only (FRA Planted Forest --
+    // timber/pulp/fibre). SDPT class 2 + Descals oil palm route through
+    // agriculture instead per FRA. See export-context comment for full
+    // rationale.
+    var plantedForestSDPT = timeseriesAnthroModule.processingPlantedForestSDPT()
+        .updateMask(country_and_buffer_mask);
+    var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
+        .updateMask(country_and_buffer_mask);
+    var allPlantationsSel = plantedForestSDPT;
 
-    // Override plantations with national data if provided
+    // Override plantations with national data if provided. National
+    // plantations layer should also be FRA Planted Forest -- if the
+    // user supplies a national "plantations" raster that includes tree
+    // crops or oil palm, those pixels will be mis-classified as planted
+    // forest by the natreg derivation. Document this in workshop notes.
     if (nationalPlantations.checkbox.getValue()) {
       var natPlantationsAsset = nationalPlantations.getAsset(analysisYear);
       if (natPlantationsAsset) {
         var natPlantations = preprocessAsset(natPlantationsAsset, nationalPlantations.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
-        if (nationalPlantations.modeSelect.getValue() === 'Add to global') {
+        var npMode = nationalPlantations.modeSelect.getValue();
+        if (npMode === 'Add to global extent') {
           allPlantationsSel = allPlantationsSel.unmask(0).or(natPlantations).selfMask();
-        } else {
+        } else if (npMode === 'Agreement with global') {  // P1.23
+          allPlantationsSel = allPlantationsSel.unmask(0).and(natPlantations.unmask(0)).selfMask();
+        } else { // 'Replace global'
           allPlantationsSel = natPlantations;
         }
       }
     }
 
+    // Save the pre-FRA-filter thresholded tree cover layer BEFORE the
+    // P1.18 exclusion overwrites forest_map_clip. Lets the map show
+    // the broader "Input: Tree cover" layer alongside the FRA-strict
+    // Forest baseline -- workshop users see the full FRA hierarchy
+    // progression on the map: Tree cover -> Forest -> Naturally
+    // regenerating -> Forest outside buffers -> Primary.
+    var tree_cover_clip = forest_map_clip;
+
+    // P1.18: FRA-aligned Forest baseline. When ticked, exclude
+    // tree-cover-meeting agricultural land (Descals oil palm + SDPT
+    // class 2 tree crops) from forest_map_clip BEFORE the natreg
+    // derivation. This narrows the Forest baseline (02b) to the
+    // FRA-strict definition: tree cover meeting biophysical
+    // thresholds AND not primarily agricultural land. Default ON
+    // (FRA-correct); when on, 02b_forest area shrinks but
+    // 04a_primary_forest is essentially unchanged (those pixels
+    // were already removed via disturbance buffering toward primary).
+    // P1.23: exclusionActive() guards against a hidden checkbox with
+    // a stale `true` value being applied -- e.g. user ticked exclude
+    // plantations under "All tree cover", then switched declaration
+    // to "Naturally regenerating forest" which hides the toggle.
+    if (exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel)) {
+      var fraAgriculture = oilPalmDescalsSel.unmask()
+        .or(treeCropsSDPT.unmask());
+      forest_map_clip = forest_map_clip.updateMask(fraAgriculture.not());
+    }
+
     // P1.16: don't overwrite forest_map_clip in-place; compute a
     // parallel forest_natreg_image so both the FRA Forest baseline
-    // (forest_map_clip) and the Natural Forest derivation
-    // (forest_natreg_image) survive for export, map display, and
-    // stats. Downstream tier analysis switches to forest_baseline
-    // (= natreg if available, else forest) so primary forest is
-    // computed from the most-refined available baseline -- matches
-    // the previous behaviour while exposing the intermediate layer.
+    // (forest_map_clip) and the Naturally Regenerating Forest
+    // derivation (forest_natreg_image) survive for export, map
+    // display, and stats. Downstream tier analysis switches to
+    // forest_baseline (= natreg if available, else forest) so primary
+    // forest is computed from the most-refined available baseline.
     var forest_natreg_image = null;
-    if (includePlantationsCheckbox.getValue()) {
+    if (exclusionActive(includePlantationsCheckbox, includePlantationsPanel)) {  // P1.23: hidden-toggle guard
       forest_natreg_image = forest_map_clip.updateMask(
         allPlantationsSel.unmask().not());
+    } else if (inputCategorySelect.getValue() === INPUT_CATEGORY_NATREG ||
+               inputCategorySelect.getValue() === INPUT_CATEGORY_PRIMARY) {
+      // P1.23a: declaration says input is already at NRF level (or beyond).
+      // Treat forest_map_clip directly as NRF for downstream layer/stats/
+      // export linkage so the user sees an "NRF" layer/row and the
+      // 02d_naturally_regenerating_forest export reflects the input.
+      forest_natreg_image = forest_map_clip;
     }
     var forest_baseline = forest_natreg_image !== null
       ? forest_natreg_image
@@ -4841,29 +5749,45 @@ map2.add(createDisclaimerPanel());
     // var croplandSelLessNoise = croplandSel.convolve(boxcar).gt(agriSmallPixelThreshold).convolve(boxcar).gt(agriSmallPixelThreshold);
     var croplandComb = croplandGladSel //.or(croplandSelLessNoise)// the removing small patches is slow for tihs
 
-    var agriculture = pastureDatasetSel.or(allPlantationsSel.unmask()).or(croplandComb);
+    // P1.20: agriculture aggregation now explicitly includes the
+    // tree-cover-meeting agricultural sources (tree crops + oil palm)
+    // since allPlantationsSel no longer carries them. Plus planted
+    // forest stays in the buffering bucket -- for primary-forest
+    // disturbance purposes large managed plantations DO disturb
+    // adjacent natural forest (logging access, edge effects), even
+    // though FRA classifies them as forest. Net pixel content
+    // unchanged from pre-P1.20: cropland + pasture + tree crops +
+    // oil palm + planted forest.
+    var agriculture = pastureDatasetSel
+                        .or(allPlantationsSel.unmask())   // SDPT class 1 -- planted forest, buffered for primary
+                        .or(treeCropsSDPT.unmask())       // SDPT class 2 -- FRA agriculture
+                        .or(oilPalmDescalsSel.unmask())   // Descals oil palm -- FRA agriculture
+                        .or(croplandComb);                // GLAD croplands
 
     // Override agriculture with national data if provided
     if (nationalAgri.checkbox.getValue()) {
       var natAgriAsset = nationalAgri.getAsset(analysisYear);
       if (natAgriAsset) {
         var natAgri = preprocessAsset(natAgriAsset, nationalAgri.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
-        if (nationalAgri.modeSelect.getValue() === 'Add to global') {
+        var naMode = nationalAgri.modeSelect.getValue();
+        if (naMode === 'Add to global extent') {
           agriculture = agriculture.unmask(0).or(natAgri).selfMask();
-        } else {
+        } else if (naMode === 'Agreement with global') {  // P1.23
+          agriculture = agriculture.unmask(0).and(natAgri.unmask(0)).selfMask();
+        } else { // 'Replace global'
           agriculture = natAgri;
         }
       }
     }
 
-    // map.addLayer(plantationsMosaicStatic,"","plantationsMosaicStatic")
+    // pffAddLayer(plantationsMosaicStatic,"","plantationsMosaicStatic")
 
-    // map.addLayer(country_and_buffer_mask,'',"country_and_buffer_mask")
+    // pffAddLayer(country_and_buffer_mask,'',"country_and_buffer_mask")
 
     if (addInputLayersToMap.getValue())
-      map.addLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Plantations', visibleLayers.plantations, 0.7);
-    // map.addLayer(pastureDatasetSel,"","pastureDatasetSel")
-    // map.addLayer(croplandComb,"","croplandComb")
+      pffAddLayer(allPlantationsSel.selfMask(), {palette: '#d4a017'}, 'Planted forest', visibleLayers.plantations, 0.7);
+    // pffAddLayer(pastureDatasetSel,"","pastureDatasetSel")
+    // pffAddLayer(croplandComb,"","croplandComb")
 
     // Road data
     var roadsMosaicStatic = timeseriesAnthroModule.roadsMosaicStatic().updateMask(country_and_buffer_mask);
@@ -4945,9 +5869,12 @@ map2.add(createDisclaimerPanel());
       var natBuiltupLargeAsset = nationalBuiltupLarge.getAsset(analysisYear);
       if (natBuiltupLargeAsset) {
         var natBuiltupLargeData = preprocessAsset(natBuiltupLargeAsset, nationalBuiltupLarge.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
-        if (nationalBuiltupLarge.modeSelect.getValue() === 'Replace global') {
+        var nbLargeMode = nationalBuiltupLarge.modeSelect.getValue();
+        if (nbLargeMode === 'Replace global') {
           builtUpLarge = natBuiltupLargeData;
-        } else {
+        } else if (nbLargeMode === 'Agreement with global') {  // P1.23
+          builtUpLarge = builtUpLarge.unmask(0).and(natBuiltupLargeData.unmask(0)).selfMask();
+        } else { // 'Add to global extent'
           builtUpLarge = builtUpLarge.unmask(0).or(natBuiltupLargeData).selfMask();
         }
       }
@@ -4993,7 +5920,7 @@ map2.add(createDisclaimerPanel());
     // var distImageTest = cachedState.distanceImages[analysisYear + '_road_small'];
 
     // if (distImageTest) {
-    //   map.addLayer(
+    //   pffAddLayer(
     //     distImageTest, 
     //     {min: 0, max: 5000, palette: ['white', 'blue', 'darkblue']}, 
     //     'Distance to small roads (' + analysisYear + ')'
@@ -5070,24 +5997,24 @@ map2.add(createDisclaimerPanel());
     // Order: agriculture (bottom), roads, small built-up, large built-up (top)
     if (addInputLayersToMap.getValue()) {
       if (enableAgriBuffer.getValue())
-        map.addLayer(buffer_from_agriculture, getVisParams('#ffcc00'), 'Buffer: Agriculture', visibleLayers.agriBuffer, 0.5);
+        pffAddLayer(buffer_from_agriculture, getVisParams('#ffcc00'), 'Buffer: Agriculture', visibleLayers.agriBuffer, 0.5);
       if (enableRoadsBuffer.getValue())
-        map.addLayer(buffer_from_road_small, getVisParams('#ff6600'), 'Buffer: Roads', visibleLayers.roadSmallBuffer, 0.5);
+        pffAddLayer(buffer_from_road_small, getVisParams('#ff6600'), 'Buffer: Roads', visibleLayers.roadSmallBuffer, 0.5);
       if (enableBuiltUpSmallBuffer.getValue())
-        map.addLayer(buffer_from_built_up_small, getVisParams('#cc00cc'), 'Buffer: Small Built-up', visibleLayers.builtSmallBuffer, 0.5);
+        pffAddLayer(buffer_from_built_up_small, getVisParams('#cc00cc'), 'Buffer: Small Built-up', visibleLayers.builtSmallBuffer, 0.5);
       if (enableBuiltUpLargeBuffer.getValue())
-        map.addLayer(buffer_from_built_up_large, getVisParams('#3333cc'), 'Buffer: Large Built-up', visibleLayers.builtLargeBuffer, 0.5);
+        pffAddLayer(buffer_from_built_up_large, getVisParams('#3333cc'), 'Buffer: Large Built-up', visibleLayers.builtLargeBuffer, 0.5);
     }
 
     // Processed binary inputs — what actually feeds the distance transforms.
     // Gated on master toggle (computation still happens regardless).
     // Order: agriculture (bottom), roads, small built-up, large built-up (top)
     if (addInputLayersToMap.getValue()) {
-      map.addLayer(agriculture.selfMask(), getVisParams('#b38f00'), 'Input: Agriculture',   visibleLayers.inputAgriculture, 0.9);
-      map.addLayer(roadsSmall.selfMask(),   getVisParams('#993d00'), 'Input: Roads',         visibleLayers.inputRoads,       0.9);
-      map.addLayer(builtUpSmall.selfMask(), getVisParams('#800080'), 'Input: Small Built-up',visibleLayers.inputBuiltupSmall,0.9);
+      pffAddLayer(agriculture.selfMask(), getVisParams('#b38f00'), 'Input: Agriculture',   visibleLayers.inputAgriculture, 0.9);
+      pffAddLayer(roadsSmall.selfMask(),   getVisParams('#993d00'), 'Input: Roads',         visibleLayers.inputRoads,       0.9);
+      pffAddLayer(builtUpSmall.selfMask(), getVisParams('#800080'), 'Input: Small Built-up',visibleLayers.inputBuiltupSmall,0.9);
       if (builtUpLarge) {
-        map.addLayer(builtUpLarge.selfMask(), getVisParams('#1a1a80'), 'Input: Large Built-up',visibleLayers.inputBuiltupLarge, 0.9);
+        pffAddLayer(builtUpLarge.selfMask(), getVisParams('#1a1a80'), 'Input: Large Built-up',visibleLayers.inputBuiltupLarge, 0.9);
       }
     }
 
@@ -5125,7 +6052,7 @@ map2.add(createDisclaimerPanel());
     }
     
     if (addInputLayersToMap.getValue() && enableSlope.getValue())
-      map.addLayer(slopeAreasToKeep.selfMask(), {palette: '#708090'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
+      pffAddLayer(slopeAreasToKeep.selfMask(), {palette: '#708090'}, 'Input: Slope > ' + slopeToKeepValue + '°', visibleLayers.slope, 0.5);
     
     // Protected areas analysis (using cached category masks)
     var wdpaYearCutoff = current_year - years_protected;
@@ -5147,9 +6074,12 @@ map2.add(createDisclaimerPanel());
       var natProtectedAsset = nationalProtected.getAsset(analysisYear);
       if (natProtectedAsset) {
         var natProtected = preprocessAsset(natProtectedAsset, nationalProtected.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
-        if (nationalProtected.modeSelect.getValue() === 'Replace global') {
+        var npMode2 = nationalProtected.modeSelect.getValue();
+        if (npMode2 === 'Replace global') {
           wdpa_filt_by_date_image = natProtected;
-        } else {
+        } else if (npMode2 === 'Agreement with global') {  // P1.23
+          wdpa_filt_by_date_image = wdpa_filt_by_date_image.unmask(0).and(natProtected.unmask(0)).selfMask();
+        } else { // 'Add to global extent'
           wdpa_filt_by_date_image = wdpa_filt_by_date_image.unmask(0).or(natProtected).selfMask();
         }
       }
@@ -5158,7 +6088,7 @@ map2.add(createDisclaimerPanel());
     var wdpaLabel = 'Input: Protected Areas (≤' + wdpaYearCutoff + ', ' +
       (selected_iucn_categories.length === 10 ? 'All' : selected_iucn_categories.join(', ')) + ')';
     if (addInputLayersToMap.getValue() && enableProtectedAreas.getValue())
-      map.addLayer(wdpa_filt_by_date_image, {palette: '#00cccc'}, wdpaLabel, visibleLayers.protectedAreas, 0.5);
+      pffAddLayer(wdpa_filt_by_date_image, {palette: '#00cccc'}, wdpaLabel, visibleLayers.protectedAreas, 0.5);
     
     // Add forest layer AFTER slope and WDPA so it appears above them
     if (useHansenTreecover) {
@@ -5173,32 +6103,60 @@ map2.add(createDisclaimerPanel());
         country_sel: country_sel
       };
       
-      // Add the Hansen layer to the map if not already added
-      var layers = map.layers();
-      var layerExists = false;
-      for (var i = 0; i < layers.length(); i++) {
-        if (layers.get(i) === hansenLayer) {
-          layerExists = true;
-          break;
+      // P1.26: gate Hansen tile-rendering path with skipMap. The
+      // map.layers().add() and updateHansenLayer() (which calls
+      // setEeObject) both trigger tile fetches.
+      if (!skipMap) {
+        // Add the Hansen layer to the map if not already added
+        var layers = map.layers();
+        var layerExists = false;
+        for (var i = 0; i < layers.length(); i++) {
+          if (layers.get(i) === hansenLayer) {
+            layerExists = true;
+            break;
+          }
         }
+        if (!layerExists) {
+          map.layers().add(hansenLayer);
+        }
+
+        // Initial render with current zoom
+        updateHansenLayer(map, mapName, hansenLayer);
       }
-      if (!layerExists) {
-        map.layers().add(hansenLayer);
-      }
-      
-      // Initial render with current zoom
-      updateHansenLayer(map, mapName, hansenLayer);
       
     } else {
-      // P1.16: always label as "Input: Forest" -- the conditional
-      // "(excl. plantations)" relabel was misleading (the layer also
-      // became the nat reg derivation). Now Forest and Naturally
-      // regenerating forest are exposed as separate layers when both
-      // are computed.
-      map.addLayer(forest_map_clip.selfMask(), binary_lightgreen_palette,
-        "Input: Forest", visibleLayers.forest, 1);
-      if (forest_natreg_image !== null) {
-        map.addLayer(forest_natreg_image.selfMask(), binary_medgreen_palette,
+      // P1.23a: skip layers that would visually duplicate the row
+      // above. A layer is meaningful only when it represents a
+      // distinct refinement step from the prior layer.
+      // - Tree cover: shown when declared ALL (it's the input).
+      // - Forest: shown when distinct from Tree cover -- i.e. OLWTC
+      //   was applied (declared ALL) or input IS Forest (declared FOREST).
+      // - NRF: shown when forest_natreg_image differs from Forest --
+      //   i.e. planted toggle on (declared ALL or FOREST) or input IS
+      //   NRF (declared NATREG).
+      // Without these guards, e.g. declared ALL with both toggles off
+      // produces 3 visually-identical green layers (Tree cover ==
+      // Forest, NRF skipped), which clutters the EE Layers dropdown.
+      var mapDeclCat = inputCategorySelect.getValue();
+      var mapOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+      var mapPlantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
+      var mapShowTreeCover = (mapDeclCat === INPUT_CATEGORY_ALL);
+      var mapShowForest = (mapDeclCat === INPUT_CATEGORY_ALL && mapOlwtcApplied) ||
+                          (mapDeclCat === INPUT_CATEGORY_FOREST);
+      var mapShowNrf = ((mapDeclCat === INPUT_CATEGORY_ALL ||
+                         mapDeclCat === INPUT_CATEGORY_FOREST) && mapPlantedApplied) ||
+                       (mapDeclCat === INPUT_CATEGORY_NATREG);
+
+      if (mapShowTreeCover) {
+        pffAddLayer(tree_cover_clip.selfMask(), binary_palegreen_palette,
+          "Input: Tree cover", visibleLayers.treeCover, 1);
+      }
+      if (mapShowForest) {
+        pffAddLayer(forest_map_clip.selfMask(), binary_lightgreen_palette,
+          "Forest", visibleLayers.forest, 1);
+      }
+      if (mapShowNrf && forest_natreg_image !== null) {
+        pffAddLayer(forest_natreg_image.selfMask(), binary_medgreen_palette,
           'Naturally regenerating forest', visibleLayers.naturallyRegenerating, 1);
       }
     }
@@ -5243,7 +6201,7 @@ map2.add(createDisclaimerPanel());
 
     // Primary forest identification
     var all_forest_1_1_to_1_3 = combined_map.eq(2).or(combined_map.eq(3)).or(combined_map.eq(5));
-      map.addLayer(all_forest_1_1_to_1_3.selfMask(), binary_green_palette, "Forest outside buffers", visibleLayers.forestOutsideBuffers, 1);
+      pffAddLayer(all_forest_1_1_to_1_3.selfMask(), binary_green_palette, "Forest outside buffers", visibleLayers.forestOutsideBuffers, 1);
 
     // Large forest patches (connectivity filtering)
     var largeForestPatches;
@@ -5258,7 +6216,7 @@ map2.add(createDisclaimerPanel());
       // Skip refinement — all pre-connectivity forest becomes primary
       largeForestPatches = all_forest_1_1_to_1_3;
     }
-      map.addLayer(largeForestPatches.selfMask(), binary_darkgreen_palette, 'Primary Forest', visibleLayers.primaryForest, 1);
+      pffAddLayer(largeForestPatches.selfMask(), binary_darkgreen_palette, 'Primary Forest', visibleLayers.primaryForest, 1);
 
     // Additional datasets 
     
@@ -5274,24 +6232,26 @@ map2.add(createDisclaimerPanel());
     )
     .updateMask(country_and_buffer_mask).selfMask();
     //.clip(country_buffer)
-      map.addLayer(flii_class, {min: 2, max: 3, palette: ["orange", "blue"]}, "Reference: FLII (high/med)", visibleLayers.flii, 1);
+      pffAddLayer(flii_class, {min: 2, max: 3, palette: ["orange", "blue"]}, "Reference: FLII (high/med)", visibleLayers.flii, 1);
     
     var forestPersistence = ee.Image("projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020")
         .updateMask(country_and_buffer_mask).selfMask();
 
-    map.addLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)",0,1); //v0 2020 (Threshold:0.9)
+    pffAddLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)",0,1); //v0 2020 (Threshold:0.9)
 
 
     //european primary forests database    
     // var epfd_2018_polys = ee.FeatureCollection("HU_BERLIN/EPFD/V2/polygons");
     // var epfd_2018_image = ee.Image(0).paint(epfd_2018_polys, 1).int8().selfMask();
-    // map.addLayer(epfd_2018_image.updateMask(country_and_buffer_mask),{min:0, max:1, palette:["brown"]}, "EPFD 2018", 0, 1);
+    // pffAddLayer(epfd_2018_image.updateMask(country_and_buffer_mask),{min:0, max:1, palette:["brown"]}, "EPFD 2018", 0, 1);
 
     // Area calculations - store for later stats button
+    var masked_tree_cover = tree_cover_clip.updateMask(country_clip);
     var masked_forest = forest_map_clip.updateMask(country_clip);
     var masked_primary_forest = largeForestPatches.updateMask(country_clip);
 
     // Store forest data for statistics (accessed by "Show Area Statistics" button)
+    latestMaskedTreeCover[analysisYear] = masked_tree_cover;
     latestMaskedForest[analysisYear] = masked_forest;
     latestMaskedPrimaryForest[analysisYear] = masked_primary_forest;
     // P1.16: store Naturally regenerating forest separately when
@@ -5330,6 +6290,12 @@ map2.add(createDisclaimerPanel());
   previousState.country = selectedCountry;
   previousState.splitScreen = useSplitScreen;
   previousCountry = selectedCountry;
+
+  // P1.25: keep the floating legend in sync with the layer set we just
+  // added. Cheap UI-only op (no GEE compute) -- safe to run on every
+  // updateMap call. _legendRefreshFns is populated by createLegendPanel
+  // (each call pushes the legend's refreshLegend closure).
+  _legendRefreshFns.forEach(function(fn) { fn(); });
 }
 
 // Initial map update

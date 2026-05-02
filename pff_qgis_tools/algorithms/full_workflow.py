@@ -12,9 +12,12 @@ Compatible with QGIS >= 3.38 (native: / gdal: providers only).
 """
 
 import os
+import shutil
+import time
 
 from qgis.core import (
     QgsProcessingAlgorithm,
+    QgsProcessingException,
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterVectorLayer,
     QgsProcessingParameterCrs,
@@ -24,6 +27,7 @@ from qgis.core import (
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterString,
     QgsProcessingParameterDefinition,
+    QgsProject,
 )
 
 from ..defaults import (
@@ -49,6 +53,251 @@ from ..utils import (
 # numpy / GDAL for the fast raster-algebra steps
 import numpy as np
 from osgeo import gdal
+
+
+# =============================================================================
+# P1.28: locked-file handling
+# =============================================================================
+# Windows holds OS-level locks on files for several reasons even when QGIS
+# itself doesn't have them open: OneDrive / Dropbox / iCloud sync, Windows
+# Defender real-time scan, File Explorer preview pane, and another QGIS
+# session. The plugin's delete-before-write pattern (os.remove + write)
+# breaks any time one of these holds a transient handle.
+#
+# These helpers + the preflight checks below let the run survive most of
+# those situations: auto-release layers we ourselves loaded into QgsProject,
+# retry os.remove with backoff (handles OneDrive sync windows), warn upfront
+# when the output folder is on a cloud-synced drive, and abort early if the
+# folder isn't writable at all.
+
+def _release_layers_at_path(path):
+    """Best-effort: remove any QgsProject layer at `path` so the file
+    is unlocked. Silent on failure -- caller's os.remove() will raise
+    the proper error if still locked."""
+    try:
+        proj = QgsProject.instance()
+        target = os.path.normcase(os.path.abspath(path))
+        for layer in list(proj.mapLayers().values()):
+            # GPKG layer sources can be 'path|layername=foo' -- strip the
+            # provider suffix before path comparison.
+            src = layer.source().split('|')[0]
+            if os.path.normcase(os.path.abspath(src)) == target:
+                proj.removeMapLayer(layer.id())
+    except Exception:
+        pass
+
+
+def _try_rename_aside(path):
+    """Try to rename `path` to a `.pff_old` sidecar -- sometimes succeeds
+    on Windows even when os.remove() fails, because rename uses a
+    different syscall path (DELETE+RENAME atomically) that doesn't need
+    the same access bits as plain delete. If rename works, the canonical
+    path is freed for new writes; the .pff_old leftover gets best-effort
+    deleted (silent if it fails).
+
+    Returns True if the rename succeeded, False otherwise.
+    """
+    if not os.path.exists(path):
+        return True  # already gone -- canonical path is free
+    junk = path + '.pff_old'
+    # Stale .pff_old from a prior run might still be locked too --
+    # best-effort delete; if it sticks around, we'll fail the rename
+    # below anyway.
+    if os.path.exists(junk):
+        try:
+            os.remove(junk)
+        except OSError:
+            pass
+    try:
+        os.rename(path, junk)
+    except OSError:
+        return False
+    try:
+        os.remove(junk)
+    except OSError:
+        pass  # locked .pff_old is harmless -- canonical path is free
+    return True
+
+
+def _safe_remove(path, attempts=10, delay_s=0.5, feedback=None):
+    """Best-effort delete for paths the run is about to overwrite.
+
+    P1.28a: Two strategies, in order:
+      1. Try renaming `path` aside to `.pff_old` (often succeeds on
+         Windows when plain delete fails -- different syscall path).
+      2. Retry os.remove() with exponential backoff for OneDrive sync,
+         Windows Defender, File Explorer preview locks. Auto-releases
+         QgsProject layers before each retry.
+
+    Default attempts bumped from 5 to 10 (~30s total wait with 1.5x
+    backoff) -- OneDrive sync windows on big GPKG files can be 20-30s.
+    Periodic progress feedback so users know the run isn't hung.
+
+    Raises RuntimeError with an actionable message if still locked.
+    """
+    if not os.path.exists(path):
+        return
+    # Strategy 1 -- the rename trick. Often resolves OneDrive-grabbed
+    # files in one syscall.
+    _release_layers_at_path(path)
+    if _try_rename_aside(path):
+        return
+    # Strategy 2 -- retried delete with progress messages.
+    last_err = None
+    notified = False
+    cur_delay = delay_s
+    for attempt in range(attempts):
+        _release_layers_at_path(path)
+        try:
+            os.remove(path)
+            return
+        except PermissionError as e:
+            last_err = e
+            if attempt < attempts - 1:
+                if feedback is not None and not notified:
+                    feedback.pushInfo(
+                        f"  (file '{os.path.basename(path)}' is locked; "
+                        f"retrying for up to ~30s -- likely OneDrive "
+                        "sync, antivirus, or File Explorer preview)")
+                    notified = True
+                # Periodic progress so user knows we're alive
+                elif feedback is not None and attempt > 0 and attempt % 3 == 0:
+                    feedback.pushInfo(
+                        f"  (still waiting for '{os.path.basename(path)}' "
+                        f"lock to release -- attempt {attempt + 1}/{attempts})")
+                time.sleep(cur_delay)
+                cur_delay *= 1.5  # gentle exponential backoff
+                # One last shot at the rename trick mid-retry: a sync
+                # window may have closed since the first attempt.
+                if attempt == attempts // 2 and _try_rename_aside(path):
+                    return
+    raise RuntimeError(
+        f"Cannot overwrite '{os.path.basename(path)}' after {attempts} "
+        f"attempts. The file is locked by another process. Common causes: "
+        f"OneDrive/Dropbox sync, antivirus scan, File Explorer preview, "
+        f"another QGIS session. Pause the syncing app or close the file "
+        f"and re-run. (original: {last_err})")
+
+
+def _is_cloud_synced_path(path):
+    """Heuristic: detect common cloud-sync folder names in the path.
+    Returns the matched provider name or None."""
+    if not path:
+        return None
+    norm = path.replace('\\', '/').lower()
+    # Match folder boundaries to avoid false positives in user names.
+    for marker, label in [
+        ('/onedrive', 'OneDrive'),
+        ('/dropbox', 'Dropbox'),
+        ('/google drive', 'Google Drive'),
+        ('/googledrive', 'Google Drive'),
+        ('/icloud drive', 'iCloud Drive'),
+        ('/icloudrive', 'iCloud Drive'),
+        ('/box/', 'Box'),
+    ]:
+        if marker in norm:
+            return label
+    # Also match OneDrive variants like "OneDrive - Company Name"
+    if '/onedrive ' in norm or norm.endswith('/onedrive'):
+        return 'OneDrive'
+    return None
+
+
+def _run_preflight_checks(output_folder, feedback):
+    """Run preflight checks on OUTPUT_FOLDER before STAGE 1. Emits
+    warnings for soft issues (continue), raises QgsProcessingException
+    for hard ones (abort early so the user doesn't waste compute).
+
+    Checks:
+      a) Cloud-sync detection (warn)
+      b) Write permission probe (abort if fails)
+      c) Free disk space (warn if <2 GB)
+      d) Pre-existing locked outputs in OUTPUT_FOLDER (warn; auto-
+         release any QgsProject layers we control)
+    """
+    feedback.pushInfo("=== PREFLIGHT CHECKS ===")
+
+    # (a) Cloud-sync detection
+    provider = _is_cloud_synced_path(output_folder)
+    if provider:
+        feedback.pushWarning(
+            f"Output folder is on a cloud-synced drive ({provider}). "
+            "File locks during sync can cause mid-run write failures. "
+            "If you hit a 'PermissionError' mid-run, either pause sync "
+            "for this folder or use a local path "
+            "(e.g. C:\\Users\\<you>\\Documents\\PFF_outputs).")
+
+    # (b) Write permission probe -- hard fail if folder isn't writable
+    try:
+        os.makedirs(output_folder, exist_ok=True)
+    except OSError as e:
+        raise QgsProcessingException(
+            f"Cannot create OUTPUT_FOLDER '{output_folder}'. "
+            f"Check the path and permissions. (original: {e})")
+    probe_path = os.path.join(output_folder, ".pff_preflight_probe")
+    try:
+        with open(probe_path, 'wb') as f:
+            f.write(b'pff')
+        os.remove(probe_path)
+    except OSError as e:
+        raise QgsProcessingException(
+            f"Cannot write to OUTPUT_FOLDER '{output_folder}'. "
+            "Check folder permissions / read-only flag. "
+            f"(original: {e})")
+
+    # (c) Free disk space
+    try:
+        usage = shutil.disk_usage(output_folder)
+        free_mb = usage.free / (1024 * 1024)
+        if free_mb < 2048:  # < 2 GB
+            feedback.pushWarning(
+                f"Only {free_mb:,.0f} MB free in output drive. PFF "
+                "outputs (intermediates + final rasters/vectors) can be "
+                "100s of MB per run; consider freeing space or using a "
+                "different drive.")
+    except OSError:
+        pass  # disk_usage on weird paths -- skip silently
+
+    # (d) Pre-existing locked outputs. Auto-release QgsProject layers
+    # we control; warn about any that remain locked. We probe a curated
+    # list of stable output filenames the run will overwrite.
+    candidate_subpaths = [
+        # Top-level canonical outputs
+        "intermediates/_vectorize/forest_full.gpkg",
+        "intermediates/_vectorize/primary_forest_full.gpkg",
+        "intermediates/_vectorize/primary_forest_polys_raw.gpkg",
+        "intermediates/_vectorize/forest_polys_raw.gpkg",
+        "intermediates/prepared/forest.tif",
+        "intermediates/prepared/dem.tif",
+        "intermediates/prepared/slope.tif",
+    ]
+    locked_remaining = []
+    for sub in candidate_subpaths:
+        p = os.path.join(output_folder, sub)
+        if not os.path.exists(p):
+            continue
+        try:
+            # Probe with append mode -- doesn't truncate, just opens for
+            # write to detect locks. Same lock semantics as os.remove on
+            # Windows.
+            with open(p, 'r+b'):
+                pass
+        except (PermissionError, OSError):
+            # Locked. Try to release any QgsProject layer at this path.
+            _release_layers_at_path(p)
+            try:
+                with open(p, 'r+b'):
+                    pass
+            except (PermissionError, OSError):
+                locked_remaining.append(os.path.basename(p))
+    if locked_remaining:
+        feedback.pushWarning(
+            "Some existing output files are locked by another process: "
+            + ", ".join(locked_remaining)
+            + ". The run will retry mid-run; if it fails, close the "
+            "file in any other application and re-run.")
+
+    feedback.pushInfo("Preflight checks complete.")
 
 
 class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
@@ -81,6 +330,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     PROTECTED_AREAS = "PROTECTED_AREAS"
     PROTECTED_RASTER = "PROTECTED_RASTER"
     PLANTATIONS_RASTER = "PLANTATIONS_RASTER"
+    # P1.18: optional FRA-aligned agricultural tree cover raster
+    # (Descals oil palm + SDPT class 2). Distinct from AGRICULTURE_RASTER
+    # which is the broader buffered-disturbance agriculture (cropland +
+    # pasture + everything). When supplied AND
+    # EXCLUDE_AGRICULTURE_FROM_FOREST is on, this layer is subtracted
+    # from the forest baseline to derive a FRA-strict Forest layer.
+    FRA_AGRICULTURE_RASTER = "FRA_AGRICULTURE_RASTER"
     AOI = "AOI"
     # -- Parameters --
     TARGET_CRS = "TARGET_CRS"
@@ -101,6 +357,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     REFINE_MIN_PATCH_AREA_HA = "REFINE_MIN_PATCH_AREA_HA"
     SAVE_COMBINED_RASTER = "SAVE_COMBINED_RASTER"
     EXCLUDE_PLANTATIONS = "EXCLUDE_PLANTATIONS"
+    EXCLUDE_AGRICULTURE_FROM_FOREST = "EXCLUDE_AGRICULTURE_FROM_FOREST"
     REUSE_DISTANCE_SURFACES = "REUSE_DISTANCE_SURFACES"
     REUSE_PREPARED = "REUSE_PREPARED"
     ADD_MAIN_OUTPUTS_TO_MAP = "ADD_MAIN_OUTPUTS_TO_MAP"
@@ -116,11 +373,15 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     ZONE_LAYER = "ZONE_LAYER"
     ZONE_FIELD = "ZONE_FIELD"
     # -- Vectorisation (optional, advanced) --
-    RUN_VECTORIZE = "RUN_VECTORIZE"
+    # Vectorise runs whenever any of VECTORIZE_PRIMARY / VECTORIZE_FOREST
+    # / VECTORIZE_NEST is ticked. P1.28c semantics: each tick produces
+    # ONLY its named output (no auto-enables, no side-effect outputs).
     VECTORIZE_PRIMARY = "VECTORIZE_PRIMARY"
     VECTORIZE_FOREST = "VECTORIZE_FOREST"
     VECTORIZE_NEST = "VECTORIZE_NEST"
+    VECTORIZE_DISSOLVE_MULTIPART = "VECTORIZE_DISSOLVE_MULTIPART"
     VECTORIZE_SIMPLIFY_M = "VECTORIZE_SIMPLIFY_M"
+    VECTORIZE_OUTPUT_AS_SHAPEFILE = "VECTORIZE_OUTPUT_AS_SHAPEFILE"
     # -- Output --
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
 
@@ -138,89 +399,236 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return (
-            f"PFF Plugin v{self.PFF_VERSION}\n\n"
-            "Runs the complete PFF workflow in one step:\n\n"
-            "1. Prepare datasets (reproject, rasterise, align)\n"
-            "2. Compute distance surfaces\n"
-            "3. Build anthropogenic mask (threshold adjustable)\n"
-            "4. Three-tier primary forest logic (undisturbed/steep/protected)\n"
-            "5. Refine Output -- two optional steps:\n"
-            "   (a) Neighbourhood density filter (set radius=0 to skip)\n"
-            "   (b) Minimum patch size filter via gdal:sieve (set 0 to skip)\n"
-            "6. Zonal Statistics (optional)\n"
-            "7. Vectorise outputs (optional, ADVANCED) -- polygonise primary "
-            "and/or forest input, with optional simplify and CEO-style "
-            "nesting (cuts primary out of forest so they don't overlap)\n\n"
-            "Auto UTM: when enabled, the plugin detects the appropriate "
-            "UTM zone from the AOI or forest raster centroid.\n\n"
-            "Buffer = 0 rule (P0.15): if a per-input buffer distance is "
-            "set to 0 AND that input's 'Include ... buffer' tickbox is "
-            "ticked, the input footprint is applied DIRECTLY to the "
-            "anthropogenic mask (no buffer expansion). To skip an input "
-            "entirely instead, untick its 'Include ... buffer' checkbox.\n\n"
-            "Custom human-use slots (3, ADVANCED): bring your own disturbance "
-            "rasters with user-editable labels and per-slot buffer distances. "
-            "Use cases: pipelines, mines, lights at night, navigable "
-            "waterways, country-specific disturbance layers.\n\n"
-            "Add main outputs to map (default ON): after the run, the headline "
-            "outputs (Primary forest, Pre-connectivity forest, Forest, and "
-            "Naturally regenerating forest when produced) auto-load into the "
-            "QGIS Layers panel.\n\n"
-            "Reuse prepared/*.tif cache (default ON): on re-runs, anthro "
-            "reprojection is skipped when the cached aligned raster matches "
-            "the reference grid -- saves minutes per re-run on national-scale "
-            "data. Untick if you swapped a source raster.\n\n"
+            f"PFF Plugin v{self.PFF_VERSION} -- Full Workflow\n"
+            "═══════════════════════════════════════════════\n\n"
+            "Parameter labels carry a section prefix (e.g. '02 Tree Cover:') "
+            "-- look up the matching section below for the full "
+            "description, example sources, and caveats.\n\n"
+            "WORKFLOW STAGES\n"
+            "  1. Prepare datasets (reproject, rasterise, align)\n"
+            "  2. Compute distance surfaces\n"
+            "  3. Build anthropogenic mask + tier logic\n"
+            "  4. Three-tier primary forest (undisturbed / steep / protected)\n"
+            "  5. Refine Output -- ecological viability filter\n"
+            "  6. Zonal Statistics (optional)\n"
+            "  7. Vectorise outputs (optional)\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§00 COUNTRY / CONTEXT\n"
+            "═══════════════════════════════════════════════\n"
+            "00 Country: AOI boundary (vector, optional)\n"
+            "    Vector polygon defining country / region. Used to clip\n"
+            "    rasters and as the boundary for stats.\n"
+            "00 Country: ISO3 prefix\n"
+            "    3-letter country code prepended to every output\n"
+            "    filename (e.g. KEN -> KEN_qgis_04a_primary_forest.tif).\n"
+            "    Leave blank to omit. Cased uppercase.\n"
+            "00 Country: Auto UTM\n"
+            "    Detects appropriate UTM zone from AOI / forest raster\n"
+            "    centroid. Overrides Target CRS picker.\n"
+            "00 Country: Target CRS\n"
+            "    Manual projected CRS picker. Used when Auto UTM is off.\n"
+            "00 Country: Target CRS EPSG (string fallback)\n"
+            "    EPSG code as text (e.g. '5266' or 'EPSG:5266'). Workshop\n"
+            "    fallback when picker can't find your zone. Overrides\n"
+            "    Target CRS picker.\n"
+            "00 Country: AOI buffer (advanced)\n"
+            "    Extends analysis area past the country border so\n"
+            "    edge-of-country anthropogenic features still influence\n"
+            "    buffers. Default 2000 m.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§02 TREE COVER\n"
+            "═══════════════════════════════════════════════\n"
+            "Order matches the workflow sequence: forest input first,\n"
+            "then OLWTC exclusion (narrows tree cover -> FRA Forest), then\n"
+            "planted-forest exclusion (narrows Forest -> Naturally\n"
+            "Regenerating).\n\n"
+            "Forest raster (REQUIRED)\n"
+            "    Binary 1/0 raster. Defines the reference grid (extent /\n"
+            "    resolution / pixel origin) -- all other rasters align to it.\n"
+            "    Example sources: Hansen GFC thresholded, GLAD LULC forest\n"
+            "    class, national forest map. GEE filename: 02b_forest_*\n\n"
+            "Other land with tree cover raster (optional)\n"
+            "    Binary 1/0. FRA-Note-10 'other land with tree cover':\n"
+            "    oil palm, orchards, agroforestry-with-crops, urban trees.\n"
+            "    NOT the broader buffered agriculture (cropland + pasture).\n"
+            "    Paired with 'Refine to forest' toggle. Example sources:\n"
+            "    GEE export 03a_plantations_tree_crops (Descals oil palm\n"
+            "    + SDPT class 2).\n\n"
+            "Refine to forest (default ON)\n"
+            "    Requires OLWTC raster above. When on: narrows\n"
+            "    02b_forest = tree_cover MINUS other land with tree cover,\n"
+            "    BEFORE the planted-forest subtraction. Harmless no-op when\n"
+            "    no OLWTC raster supplied.\n\n"
+            "Planted forest raster (optional)\n"
+            "    Binary 1/0. FRA Planted Forest (timber/pulp/fibre):\n"
+            "    eucalyptus, pine, teak. Paired with 'Refine to naturally\n"
+            "    regenerating forest' toggle. Example sources: SDPT class 1,\n"
+            "    national planted-forest registry. When supplied AND toggle\n"
+            "    is on, workflow outputs 02d_naturally_regenerating_forest.tif\n"
+            "    (≈ FRA NRF = Forest minus planted forest -- proxy, depends\n"
+            "    on planted-forest layer completeness).\n"
+            "    GEE filename: 02c_planted_forest_*\n\n"
+            "Refine to naturally regenerating forest (default ON)\n"
+            "    Requires Planted forest raster above. When on: derives\n"
+            "    02d_naturally_regenerating_forest as 02b MINUS 02c\n"
+            "    (Forest minus Planted forest).\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§03 HUMAN INFLUENCE -- (a) DISTURBANCE INPUTS\n"
+            "═══════════════════════════════════════════════\n"
+            "Inputs that get distance-buffered to remove nearby forest\n"
+            "from candidate primary forest. The 'agriculture' here is the\n"
+            "broader buffered concept -- includes cropland + pasture +\n"
+            "everything human-use signalling, NOT FRA-aligned.\n\n"
+            "03a Disturbance Inputs: Roads (vector, optional)\n"
+            "03a Disturbance Inputs: Roads raster -- overrides vector. GEE: 03a_roads_*\n"
+            "03a Disturbance Inputs: Built-up small raster -- GHS-BUILT (villages).\n"
+            "    GEE: 03a_builtup_small_*\n"
+            "03a Disturbance Inputs: Built-up large raster -- GHS-BUILT (cities).\n"
+            "    GEE: 03a_builtup_large_*\n"
+            "03a Disturbance Inputs: Agriculture raster -- GLAD LULC, ESA WorldCover, etc.\n"
+            "    GEE: 03a_agriculture_*\n"
+            "03a Disturbance Inputs: Custom 1 / 2 / 3 raster + label + buffer (advanced)\n"
+            "    Three slots, each with its own raster + user-editable\n"
+            "    label + per-slot buffer distance. Bring your own\n"
+            "    disturbance: pipelines, mines, lights at night, navigable\n"
+            "    waterways, country-specific layers. Label shows in logs +\n"
+            "    metadata. Buffer 0 = apply input directly without expansion.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§03 HUMAN INFLUENCE -- (b) BUFFERS\n"
+            "═══════════════════════════════════════════════\n"
+            "Buffer = 0 rule: when a per-input buffer is 0 AND its\n"
+            "'Include ... buffer' tickbox is on, the input footprint is\n"
+            "applied DIRECTLY to the anthropogenic mask (no expansion). To\n"
+            "skip an input entirely, UNTICK its 'Include ... buffer'.\n\n"
+            "03b Buffers: Use single buffer distance for all anthropogenic layers\n"
+            "    Overrides individual values when ticked.\n"
+            "03b Buffers: Single buffer distance (m) (used when 03b ticked)\n"
+            "03b Buffers: Roads buffer enable\n"
+            "03b Buffers: Roads buffer distance (m)\n"
+            "03b Buffers: Built-up small buffer enable\n"
+            "03b Buffers: Built-up small buffer distance (m)\n"
+            "03b Buffers: Built-up large buffer enable\n"
+            "03b Buffers: Built-up large buffer distance (m)\n"
+            "03b Buffers: Agriculture buffer enable\n"
+            "03b Buffers: Agriculture buffer distance (m)\n"
+            "03b Buffers: Maximum distance (m) (advanced)\n"
+            "    Cap for speed; should be > largest buffer distance.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§03 HUMAN INFLUENCE -- (c) BUFFER EXCEPTIONS\n"
+            "═══════════════════════════════════════════════\n"
+            "Inputs that PRESERVE forest from disturbance buffering --\n"
+            "naturally protected (steep slopes) or legally protected\n"
+            "(WDPA pre-filtered to a year cutoff so PAs designated AFTER\n"
+            "the analysis year aren't given retroactive credit).\n\n"
+            "03c Buffer Exceptions: DEM (elevation, metres). Slope computed from this.\n"
+            "    GEE: 03b_protection_natural_dem_*\n"
+            "03c Buffer Exceptions: Slope raster (degrees, 0-90). Overrides DEM if both supplied.\n"
+            "    GEE: 03b_protection_natural_slope_*\n"
+            "03c Buffer Exceptions: Protected areas (vector, optional)\n"
+            "03c Buffer Exceptions: Protected areas raster -- overrides vector.\n"
+            "    GEE: 03b_protection_legal_*\n"
+            "03c Buffer Exceptions: Slope threshold (degrees). Default 45.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§04 REFINE OUTPUT -- ECOLOGICAL VIABILITY\n"
+            "═══════════════════════════════════════════════\n"
+            "Produces 04a_primary_forest from 03c_pre_connectivity_primary_forest\n"
+            "by removing patches that fail ecological viability criteria.\n"
+            "Two optional sub-steps:\n\n"
+            "04 Refine Output: Enable refine output (master toggle)\n"
+            "04 Refine Output: Step (a): neighbourhood radius (m). 0 = skip step (a).\n"
+            "    Smooths binary forest with a circular kernel; pixels below\n"
+            "    density threshold are dropped.\n"
+            "04 Refine Output: Step (a): minimum density to keep (0-1)\n"
+            "04 Refine Output: Step (a): fast approximation (advanced)\n"
+            "    Square kernel instead of circular -- faster, slight shape\n"
+            "    difference. Off by default.\n"
+            "04 Refine Output: Step (b): minimum patch area, hectares. 0 = skip step (b).\n"
+            "    Uses gdal:sieve. Hole-fill is masked back to step input so\n"
+            "    artefacts can't introduce pixels outside the input forest.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§05 STATISTICS\n"
+            "═══════════════════════════════════════════════\n"
+            "05 Statistics: Run zonal statistics (master toggle)\n"
+            "05 Statistics: Zone layer (polygons)\n"
+            "05 Statistics: Zone name / ID field\n\n"
+            "═══════════════════════════════════════════════\n"
+            "§06 VALIDATION / VECTORISE (advanced)\n"
+            "═══════════════════════════════════════════════\n"
+            "Polygonise + optional simplify + dissolve. Same pipeline as\n"
+            "the standalone 'Vectorize PFF output' tool.\n\n"
+            "Stage runs whenever any of the layer ticks below is set.\n\n"
+            "06 Validation: Vectorise: primary forest\n"
+            "06 Validation: Vectorise: forest input (uses naturally regenerating if\n"
+            "    plantations refined)\n"
+            "06 Validation: Vectorise: nest outputs (cut primary out of forest -- ideal\n"
+            "    CEO stratification)\n"
+            "06 Validation: Vectorise: simplify tolerance, metres. 0 = no simplify.\n"
+            "    Use with caution -- can introduce geometry artefacts.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "RUN OPTIONS / TIPS\n"
+            "═══════════════════════════════════════════════\n"
+            "Save combined coded raster: 4-class debug raster (0=none,\n"
+            "    1=forest, 2=pre-connectivity, 3=primary).\n"
+            "Reuse cached distance surfaces (default OFF, advanced)\n"
+            "    Distance computation is the slowest stage. Output files\n"
+            "    (intermediates/distances/dist_*.tif) can be reused across\n"
+            "    runs when only tuning thresholds. OFF by default so stale\n"
+            "    cache can't silently produce wrong results if inputs change.\n"
+            "Reuse prepared/*.tif cache (default ON)\n"
+            "    Skips reprojection of anthro inputs when cached aligned\n"
+            "    raster matches the reference grid. Untick if you swapped a\n"
+            "    source raster.\n"
+            "Add main outputs to map (default ON)\n"
+            "    Auto-loads Primary forest, Pre-connectivity forest, Forest,\n"
+            "    Naturally regenerating forest after the run completes.\n"
+            "    Order matches GEE legend: Primary on top.\n"
+            "Add human influence layers to map (default OFF)\n"
+            "    Mirrors GEE master toggle. Loads roads, builtup, ag,\n"
+            "    plantations, slope, protected, custom slots.\n"
+            "    Anthropogenic mask intentionally NOT auto-loaded -- it's\n"
+            "    a debug intermediate; available at 04e_anthropogenic_mask.tif.\n\n"
             "Speed vs detail:\n"
-            "  Workflow runtime scales roughly linearly with raster pixel "
-            "count -- doubling resolution (e.g. 60m -> 30m) ~quadruples "
-            "runtime. Coarser is faster but loses detail. Linear features "
-            "(roads, tracks, narrow rivers) are 1-pixel-wide; at "
-            "resolutions coarser than ~45m they get under-represented "
-            "during rasterisation, so road buffers may miss segments. "
-            "If road buffers matter for your analysis, export at 30m or "
-            "finer. If you only care about built-up / agriculture / "
-            "protection, 60-100m is usually fine and much faster.\n\n"
-            "Output folder layout (OUT = your chosen output folder; ISO3 prefix when set):\n"
-            "  OUT/[ISO3_]qgis_02c_naturally_regenerating_forest.tif (if plantations refined)\n"
-            "  OUT/[ISO3_]qgis_04a_primary_forest.tif\n"
-            "  OUT/[ISO3_]qgis_04b_pre_connectivity_primary_forest.tif\n"
-            "  OUT/[ISO3_]qgis_04c_combined_coded_raster.tif (if ticked)\n"
-            "  OUT/[ISO3_]qgis_04e_anthropogenic_mask.tif\n"
-            "  OUT/[ISO3_]qgis_05a_area_statistics.csv (if zonal stats ticked)\n"
-            "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.shp (if zonal stats ticked)\n"
-            "  OUT/[ISO3_]qgis_06a_primary_forest_vector.gpkg (if vectorise ticked)\n"
-            "  OUT/[ISO3_]qgis_06b_primary_forest_dissolved.gpkg\n"
-            "  OUT/[ISO3_]qgis_06c_<forest>_vector.gpkg (if forest also vectorised)\n"
-            "  OUT/[ISO3_]qgis_06d_<forest>_dissolved.gpkg\n"
-            "  OUT/[ISO3_]qgis_run_metadata.json\n"
-            "  OUT/intermediates/tier1_undisturbed.tif, tier2_steep.tif,\n"
-            "      tier3_protected.tif, forest_inside_buffers.tif,\n"
-            "      steep_slope.tif, gentle_slope.tif\n"
-            "  OUT/intermediates/prepared/ -- reprojected + aligned inputs\n"
-            "  OUT/intermediates/distances/ -- distance surfaces\n\n"
-            "Distance surfaces caching:\n"
-            "  The distance computation stage is the slowest step. "
-            "Output files (intermediates/distances/dist_*.tif) can be "
-            "reused across runs — useful when you're only tuning "
-            "thresholds and anthro inputs haven't changed. "
-            "'Reuse cached distance surfaces' is OFF by default: "
-            "re-runs recompute distances so stale cache can't silently "
-            "produce wrong results if inputs changed.\n\n"
-            "Fast re-run workflow (when tuning thresholds only):\n"
-            "  1. Point the raster input slots (Roads raster, Built-up "
-            "raster, Agriculture raster, Protected raster, etc.) at the "
-            "files inside [previous-output-folder]/intermediates/prepared/ — "
-            "e.g. prepared/roads.tif, prepared/builtup_small.tif. "
-            "These are the aligned rasters from the previous run, "
-            "guaranteed to match the reference grid so the distance "
-            "cache is safe to reuse.\n"
+            "  Runtime scales linearly with raster pixel count. Doubling\n"
+            "  resolution (60m -> 30m) ~quadruples runtime. Linear features\n"
+            "  (roads, narrow rivers) are 1-pixel-wide; coarser than ~45m\n"
+            "  they get under-represented during rasterisation, so road\n"
+            "  buffers may miss segments. Export at 30m or finer if road\n"
+            "  buffers matter; 60-100m is fine for built-up / ag / protection.\n\n"
+            "Fast re-run workflow (tuning thresholds only):\n"
+            "  1. Point input rasters at [previous-out]/intermediates/prepared/\n"
+            "     (already aligned to the reference grid).\n"
             "  2. Tick 'Reuse cached distance surfaces'.\n"
-            "  3. Use the same output folder as the previous run so "
-            "the existing intermediates/distances/ cache is found.\n"
-            "  Result: reproject/rasterise stage skipped (raster inputs "
-            "already aligned), distance stage skipped (cache reused), "
-            "only tier logic + refine output run — much faster iteration "
-            "on thresholds."
+            "  3. Use the same output folder so the cache is found.\n"
+            "  Result: reproject + distance stages skipped, only tier +\n"
+            "  refine logic runs -- much faster iteration.\n\n"
+            "═══════════════════════════════════════════════\n"
+            "OUTPUT FOLDER LAYOUT\n"
+            "═══════════════════════════════════════════════\n"
+            "OUT = your chosen output folder. ISO3_ prefix when 00 set.\n\n"
+            "  OUT/[ISO3_]qgis_02b_forest.tif (Forest baseline; FRA-strict\n"
+            "      when 02 ticked)\n"
+            "  OUT/[ISO3_]qgis_02d_naturally_regenerating_forest.tif\n"
+            "      (if plantations refined)\n"
+            "  OUT/[ISO3_]qgis_03c_pre_connectivity_primary_forest.tif\n"
+            "      (after Step 03 disturbance + protection logic)\n"
+            "  OUT/[ISO3_]qgis_03d_combined_coded_raster.tif\n"
+            "      (if Save combined ticked; tier-logic debug)\n"
+            "  OUT/[ISO3_]qgis_04a_primary_forest.tif\n"
+            "      (after Step 04 viability filter -- HEADLINE result)\n"
+            "  OUT/[ISO3_]qgis_04e_anthropogenic_mask.tif (intermediate)\n"
+            "  OUT/[ISO3_]qgis_05a_area_statistics.csv (if 05 ticked)\n"
+            "  OUT/[ISO3_]qgis_05b_area_statistics_by_zone.gpkg\n"
+            "  OUT/[ISO3_]qgis_06a_primary_forest_vector.gpkg\n"
+            "      (if Vectorise: primary ticked)\n"
+            "  OUT/[ISO3_]qgis_06c_<forest>_vector.gpkg\n"
+            "      (if Vectorise: forest ticked)\n"
+            "  OUT/[ISO3_]qgis_06c_<forest>_with_primary_nested_vector.gpkg\n"
+            "      (if Vectorise: nest ticked)\n"
+            "  OUT/[ISO3_]qgis_06d_<forest>_with_primary_nested_dissolved.gpkg\n"
+            "      (if Vectorise: nest + dissolve_multipart ticked)\n"
+            "  OUT/[ISO3_]qgis_run_metadata.json\n"
+            "  OUT/intermediates/ (tier rasters, prepared cache,\n"
+            "                     distance cache, scratch workspaces)\n"
         )
 
     def createInstance(self):
@@ -231,63 +639,133 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     # ------------------------------------------------------------------ #
 
     def initAlgorithm(self, config=None):
-        # -- Data inputs --
+        # Parameter labels use §x.y numbering matching the help panel
+        # (shortHelpString) sections. Click Help in the dialog for full
+        # descriptions, sources, and caveats per parameter.
+        # Sections echo the GEE left-panel structure:
+        #   00 Country / Context
+        #   02 Forest Definition
+        #   03a/b/c Human Influence
+        #   04 Refine Output
+        #   05 Statistics
+        #   06 Validation / Vectorise
+        #   (unnumbered) Run options + Output folder
+
+        # ────────────────────────────────────────────────────────────
+        # §00 — Country / Context
+        # ────────────────────────────────────────────────────────────
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            self.AOI, "00 Country: AOI boundary (vector, optional)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            self.ISO3_PREFIX,
+            "00 Country: ISO3 prefix (e.g. 'KEN'; leave blank to omit)",
+            defaultValue="",
+            optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.AUTO_UTM,
+            "00 Country: Auto-detect UTM zone from AOI / forest centroid",
+            defaultValue=False))
+        self.addParameter(QgsProcessingParameterCrs(
+            self.TARGET_CRS,
+            "00 Country: Target projected CRS (ignored when Auto UTM ticked)",
+            defaultValue="EPSG:32717"))
+        self.addParameter(QgsProcessingParameterString(
+            self.TARGET_CRS_EPSG,
+            "00 Country: OR target CRS as EPSG code (e.g. '5266'; overrides picker)",
+            defaultValue="",
+            optional=True))
+        _aoi_buf_param = QgsProcessingParameterNumber(
+            self.AOI_BUFFER,
+            "00 Country: AOI buffer distance (m, advanced)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=AOI_BUFFER, minValue=0)
+        _aoi_buf_param.setFlags(
+            _aoi_buf_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_aoi_buf_param)
+
+        # ────────────────────────────────────────────────────────────
+        # §02 — Forest Definition
+        # Order matches workflow sequence: tree cover input first, then
+        # FRA agriculture (subtracted at 02a→02b to derive FRA Forest),
+        # then plantations (subtracted at 02b→02d to derive Naturally
+        # Regenerating). Toggles follow each input.
+        # ────────────────────────────────────────────────────────────
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.FOREST_RASTER,
-            "Forest extent raster (binary 1/0). Defines the reference grid "
-            "(extent / resolution / pixel origin) -- all other rasters are "
-            "aligned to it. Typical sources: Hansen GFC thresholded, GLAD "
-            "LULC forest class, national forest map. "
-            "[GEE filename pattern: 1_forest_]"))
+            "02 Tree Cover: Forest raster (REQUIRED; binary 1/0; defines reference grid)"))
+        # P1.22: paired plantations + planted-forest exclusions follow
+        # the FRA forest-derivation flow:
+        #   tree cover - plantations    = Forest (FRA Note 10 baseline)
+        #   Forest    - planted forest = Naturally regenerating forest
+        # Plantations FIRST in the parameter list so the UI reads in
+        # workflow order. See About panel in GEE app for full FRA
+        # definitions and rubber caveat.
+        # P1.27: parallel/aligned shorter labels. FRA Note 7 / Note 10
+        # caveats + rubber caveat live in the GEE app About panel and the
+        # workshop guide -- keeping the parameter labels short is far
+        # better UX in the QGIS Processing dialog.
+        #   raster: "02 Tree Cover: <NAME> raster -- e.g. <examples> ..."
+        #   toggle: "02 Tree Cover: Refine to <result> (exclude <NAME> raster above)"
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.FRA_AGRICULTURE_RASTER,
+            "02 Tree Cover: Other land with tree cover raster -- e.g. oil "
+            "palm, orchards, agroforestry (binary 1/0, optional)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.EXCLUDE_AGRICULTURE_FROM_FOREST,
+            "02 Tree Cover: Refine to forest (exclude other land with tree "
+            "cover raster above)",
+            defaultValue=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.PLANTATIONS_RASTER,
+            "02 Tree Cover: Planted forest raster -- e.g. eucalyptus, pine, "
+            "teak (binary 1/0, optional)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.EXCLUDE_PLANTATIONS,
+            "02 Tree Cover: Refine to naturally regenerating forest "
+            "(exclude planted forest raster above)",
+            defaultValue=True))
+
+        # ────────────────────────────────────────────────────────────
+        # §03a — Human Influence: Disturbance inputs
+        # ────────────────────────────────────────────────────────────
         self.addParameter(QgsProcessingParameterVectorLayer(
-            self.ROADS, "Roads (vector)", optional=True))
-        # Built-up and agriculture vector inputs removed v0.8.33 — in practice
-        # most users supply raster equivalents (typically from GEE exports).
-        # The raster-only inputs below are the ones people actually use.
-        # Raster alternatives (e.g. from GEE COG exports) -- override vectors
+            self.ROADS, "03a Disturbance Inputs: Roads (vector, optional)",
+            optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.ROADS_RASTER,
-            "Roads raster (binary 1/0) -- overrides vector. Typical sources: "
-            "OSM, Microsoft Roads, country road network. "
-            "[GEE filename pattern: _roads_]",
+            "03a Disturbance Inputs: Roads raster (binary 1/0; overrides vector)",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.BUILTUP_SMALL_RASTER,
-            "Built-up small raster (binary 1/0) -- overrides vector. Typical "
-            "source: GHS-BUILT (small settlements / villages). "
-            "[GEE filename pattern: _builtup_small_]",
+            "03a Disturbance Inputs: Built-up small raster (binary 1/0)",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.BUILTUP_LARGE_RASTER,
-            "Built-up large raster (binary 1/0) -- overrides vector. Typical "
-            "source: GHS-BUILT (cities / large urban areas). "
-            "[GEE filename pattern: _builtup_large_]",
+            "03a Disturbance Inputs: Built-up large raster (binary 1/0)",
             optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.AGRICULTURE_RASTER,
-            "Agriculture raster (binary 1/0) -- overrides vector. Typical "
-            "sources: GLAD LULC cropland class, ESA WorldCover, "
-            "national landcover. [GEE filename pattern: _agriculture_]",
+            "03a Disturbance Inputs: Agriculture raster (binary 1/0; broader buffered ag, "
+            "NOT FRA-aligned)",
             optional=True))
-
-        # Custom human-use slots (3, all FlagAdvanced). Each slot bundles a
-        # raster + a user-editable label (shown in logs and metadata) + a
-        # per-slot buffer distance. Use cases: pipelines, mines, lights at
-        # night, navigable waterways, country-specific disturbance layers.
         for _i in range(1, 4):
             _r_const = getattr(self, f"CUSTOM_{_i}_RASTER")
             _l_const = getattr(self, f"CUSTOM_{_i}_LABEL")
             _d_const = getattr(self, f"CUSTOM_{_i}_DIST")
+            _base = 5 + (_i - 1) * 3  # 03a.6, 03a.9, 03a.12
             _r_param = QgsProcessingParameterRasterLayer(
                 _r_const,
-                f"Custom disturbance {_i}: raster (binary 1/0) -- optional",
+                f"03a.{_base + 1} Custom {_i} raster (advanced)",
                 optional=True)
             _r_param.setFlags(_r_param.flags()
                               | QgsProcessingParameterDefinition.FlagAdvanced)
             self.addParameter(_r_param)
             _l_param = QgsProcessingParameterString(
                 _l_const,
-                f"    Custom disturbance {_i}: label (used in logs + metadata)",
+                f"03a.{_base + 2}     Custom {_i} label",
                 defaultValue=f"Custom disturbance {_i}",
                 optional=True)
             _l_param.setFlags(_l_param.flags()
@@ -295,270 +773,213 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(_l_param)
             _d_param = QgsProcessingParameterNumber(
                 _d_const,
-                f"    Custom disturbance {_i}: buffer distance (m) "
-                "[0 = apply input directly, no buffer]",
+                f"03a.{_base + 3}     Custom {_i} buffer distance (m; 0 = no buffer)",
                 type=QgsProcessingParameterNumber.Double,
                 defaultValue=1000.0, minValue=0.0)
             _d_param.setFlags(_d_param.flags()
                               | QgsProcessingParameterDefinition.FlagAdvanced)
             self.addParameter(_d_param)
 
-        self.addParameter(QgsProcessingParameterRasterLayer(
-            self.DEM,
-            "Natural protection — DEM (elevation, metres). Slope is "
-            "computed from this. [GEE filename pattern: _natural_dem_]",
-            optional=True))
-        self.addParameter(QgsProcessingParameterRasterLayer(
-            self.SLOPE_RASTER,
-            "OR Natural protection — Slope raster (degrees, 0–90). "
-            "Overrides DEM if both supplied. [GEE filename pattern: "
-            "_natural_slope_]",
-            optional=True))
-        self.addParameter(QgsProcessingParameterVectorLayer(
-            self.PROTECTED_AREAS, "Protected areas (vector)", optional=True))
-        self.addParameter(QgsProcessingParameterRasterLayer(
-            self.PROTECTED_RASTER,
-            "OR protected areas raster (binary 1/0) -- overrides vector. "
-            "Typical source: WDPA pre-filtered to a year cutoff (so PAs "
-            "established AFTER the analysis year aren't given retroactive "
-            "credit). [GEE filename pattern: 3_protection_legal_]",
-            optional=True))
-        self.addParameter(QgsProcessingParameterRasterLayer(
-            self.PLANTATIONS_RASTER,
-            "Plantations raster (binary 1/0) -- optional, paired with "
-            "'Exclude plantations' tickbox below. Typical sources: Spatial "
-            "Database of Planted Trees (SDPT), national plantation registry. "
-            "When supplied AND 'Exclude plantations' is on, the workflow "
-            "outputs an additional 02c_naturally_regenerating_forest.tif "
-            "(≈ FRA Naturally Regenerating Forest = forest minus plantations "
-            "-- proxy, depends on plantations layer completeness).",
-            optional=True))
-        self.addParameter(QgsProcessingParameterVectorLayer(
-            self.AOI, "Area of Interest boundary (vector)", optional=True))
-
-        # -- Country / context (P1.13) --
-        # Optional ISO3 code prefixed onto every output filename per the
-        # Option D naming convention (see docs/specs/PFF_NAMING_CONVENTION.md).
-        # Leave blank to skip the prefix entirely. Cased uppercase.
-        self.addParameter(QgsProcessingParameterString(
-            self.ISO3_PREFIX,
-            "ISO3 country code prefix for output filenames (optional, e.g. 'KEN'; leave blank to omit)",
-            defaultValue="",
-            optional=True))
-
-        # -- CRS / AOI --
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.AUTO_UTM,
-            "Auto-detect UTM zone from AOI / forest raster centroid",
-            defaultValue=False))
-        self.addParameter(QgsProcessingParameterCrs(
-            self.TARGET_CRS,
-            "Target projected CRS (ignored when Auto UTM is ticked)",
-            defaultValue="EPSG:32717"))
-        # Optional EPSG-string fallback. Workshop users sometimes can't find
-        # the right CRS via the picker (no Choose button on QGIS-LTR; obscure
-        # zones); typing "EPSG:32628" here overrides the picker entirely.
-        self.addParameter(QgsProcessingParameterString(
-            self.TARGET_CRS_EPSG,
-            "OR target CRS as EPSG code (e.g. '5266' or 'EPSG:5266') -- "
-            "overrides the picker above when non-empty. Bare digits are "
-            "treated as EPSG. Ignored when Auto UTM is ticked.",
-            defaultValue="",
-            optional=True))
-        # AOI buffer distance — rarely tuned; stowed under Advanced.
-        _aoi_buf_param = QgsProcessingParameterNumber(
-            self.AOI_BUFFER,
-            "AOI buffer distance (m) — extends analysis area slightly past the country border so edge-of-country anthropogenic features still influence buffers near the boundary",
-            type=QgsProcessingParameterNumber.Double,
-            defaultValue=AOI_BUFFER, minValue=0)
-        _aoi_buf_param.setFlags(
-            _aoi_buf_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(_aoi_buf_param)
-
-        # -- Distance thresholds --
+        # ────────────────────────────────────────────────────────────
+        # §03b — Human Influence: Buffer distances
+        # ────────────────────────────────────────────────────────────
         self.addParameter(QgsProcessingParameterBoolean(
             self.USE_SINGLE_DISTANCE,
-            "Use single buffer distance for all anthropogenic layers",
+            "03b Buffers: Use single buffer distance for all anthropogenic layers",
             defaultValue=False))
         self.addParameter(QgsProcessingParameterNumber(
             self.ALL_BUFFERS_DIST,
-            "Single buffer distance (m) — overrides individual values when ticked. "
-            "0 = apply each input footprint directly (no buffer expansion).",
+            "03b Buffers: Single buffer distance (m; used when 03b ticked)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=1000, minValue=0, maxValue=10000))
-
-        # Per-buffer enable tickbox + distance field pairs — kept in the main
-        # dialog (not Advanced) so the grouping is visible at a glance. Each
-        # tickbox sits directly above its distance field, mirroring the GEE
-        # panel layout.
-
         self.addParameter(QgsProcessingParameterBoolean(
             self.ENABLE_ROADS_BUFFER,
-            "Roads buffer",
+            "03b Buffers: Roads buffer enable",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.ROADS_DIST,
-            "    Roads buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
+            "03b Buffers:     Roads buffer distance (m; 0 = no buffer)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=ROADS_DIST, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterBoolean(
             self.ENABLE_BUILTUP_SMALL_BUFFER,
-            "Built-up (small) buffer",
+            "03b Buffers: Built-up (small) buffer enable",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.BUILTUP_DIST,
-            "    Built-up (small) buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
+            "03b Buffers:     Built-up (small) buffer distance (m)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=BUILTUP_DIST, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterBoolean(
             self.ENABLE_BUILTUP_LARGE_BUFFER,
-            "Built-up (large) buffer",
+            "03b Buffers: Built-up (large) buffer enable",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.BUILTUP_LARGE_DIST,
-            "    Built-up (large) buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
+            "03b Buffers:     Built-up (large) buffer distance (m)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=BUILTUP_LARGE_DIST, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterBoolean(
             self.ENABLE_AGRICULTURE_BUFFER,
-            "Agriculture buffer",
+            "03b Buffers: Agriculture buffer enable",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.AGRICULTURE_DIST,
-            "    Agriculture buffer distance (m)  [ignored when single-distance is ticked; 0 = apply input directly, no buffer]",
+            "03b Buffers:     Agriculture buffer distance (m)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=AGRICULTURE_DIST, minValue=0, maxValue=10000))
-        # Max distance — technical cap for speed. Rarely needs tuning;
-        # stowed under Advanced Parameters to avoid cluttering the main dialog.
         _max_dist_param = QgsProcessingParameterNumber(
             self.MAX_DISTANCE,
-            "Maximum distance to compute (m) — cap for speed; should be > largest buffer distance",
+            "03b Buffers: Maximum distance to compute (m, advanced)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=MAX_DISTANCE, minValue=100)
         _max_dist_param.setFlags(
             _max_dist_param.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_max_dist_param)
 
-        # -- Slope / connectivity --
+        # ────────────────────────────────────────────────────────────
+        # §03c — Human Influence: Buffer Exceptions
+        # ────────────────────────────────────────────────────────────
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.DEM,
+            "03c Buffer Exceptions: DEM (elevation, m; slope computed from this)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.SLOPE_RASTER,
+            "03c Buffer Exceptions: OR Slope raster (degrees 0-90; overrides DEM)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            self.PROTECTED_AREAS,
+            "03c Buffer Exceptions: Protected areas (vector, optional)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            self.PROTECTED_RASTER,
+            "03c Buffer Exceptions: OR protected areas raster (binary 1/0; overrides vector)",
+            optional=True))
         self.addParameter(QgsProcessingParameterNumber(
-            self.SLOPE_THRESHOLD, "Slope threshold (degrees)",
+            self.SLOPE_THRESHOLD,
+            "03c Buffer Exceptions: Slope threshold (degrees)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=SLOPE_THRESHOLD, minValue=0, maxValue=90))
+
+        # ────────────────────────────────────────────────────────────
+        # §04 — Refine Output (ecological viability filter)
+        # ────────────────────────────────────────────────────────────
         self.addParameter(QgsProcessingParameterBoolean(
             self.ENABLE_REFINE_OUTPUT,
-            "Refine Output (two optional steps: neighbourhood density + minimum patch size)",
+            "04 Refine Output: Enable refine (two optional steps below)",
             defaultValue=True))
-        # Step (a) -- neighbourhood density
         self.addParameter(QgsProcessingParameterNumber(
             self.SMOOTH_RADIUS,
-            "    Refine Step (a): neighbourhood radius (m); 0 = skip step (a)",
+            "04 Refine Output:     Step (a): neighbourhood radius (m; 0 = skip)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=SMOOTH_RADIUS, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterNumber(
             self.DENSITY_THRESHOLD,
-            "    Refine Step (a): minimum density to keep (0-1)",
+            "04 Refine Output:     Step (a): minimum density to keep (0-1)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=DENSITY_THRESHOLD, minValue=0, maxValue=1))
-        # Fast-approximation (square kernel) is a power-user knob -- most
-        # workshop runs leave it off and the default circular kernel is
-        # already fast enough for typical national radii. Hidden under
-        # Advanced parameters per UX hybrid decision (2026-04-26).
         _fast_approx_param = QgsProcessingParameterBoolean(
             self.FAST_APPROXIMATION,
-            "Refine Step (a): fast approximation (square kernel — faster, slight shape difference)",
+            "04 Refine Output:     Step (a): fast approximation (square kernel, advanced)",
             defaultValue=False)
         _fast_approx_param.setFlags(
             _fast_approx_param.flags()
             | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_fast_approx_param)
-        # Step (b) -- minimum patch size (raster sieve)
         self.addParameter(QgsProcessingParameterNumber(
             self.REFINE_MIN_PATCH_AREA_HA,
-            "    Refine Step (b): minimum patch area, hectares (0 = skip step (b))",
+            "04 Refine Output:     Step (b): minimum patch area, hectares (0 = skip)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=0.0, minValue=0.0))
 
-        # -- Options --
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.SAVE_COMBINED_RASTER,
-            "Save combined coded raster (0=none, 1=forest, 2=pre-connectivity, 3=primary forest)",
-            defaultValue=False))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.EXCLUDE_PLANTATIONS,
-            "Exclude plantations from forest (requires Plantations raster input)",
-            defaultValue=True))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.REUSE_DISTANCE_SURFACES,
-            "Reuse cached distance surfaces (faster re-runs; only safe when anthro inputs and grid are unchanged)",
-            defaultValue=False))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.REUSE_PREPARED,
-            "Reuse prepared/*.tif cache (skip reprojection of anthro inputs when an aligned cache exists with matching grid). Default ON; flip OFF if you've changed an input source raster.",
-            defaultValue=True))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.ADD_MAIN_OUTPUTS_TO_MAP,
-            "Add main outputs to map after run (primary forest, pre-connectivity forest, forest input)",
-            defaultValue=True))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP,
-            "Add human-influence input + buffer layers to map after run (default OFF -- mirrors the GEE app's master toggle)",
-            defaultValue=False))
-
-        # -- Zonal statistics (optional) --
+        # ────────────────────────────────────────────────────────────
+        # §05 — Statistics
+        # ────────────────────────────────────────────────────────────
         self.addParameter(QgsProcessingParameterBoolean(
             self.RUN_ZONAL_STATS,
-            "Run zonal statistics",
+            "05 Statistics: Run zonal statistics",
             defaultValue=False))
         self.addParameter(QgsProcessingParameterVectorLayer(
             self.ZONE_LAYER,
-            "Zone layer for zonal statistics (polygons)",
+            "05 Statistics: Zone layer (polygons)",
             optional=True))
         self.addParameter(QgsProcessingParameterField(
             self.ZONE_FIELD,
-            "Zone name / ID field",
+            "05 Statistics: Zone name / ID field",
             parentLayerParameterName=self.ZONE_LAYER,
             optional=True))
 
-        # -- Vectorisation (optional, advanced) --
-        # Tucked under FlagAdvanced so the default parameter sheet isn't
-        # cluttered. Same pipeline as the standalone "Vectorize PFF
-        # output" tool, integrated into the workflow so users get
-        # CEO-friendly polygon outputs in one run.
-        _v_run = QgsProcessingParameterBoolean(
-            self.RUN_VECTORIZE,
-            "Vectorise selected outputs (creates polygon + dissolved-multipart .gpkg files)",
-            defaultValue=False)
-        _v_run.setFlags(_v_run.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(_v_run)
-
+        # ────────────────────────────────────────────────────────────
+        # §06 — Validation / Vectorise (advanced)
+        # Vectorise runs whenever primary or forest below is ticked; no
+        # separate enable flag.
+        # ────────────────────────────────────────────────────────────
         _v_primary = QgsProcessingParameterBoolean(
             self.VECTORIZE_PRIMARY,
-            "    Vectorise: primary forest",
-            defaultValue=True)
+            "06 Validation:     Vectorise: primary forest",
+            defaultValue=False)
         _v_primary.setFlags(_v_primary.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_primary)
-
         _v_forest = QgsProcessingParameterBoolean(
             self.VECTORIZE_FOREST,
-            "    Vectorise: forest input (uses naturally regenerating forest if plantations refined)",
+            "06 Validation:     Vectorise: forest input (or nat reg if refined)",
             defaultValue=False)
         _v_forest.setFlags(_v_forest.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_forest)
-
         _v_nest = QgsProcessingParameterBoolean(
             self.VECTORIZE_NEST,
-            "    Vectorise: nest outputs (when both selected, cut primary out of forest so they don't overlap -- ideal CEO stratification)",
+            "06 Validation:     Vectorise: nest outputs (cut primary out of forest)",
             defaultValue=False)
         _v_nest.setFlags(_v_nest.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_nest)
-
+        _v_dissolve = QgsProcessingParameterBoolean(
+            self.VECTORIZE_DISSOLVE_MULTIPART,
+            "06 Validation:     Vectorise: also dissolve nested output to "
+            "multipart by level (CEO-relevant; slow on big countries with "
+            "low simplify)",
+            defaultValue=True)
+        _v_dissolve.setFlags(_v_dissolve.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_dissolve)
         _v_simplify = QgsProcessingParameterNumber(
             self.VECTORIZE_SIMPLIFY_M,
-            "    Vectorise: simplify tolerance, metres (0 = no simplification; use with caution -- can introduce geometry artefacts)",
+            "06 Validation:     Vectorise: simplify tolerance (m; 0 = no simplify)",
             type=QgsProcessingParameterNumber.Double,
             defaultValue=0.0, minValue=0.0)
         _v_simplify.setFlags(_v_simplify.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_simplify)
+        _v_format = QgsProcessingParameterBoolean(
+            self.VECTORIZE_OUTPUT_AS_SHAPEFILE,
+            "06 Validation:     Output as Shapefile (.shp) instead of "
+            "GeoPackage (.gpkg) -- default OFF (.gpkg recommended; .shp "
+            "limited to 10-char field names + 2GB cap)",
+            defaultValue=False)
+        _v_format.setFlags(_v_format.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_format)
+
+        # ────────────────────────────────────────────────────────────
+        # Run options (orthogonal to workflow steps)
+        # ────────────────────────────────────────────────────────────
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.SAVE_COMBINED_RASTER,
+            "Run: Save combined coded raster (debug)",
+            defaultValue=False))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.REUSE_DISTANCE_SURFACES,
+            "Run: Reuse cached distance surfaces (advanced)",
+            defaultValue=False))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.REUSE_PREPARED,
+            "Run: Reuse prepared/*.tif cache (default ON)",
+            defaultValue=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.ADD_MAIN_OUTPUTS_TO_MAP,
+            "Run: Add main outputs to map after run",
+            defaultValue=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP,
+            "Run: Add human-influence input + buffer layers to map (default OFF)",
+            defaultValue=False))
 
         self.addParameter(QgsProcessingParameterFolderDestination(
             self.OUTPUT_FOLDER, "Output folder"))
@@ -567,7 +988,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.1"
+    PFF_VERSION = "0.9.13"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -620,6 +1041,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         out_dir = ensure_dir(
             self.parameterAsString(parameters, self.OUTPUT_FOLDER, context))
 
+        # P1.28: preflight checks. Detects cloud-sync output folders +
+        # locked existing outputs upfront so users don't waste 1+
+        # minutes of analysis on a failure that was predictable. Hard
+        # failures (folder not writable) abort here; soft failures
+        # (cloud sync, low disk space) just emit warnings.
+        _run_preflight_checks(out_dir, feedback)
+
         # Output filename helper: builds top-level paths per Option D
         # naming. Uses _iso3 from above; closes over out_dir.
         def _out(step, name, ext="tif"):
@@ -669,17 +1097,33 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         add_human_influence_layers_to_map = self.parameterAsBool(
             parameters, self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP, context)
 
-        # Vectorise stage params (advanced).
-        run_vectorize = self.parameterAsBool(
-            parameters, self.RUN_VECTORIZE, context)
+        # Vectorise stage params (advanced). The stage runs whenever
+        # any of primary / forest / nest is ticked.
         vectorize_primary = self.parameterAsBool(
             parameters, self.VECTORIZE_PRIMARY, context)
         vectorize_forest = self.parameterAsBool(
             parameters, self.VECTORIZE_FOREST, context)
         vectorize_nest = self.parameterAsBool(
             parameters, self.VECTORIZE_NEST, context)
+        vectorize_dissolve_multipart = self.parameterAsBool(
+            parameters, self.VECTORIZE_DISSOLVE_MULTIPART, context)
+        # P1.28c: tick-what-it-says semantics. Each VECTORIZE_* toggle
+        # produces ONLY its named output. Ticking nest no longer auto-
+        # enables primary/forest -- the coded-raster nest path uses the
+        # source RASTERS directly (final_path, forest_src_path) and
+        # never needed the polygonised vector primary/forest. Dissolve
+        # is scoped to the nested output only (CEO-relevant): primary-
+        # alone and forest-alone outputs are NOT dissolved.
+        run_vectorize = bool(vectorize_primary or vectorize_forest
+                             or vectorize_nest)
         vectorize_simplify_m = self.parameterAsDouble(
             parameters, self.VECTORIZE_SIMPLIFY_M, context)
+        # User-toggleable output format. Default GPKG; ESRI Shapefile
+        # available for legacy / CEO workflows that require .shp.
+        _vec_as_shp = self.parameterAsBool(
+            parameters, self.VECTORIZE_OUTPUT_AS_SHAPEFILE, context)
+        vec_ext = "shp" if _vec_as_shp else "gpkg"
+        vec_format = "ESRI Shapefile" if _vec_as_shp else "GPKG"
 
         # Read individual distances even when single-mode is on, so we can
         # warn the user if they've customised them but ticked the single-mode
@@ -720,6 +1164,33 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             thresholds = {k: single_dist for k in individual_thresholds}
         else:
             thresholds = individual_thresholds
+
+        # Warn upfront if any active buffer distance exceeds MAX_DISTANCE.
+        # Distance computation (gdal_proximity) is capped at MAX_DISTANCE
+        # for speed; pixels beyond it report nodata. If a buffer threshold
+        # is larger than the cap, all pixels at that range get treated as
+        # "outside buffer" (i.e. forest preserved when it should be
+        # removed) -- silent wrong-result bug. Better to flag now and ask
+        # the user to bump MAX_DISTANCE in the advanced parameters.
+        _exceeded = []
+        for _name, _dist in thresholds.items():
+            if not enable_buffers.get(_name, True):
+                continue
+            if _dist > max_dist:
+                _exceeded.append(f"{_name}={_dist:g} m")
+        if _exceeded:
+            from qgis.core import QgsProcessingException
+            raise QgsProcessingException(
+                "Buffer distance(s) exceed Maximum Distance "
+                f"({max_dist:g} m): " + ", ".join(_exceeded) + ". "
+                "Distance computation is capped at MAX_DISTANCE for speed; "
+                "pixels beyond it report nodata, so any buffer threshold "
+                "larger than the cap silently produces wrong results. "
+                "Fix: open the advanced parameters and increase "
+                "'00 Country: Maximum distance to compute (m, advanced)' "
+                "to at least the largest buffer distance + ~100 m headroom. "
+                "(Then re-run.)"
+            )
 
         # Prominent log block so the user always sees which distances were
         # actually applied — mitigates the "I forgot the single-distance
@@ -860,19 +1331,42 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Likely outputs use the Option D filenames computed via _out().
         _likely_outputs = [
             _out("04a", "primary_forest"),
-            _out("04b", "pre_connectivity_primary_forest"),
+            _out("03c", "pre_connectivity_primary_forest"),
             _out("04e", "anthropogenic_mask"),
-            _out("02c", "naturally_regenerating_forest"),
+            _out("02b", "forest"),
+            _out("02d", "naturally_regenerating_forest"),
             os.path.join(
                 out_dir,
                 (f"{_iso3}_qgis_run_metadata.json" if _iso3
                  else "qgis_run_metadata.json")),
         ]
         if save_combined:
-            _likely_outputs.append(_out("04c", "combined_coded_raster"))
+            _likely_outputs.append(_out("03d", "combined_coded_raster"))
         if _run_zonal:
             _likely_outputs.append(_out("05a", "area_statistics", ext="csv"))
-            _likely_outputs.append(_out("05b", "area_statistics_by_zone", ext="shp"))
+            _likely_outputs.append(_out("05b", "area_statistics_by_zone", ext="gpkg"))
+        # Vectorise outputs (06a/c/d). P1.28c output matrix:
+        #   - vectorize_primary -> 06a primary_forest_vector
+        #   - vectorize_forest  -> 06c <forest|naturally_regenerating_forest>_vector
+        #   - vectorize_nest    -> 06c <base>_with_primary_nested_vector
+        #                          + 06d <base>_with_primary_nested_dissolved
+        #                            (only if vectorize_dissolve_multipart)
+        # Forest-vector basename depends on whether nat reg derivation
+        # runs (chosen later in workflow); check both candidate names
+        # since either may exist from a previous run. Non-existent
+        # files are silently skipped by the lock check loop below.
+        if run_vectorize:
+            if vectorize_primary:
+                _likely_outputs.append(_out("06a", "primary_forest_vector", ext=vec_ext))
+            if vectorize_forest:
+                _likely_outputs.append(_out("06c", "forest_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06c", "naturally_regenerating_forest_vector", ext=vec_ext))
+            if vectorize_nest:
+                _likely_outputs.append(_out("06c", "forest_with_primary_nested_vector", ext=vec_ext))
+                _likely_outputs.append(_out("06c", "naturally_regenerating_forest_with_primary_nested_vector", ext=vec_ext))
+                if vectorize_dissolve_multipart:
+                    _likely_outputs.append(_out("06d", "forest_with_primary_nested_dissolved", ext=vec_ext))
+                    _likely_outputs.append(_out("06d", "naturally_regenerating_forest_with_primary_nested_dissolved", ext=vec_ext))
 
         _locked = []
         for _p in _likely_outputs:
@@ -1003,14 +1497,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _drv = gdal.GetDriverByName("GTiff")
                 # Write clipped forest to prepared/forest.tif (different path
                 # from the scratch reproj source — no in-place overwrite).
-                if os.path.exists(prepared_forest_path):
-                    try:
-                        os.remove(prepared_forest_path)
-                    except OSError as e:
-                        raise RuntimeError(
-                            f"Cannot write '{os.path.basename(prepared_forest_path)}' — "
-                            "it is locked. Close any program using it and retry. "
-                            f"(original: {e})")
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(prepared_forest_path, feedback=feedback)
                 # Use _ds_out NOT _out -- _out is the helper closure for
                 # building output filenames (defined ~line 625). Naming
                 # this GDAL Dataset _out would shadow the closure for the
@@ -1227,12 +1715,96 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         else:
             pa_tif = _prep_vector(self.PROTECTED_AREAS, "protected")
 
+        # ─── P1.18: FRA-aligned Forest baseline ───────────────────────
+        # When the user supplies an FRA agricultural tree cover layer
+        # (Descals oil palm + SDPT class 2 + agroforestry) AND ticks
+        # "Exclude agriculture from Forest baseline (FRA-aligned)", the
+        # Forest baseline (forest_raw_path) is narrowed BEFORE the
+        # plantations-exclusion / nat reg derivation. This produces a
+        # FRA-strict Forest layer (tree cover meeting biophysical
+        # thresholds AND not primarily agricultural land use).
+        # Mirrors pff_4.js:4870 P1.18 logic.
+        exclude_agriculture_from_forest = self.parameterAsBool(
+            parameters, self.EXCLUDE_AGRICULTURE_FROM_FOREST, context)
+        fra_agriculture_layer = self.parameterAsRasterLayer(
+            parameters, self.FRA_AGRICULTURE_RASTER, context)
+        fra_agriculture_tif = None
+        if fra_agriculture_layer is not None:
+            fra_agriculture_tif = _prep_raster(
+                self.FRA_AGRICULTURE_RASTER, "fra_agriculture_tree_cover")
+
+        if fra_agriculture_tif is not None and exclude_agriculture_from_forest:
+            feedback.pushInfo(
+                "Refining tree cover to Forest by excluding other land "
+                "with tree cover (oil palm, orchards, agroforestry)...")
+            forest_fra_path = os.path.join(prepared_dir, "forest_fra.tif")
+            _fds = gdal.Open(forest_raw_path, gdal.GA_ReadOnly)
+            _farr = _fds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
+            _fgt = _fds.GetGeoTransform()
+            _fproj = _fds.GetProjection()
+            _fxsz = _fds.RasterXSize
+            _fysz = _fds.RasterYSize
+            _fds = None
+            _ads = gdal.Open(fra_agriculture_tif, gdal.GA_ReadOnly)
+            _aarr = _ads.GetRasterBand(1).ReadAsArray().astype(np.uint8)
+            _ads = None
+            _farr_fra = ((_farr == 1) & (_aarr != 1)).astype(np.uint8)
+            # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+            _safe_remove(forest_fra_path, feedback=feedback)
+            _drv = gdal.GetDriverByName("GTiff")
+            # _ds_out NOT _out -- avoid shadowing the closure helper
+            _ds_out = _drv.Create(forest_fra_path, _fxsz, _fysz, 1,
+                                  gdal.GDT_Byte,
+                                  ["COMPRESS=LZW", "TILED=YES"])
+            _ds_out.SetGeoTransform(_fgt)
+            _ds_out.SetProjection(_fproj)
+            _ds_out.GetRasterBand(1).WriteArray(_farr_fra)
+            _ds_out.GetRasterBand(1).SetNoDataValue(0)
+            _ds_out.FlushCache()
+            _ds_out = None
+            excluded_px = int((_farr == 1).sum() - _farr_fra.sum())
+            feedback.pushInfo(
+                f"  Excluded {excluded_px:,} other-land-with-tree-cover pixels "
+                "from Forest baseline.")
+            # Switch downstream to use the FRA-stricter forest baseline.
+            # The plantations exclusion block + nat reg derivation +
+            # primary forest computation all read from forest_raw_path.
+            forest_raw_path = forest_fra_path
+            reference = forest_fra_path
+        elif fra_agriculture_layer is not None and not exclude_agriculture_from_forest:
+            feedback.pushInfo(
+                "Other land with tree cover raster prepared in "
+                "intermediates/prepared/fra_agriculture_tree_cover.tif "
+                "but 'Refine to forest' is off — Forest baseline NOT "
+                "narrowed. Tick the option to derive FRA-strict Forest.")
+
+        # ─── Top-level 02b_forest.tif (FRA Forest baseline output) ───
+        # Per spec, 02b_forest belongs at top level (not just as the
+        # internal cache at intermediates/prepared/forest.tif). Writing
+        # it as a separate file means QGIS can hold open the top-level
+        # 02b_forest.tif (via auto-load) without locking the prepared/
+        # cache file -- which would otherwise fail the next run's
+        # forest preparation step (PermissionError on remove).
+        # Reflects the post-P1.18 forest_raw_path: FRA-strict version
+        # when the toggle is on, thresholded tree cover otherwise.
+        forest_baseline_top_path = _out("02b", "forest")
+        # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+        _safe_remove(forest_baseline_top_path, feedback=feedback)
+        shutil.copy2(forest_raw_path, forest_baseline_top_path)
+        feedback.pushInfo(
+            f"Wrote Forest baseline to "
+            f"{os.path.basename(forest_baseline_top_path)} "
+            f"({'FRA-strict' if exclude_agriculture_from_forest and fra_agriculture_tif else 'thresholded tree cover'})")
+
         # Plantations: optional binary raster used to derive naturally
         # regenerating forest (forest AND NOT plantations).
         # Mirrors pff_4.js:4184 behaviour when "Exclude plantations" is on.
         # Always prep the raster when supplied (consistency with other anthro
         # inputs) — the file sits in prepared/ ready for re-runs even if the
         # "Exclude plantations" tickbox is off on the current run.
+        # Note: when P1.18 runs above, forest_raw_path now points at
+        # forest_fra.tif (FRA-stricter baseline), so the nat reg
+        # derivation below operates on the FRA Forest baseline.
         exclude_plantations = self.parameterAsBool(
             parameters, self.EXCLUDE_PLANTATIONS, context)
         plantations_layer = self.parameterAsRasterLayer(
@@ -1244,8 +1816,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
 
         if plantations_tif is not None and exclude_plantations:
             feedback.pushInfo(
-                "Excluding plantations from forest "
-                "(creating ≈ FRA Naturally Regenerating Forest layer)...")
+                "Refining Forest to naturally regenerating forest by "
+                "excluding planted forest...")
             if True:  # (preserve existing indentation of block below)
                 _fds = gdal.Open(forest_raw_path, gdal.GA_ReadOnly)
                 _farr = _fds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
@@ -1261,22 +1833,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 # Headline output (≈ FRA Naturally Regenerating Forest),
                 # lives at top level. P1.16: renamed from
                 # 04d_forest_naturally_regenerating to
-                # 02c_naturally_regenerating_forest. The layer represents
+                # 02d_naturally_regenerating_forest (workflow-progression
+                # ordering: 02b forest -> 02c plantations -> 02d nat reg
+                # = 02b minus 02c). The layer represents
                 # Forest minus Plantations -- per FRA, this IS "Naturally
                 # regenerating forest" (Forest decomposes as Naturally
                 # regenerating + Planted). Primary forest is a subset of
                 # naturally regenerating forest, not a sibling.
-                forest_natreg_path = _out("02c", "naturally_regenerating_forest")
+                forest_natreg_path = _out("02d", "naturally_regenerating_forest")
                 _drv = gdal.GetDriverByName("GTiff")
-                # Remove first so locked file gives a clear error.
-                if os.path.exists(forest_natreg_path):
-                    try:
-                        os.remove(forest_natreg_path)
-                    except OSError as e:
-                        raise RuntimeError(
-                            f"Cannot overwrite '{os.path.basename(forest_natreg_path)}' — "
-                            "it is locked. Remove it from QGIS Layers panel and retry. "
-                            f"(original: {e})")
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(forest_natreg_path, feedback=feedback)
                 # _ds_out NOT _out -- shadowing _out (the closure helper)
                 # would break downstream _out("step", "name") calls.
                 _ds_out = _drv.Create(forest_natreg_path, _fxsz, _fysz, 1,
@@ -1290,18 +1857,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_out = None
                 excluded_px = int((_farr == 1).sum() - _natreg.sum())
                 feedback.pushInfo(
-                    f"  Excluded {excluded_px:,} plantation pixels from forest.")
+                    f"  Excluded {excluded_px:,} planted-forest pixels from forest.")
                 # Downstream stages operate on nat-regen forest
                 reference = forest_natreg_path
         elif plantations_tif is not None and not exclude_plantations:
             feedback.pushInfo(
-                "Plantations raster prepared in intermediates/prepared/plantations.tif "
-                "but 'Exclude plantations' is off — plantations are NOT excluded "
-                "from the forest input in this run.")
+                "Planted forest raster prepared in intermediates/prepared/plantations.tif "
+                "but 'Refine to naturally regenerating forest' is off — planted forest "
+                "is NOT excluded from the forest input in this run.")
         elif plantations_layer is None and exclude_plantations:
             feedback.pushInfo(
-                "'Exclude plantations' is on but no plantations raster"
-                " provided — skipping exclusion.")
+                "'Refine to naturally regenerating forest' is on but no Planted "
+                "forest raster provided — skipping exclusion.")
 
         # DEM / Slope: slope raster overrides DEM if provided
         slope_layer = self.parameterAsRasterLayer(
@@ -1449,9 +2016,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 if _cds:
                     _cds = None
             if not use_cache:
-                # Delete stale cached file before recomputing
-                if os.path.exists(dp):
-                    os.remove(dp)
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(dp, feedback=feedback)
                 feedback.pushInfo(f"Computing distance for {name}...")
                 proximity(raster_path, dp, max_distance=max_dist,
                           context=context, feedback=feedback)
@@ -1631,7 +2197,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             tier3_protected,
         )
         # Aligned naming: pre_connectivity_forest (matches pFF_4)
-        candidate_path = _out("04b", "pre_connectivity_primary_forest")
+        candidate_path = _out("03c", "pre_connectivity_primary_forest")
         _write(candidate_path, primary_candidate, gt, proj, x_size, y_size)
         feedback.setProgress(80)
 
@@ -1750,7 +2316,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 feedback.pushInfo(
                     "Skipping Refine Output (master tickbox off) -- "
                     "04a_primary_forest.tif copied from "
-                    "04b_pre_connectivity_primary_forest.tif.")
+                    "03c_pre_connectivity_primary_forest.tif.")
             else:
                 feedback.pushInfo(
                     "Skipping Refine Output (both Step (a) radius and "
@@ -1772,7 +2338,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             combined[primary_candidate == 1] = 2
             combined[final_arr == 1] = 3
 
-            combined_path = _out("04c", "combined_coded_raster")
+            combined_path = _out("03d", "combined_coded_raster")
             _write(combined_path, combined, gt, proj, x_size, y_size)
             feedback.pushInfo(
                 "Combined coded raster: 0=none, 1=forest, "
@@ -1844,11 +2410,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 zonal_csv = _out("05a", "area_statistics", ext="csv")
                 write_zonal_csv(results, totals, zonal_csv, feedback)
 
-            # Join to vector (if zones provided)
+            # Join to vector (if zones provided). Final OUTPUT 05b is
+            # .gpkg (avoids shapefile field-name truncation + 2GB cap),
+            # but the zone_with_id intermediate stays .shp because
+            # zonal_statistics.py creates it upstream as .shp on
+            # purpose (avoids gpkg FID uniqueness issues with GEE-
+            # exported country boundaries that have duplicate FIDs).
+            # native:reprojectlayer in join_stats_to_vector will convert
+            # the .shp intermediate to .gpkg by extension on output.
             if results and zone_path:
                 zone_with_id = os.path.join(
                     zonal_work, "zones_with_id.shp")
-                zonal_vec = _out("05b", "area_statistics_by_zone", ext="shp")
+                zonal_vec = _out("05b", "area_statistics_by_zone", ext="gpkg")
                 join_stats_to_vector(
                     results, zone_with_id, zonal_vec,
                     target_crs_str, context, feedback)
@@ -1856,16 +2429,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ================================================================
         #  STAGE 7 -- Vectorise (optional, advanced)
         # ================================================================
-        # Polygonises selected outputs (primary forest and/or forest
-        # input) into .gpkg files, with optional Douglas-Peucker
-        # simplification and optional CEO-style nesting (cut primary
-        # out of forest so the two layers don't overlap).
+        # Polygonises selected outputs into .gpkg/.shp files with
+        # optional Douglas-Peucker simplification. P1.28c semantics:
+        # tick-what-it-says -- each VECTORIZE_* tick produces ONLY its
+        # named output, no auto-enables, no side-effect outputs. CEO-
+        # style nesting (cut primary out of forest) uses a coded raster
+        # built from final_path + forest_src_path RASTERS directly, so
+        # ticking nest does NOT require ticking forest or primary.
         #
-        # P1.13 filenames (Option D):
-        #   primary forest -> 06a_primary_forest_vector.gpkg
-        #                   + 06b_primary_forest_dissolved.gpkg
-        #   forest input   -> 06c_<forest_layer_name>_vector.gpkg
-        #                   + 06d_<forest_layer_name>_dissolved.gpkg
+        # Output filenames:
+        #   primary tick -> 06a_primary_forest_vector
+        #   forest tick  -> 06c_<forest_layer_name>_vector
+        #   nest tick    -> 06c_<forest_layer_name>_with_primary_nested_vector
+        #                 + 06d_<forest_layer_name>_with_primary_nested_dissolved
+        #                   (when VECTORIZE_DISSOLVE_MULTIPART is on)
         # Whether naturally_regenerating_forest or forest is used is
         # determined by whether plantations refinement ran
         # (forest_natreg_path is non-None when it did). P1.16 renamed
@@ -1873,12 +2450,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # variable name forest_natreg_path was already aligned (natreg
         # = nat reg).
         # ================================================================
-        if run_vectorize and (vectorize_primary or vectorize_forest):
+        if run_vectorize:
             _stage("STAGE 7: Vectorise outputs")
             vector_scratch = ensure_dir(
                 os.path.join(intermediates_dir, "_vectorize"))
 
-            def _do_polygonise(src_raster_path, step, layer_name):
+            def _do_polygonise(src_raster_path, step, layer_name,
+                               target_path=None):
                 """Mask + polygonise + optional simplify. Returns polys path.
 
                 Args:
@@ -1887,8 +2465,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     layer_name: snake-case descriptor without _vector
                                 suffix or extension (e.g. 'primary_forest').
                                 The function appends '_vector' and '.gpkg'.
+                    target_path: optional override for the output path.
+                                When set, polygonise writes here instead of
+                                the canonical _out(step, ...) location. Used
+                                by nesting flow to write to scratch first
+                                then diff into the canonical file.
                 """
-                polys_path = _out(step, f"{layer_name}_vector", ext="gpkg")
+                polys_path = (target_path if target_path is not None
+                              else _out(step, f"{layer_name}_vector", ext=vec_ext))
                 # Build mask raster with nodata=0 so polygonize skips
                 # background efficiently. Source rasters are already
                 # binary 0/1, so the mask is just (arr == 1).
@@ -1912,7 +2496,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                                       gdal.GDT_Byte,
                                       ["COMPRESS=LZW", "TILED=YES"])
                 _ds_o.SetGeoTransform(_v_gt)
-                _ds_o.SetProjection(_v_proj)
+                # Defensive: if source raster has empty/missing CRS,
+                # fall back to the target_crs_str so polygonize doesn't
+                # produce pixel-coordinate polygons. (Pixel-coord polys
+                # would render at lat/long 0 with target-CRS metadata
+                # stamped -- the "polygons in wrong place" bug.)
+                if _v_proj:
+                    _ds_o.SetProjection(_v_proj)
+                else:
+                    from qgis.core import QgsCoordinateReferenceSystem
+                    _fallback_crs = QgsCoordinateReferenceSystem(target_crs_str)
+                    _ds_o.SetProjection(_fallback_crs.toWkt())
+                    feedback.pushWarning(
+                        f"  Source raster for {layer_name} had no CRS; "
+                        f"using target {target_crs_str} as fallback.")
                 _ob = _ds_o.GetRasterBand(1)
                 _ob.WriteArray(_v_mask)
                 _ob.SetNoDataValue(0)
@@ -1920,11 +2517,14 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_o = None
                 del _v_arr, _v_mask
 
-                if vectorize_simplify_m > 0:
-                    polys_tmp = os.path.join(
-                        vector_scratch, f"{layer_name}_polys_raw.gpkg")
-                else:
-                    polys_tmp = polys_path
+                # Always polygonise to scratch first, then pass through
+                # gdal.VectorTranslate to canonical with explicit
+                # -a_srs (and optional -simplify). Uniform path means
+                # canonical always has CRS metadata stamped, regardless
+                # of simplify=0 vs >0. Avoids "polygons in wrong place"
+                # bug when polygonize output lacks CRS metadata.
+                polys_tmp = os.path.join(
+                    vector_scratch, f"{layer_name}_polys_raw.gpkg")
 
                 feedback.pushInfo(
                     f"  Polygonising {layer_name} (gdal:polygonize, "
@@ -1938,24 +2538,42 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     "OUTPUT": polys_tmp,
                 }, context=context, feedback=feedback)
 
+                # Always pass through ogr2ogr to set -a_srs explicitly.
+                # If simplify is on, fold it into the same pass.
                 if vectorize_simplify_m > 0:
                     feedback.pushInfo(
-                        f"  Simplifying {layer_name} (Douglas-Peucker, "
-                        f"tolerance={vectorize_simplify_m:g} m)...")
+                        f"  Simplifying {layer_name} (ogr2ogr "
+                        f"-simplify, tolerance={vectorize_simplify_m:g} m)...")
                     feedback.pushWarning(
                         "Simplify can introduce geometry artefacts; "
                         "reduce tolerance if downstream tools throw "
                         "errors.")
-                    run_processing("native:simplifygeometries", {
-                        "INPUT": polys_tmp,
-                        "METHOD": 0,
-                        "TOLERANCE": vectorize_simplify_m,
-                        "OUTPUT": polys_path,
-                    }, context=context, feedback=feedback)
+                    _vt_options = [
+                        '-simplify', str(vectorize_simplify_m),
+                        '-a_srs', target_crs_str,
+                    ]
+                else:
+                    feedback.pushInfo(
+                        f"  Stamping {layer_name} with target CRS "
+                        f"({target_crs_str})...")
+                    _vt_options = ['-a_srs', target_crs_str]
+                # P1.28: _safe_remove handles transient locks. The
+                # forest_full.gpkg failure on OneDrive paths happened
+                # right here -- the helper retries with backoff so a
+                # transient sync lock doesn't abort the whole run.
+                _safe_remove(polys_path, feedback=feedback)
+                gdal.VectorTranslate(
+                    polys_path, polys_tmp,
+                    format=vec_format,
+                    options=_vt_options,
+                )
 
                 return polys_path
 
             # ── Vectorise primary forest ──
+            # Tick produces 06a only -- no dissolve (CEO-relevant
+            # dissolve is nested-only; users wanting a dissolved primary
+            # can run native:dissolve themselves).
             primary_polys_path = None
             if vectorize_primary:
                 primary_polys_path = _do_polygonise(
@@ -1966,20 +2584,28 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException(
                     "Cancelled by user (during vectorise stage).")
 
-            # ── Vectorise forest input ──
+            # ── Resolve forest source (used by forest tick AND nest tick) ──
             # Use naturally regenerating forest if plantations refinement
             # produced one, else the AOI-clipped forest input. Naming
-            # carries to the output filenames so the user can tell
-            # which they got.
-            forest_polys_path = None
+            # carries through to output filenames so the user can tell
+            # which they got. Computed once because both vectorize_forest
+            # and vectorize_nest read this raster.
+            forest_src_path = None
             forest_name_base = None
-            if vectorize_forest:
+            if vectorize_forest or vectorize_nest:
                 if forest_natreg_path is not None:
                     forest_src_path = forest_natreg_path
                     forest_name_base = "naturally_regenerating_forest"
                 else:
                     forest_src_path = prepared_forest_path
                     forest_name_base = "forest"
+
+            # ── Vectorise forest input (plain, non-nested) ──
+            # Tick produces 06c_<base>_vector only. No dissolve. When
+            # vectorize_nest is also ticked the user gets BOTH this plain
+            # 06c AND the nested 06c below (different filenames).
+            forest_polys_path = None
+            if vectorize_forest:
                 forest_polys_path = _do_polygonise(
                     forest_src_path, "06c", forest_name_base)
 
@@ -1988,76 +2614,195 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException(
                     "Cancelled by user (during vectorise stage).")
 
-            # ── Optional nesting: cut primary out of forest ──
-            # Only meaningful when both are vectorised. Result: primary
-            # polygons are unchanged, forest polygons have primary
-            # subtracted -- the two layers tile the forest extent
-            # without overlap, which is the standard CEO stratified-
-            # sampling layout (sample primary plots + non-primary
-            # plots independently with no double-counting).
+            # ── Nested output: primary as level=2, surrounding nat-reg as
+            #    level=1 in a single coded raster, polygonised in one pass.
+            # Reads forest_src_path + final_path as RASTERS directly (no
+            # dependency on the polygonised forest/primary vectors). This
+            # is why ticking nest no longer auto-enables forest/primary.
+            nested_polys_path = None
             if vectorize_nest:
-                if vectorize_primary and vectorize_forest:
-                    feedback.pushInfo(
-                        f"  Nesting: cutting primary_forest out of "
-                        f"{forest_name_base} so the two layers don't "
-                        "overlap (CEO stratification)...")
-                    _diff_tmp = os.path.join(
-                        vector_scratch,
-                        f"{forest_name_base}_minus_primary.gpkg")
-                    if os.path.exists(_diff_tmp):
-                        try:
-                            os.remove(_diff_tmp)
-                        except OSError:
-                            pass
-                    run_processing("native:difference", {
-                        "INPUT": forest_polys_path,
-                        "OVERLAY": primary_polys_path,
-                        "OUTPUT": _diff_tmp,
-                    }, context=context, feedback=feedback)
-                    # Replace forest polygons with the differenced
-                    # version. .gpkg can't be overwritten in-place, so
-                    # delete + rename.
-                    if os.path.exists(forest_polys_path):
-                        try:
-                            os.remove(forest_polys_path)
-                        except OSError:
-                            pass
-                    os.rename(_diff_tmp, forest_polys_path)
+                _canonical_forest_polys = _out(
+                    "06c",
+                    f"{forest_name_base}_with_primary_nested_vector",
+                    ext=vec_ext)
+                feedback.pushInfo(
+                    f"  Nesting (coded-raster path): building "
+                    f"2-level coded raster (1={forest_name_base} "
+                    "outside primary, 2=primary) and polygonising "
+                    "in one pass -- avoids slow vector difference.")
+                # Build a 2-level coded raster from the nat-reg
+                # baseline + primary forest. Polygonising this in
+                # one pass produces a single vector with a 'level'
+                # attribute (1 or 2) that perfectly tiles nat reg
+                # without overlap. Much faster than the previous
+                # polygonise + native:difference + fieldcalculator
+                # + mergevectorlayers chain, and geometrically
+                # cleaner (no slivers from vector subtraction).
+                _nat_reg_src = forest_src_path  # set above (natreg or forest)
+                _ds_n = gdal.Open(_nat_reg_src, gdal.GA_ReadOnly)
+                _n_arr = _ds_n.GetRasterBand(1).ReadAsArray()
+                _n_gt = _ds_n.GetGeoTransform()
+                _n_proj = _ds_n.GetProjection()
+                _n_xsz = _ds_n.RasterXSize
+                _n_ysz = _ds_n.RasterYSize
+                _ds_n = None
+                _ds_p = gdal.Open(final_path, gdal.GA_ReadOnly)
+                _p_arr = _ds_p.GetRasterBand(1).ReadAsArray()
+                _ds_p = None
+                # 2 = primary, 1 = nat reg outside primary, 0 = none
+                _nested_arr = np.where(
+                    _p_arr == 1, 2,
+                    np.where(_n_arr == 1, 1, 0)).astype(np.uint8)
+                del _n_arr, _p_arr
+                _nested_tif = os.path.join(
+                    vector_scratch,
+                    f"{forest_name_base}_with_primary_nested_coded.tif")
+                if os.path.exists(_nested_tif):
+                    try:
+                        os.remove(_nested_tif)
+                    except OSError:
+                        pass
+                _drv_v = gdal.GetDriverByName("GTiff")
+                _ds_n_out = _drv_v.Create(
+                    _nested_tif, _n_xsz, _n_ysz, 1,
+                    gdal.GDT_Byte,
+                    ["COMPRESS=LZW", "TILED=YES"])
+                _ds_n_out.SetGeoTransform(_n_gt)
+                if _n_proj:
+                    _ds_n_out.SetProjection(_n_proj)
                 else:
-                    feedback.pushWarning(
-                        "Vectorise nesting is on but only one of "
-                        "primary / forest was selected -- nesting "
-                        "skipped (needs both).")
+                    from qgis.core import QgsCoordinateReferenceSystem
+                    _ds_n_out.SetProjection(
+                        QgsCoordinateReferenceSystem(target_crs_str).toWkt())
+                _b_n = _ds_n_out.GetRasterBand(1)
+                _b_n.WriteArray(_nested_arr)
+                _b_n.SetNoDataValue(0)
+                _b_n.FlushCache()
+                _ds_n_out = None
+                del _nested_arr
+                # P1.28: _safe_remove handles transient locks (OneDrive etc.).
+                _safe_remove(_canonical_forest_polys, feedback=feedback)
+                # Polygonise to scratch always; final pass through
+                # ogr2ogr applies -a_srs (and optional -simplify).
+                # Uniform CRS handling regardless of simplify state.
+                _nested_polys_raw = os.path.join(
+                    vector_scratch,
+                    f"{forest_name_base}_with_primary_nested_polys_raw.gpkg")
+                feedback.pushInfo(
+                    "  Polygonising nested coded raster...")
+                run_processing("gdal:polygonize", {
+                    "INPUT": _nested_tif,
+                    "BAND": 1,
+                    "FIELD": "level",
+                    "EIGHT_CONNECTEDNESS": False,
+                    "EXTRA": "",
+                    "OUTPUT": _nested_polys_raw,
+                }, context=context, feedback=feedback)
+                if vectorize_simplify_m > 0:
+                    feedback.pushInfo(
+                        f"  Simplifying nested polygons (ogr2ogr "
+                        f"-simplify, tolerance="
+                        f"{vectorize_simplify_m:g} m)...")
+                    _nest_vt_options = [
+                        '-simplify', str(vectorize_simplify_m),
+                        '-a_srs', target_crs_str,
+                    ]
+                else:
+                    feedback.pushInfo(
+                        f"  Stamping nested polygons with target "
+                        f"CRS ({target_crs_str})...")
+                    _nest_vt_options = ['-a_srs', target_crs_str]
+                gdal.VectorTranslate(
+                    _canonical_forest_polys, _nested_polys_raw,
+                    format=vec_format,
+                    options=_nest_vt_options,
+                )
+                nested_polys_path = _canonical_forest_polys
 
             if feedback.isCanceled():
                 from qgis.core import QgsProcessingException
                 raise QgsProcessingException(
                     "Cancelled by user (during vectorise stage).")
 
-            # ── Dissolve each to multipart ──
-            # Dissolve happens after potential nesting so the dissolved
-            # output reflects the final (possibly differenced) geometry.
-            if vectorize_primary:
-                _primary_dissolved = _out(
-                    "06b", "primary_forest_dissolved", ext="gpkg")
+            # ── Dissolve nested output to multipart by level ──
+            # Scoped to the nested case only -- this is the CEO-relevant
+            # output (level=1 surrounding nat-reg + level=2 primary as
+            # two multipart features for stratified sampling). Primary
+            # 06a and forest 06c are NOT dissolved; users wanting that
+            # can run native:dissolve on those layers themselves.
+            nested_dissolved_path = None
+            if vectorize_nest and vectorize_dissolve_multipart:
+                nested_dissolved_path = _out(
+                    "06d",
+                    f"{forest_name_base}_with_primary_nested_dissolved",
+                    ext=vec_ext)
                 feedback.pushInfo(
-                    "  Dissolving primary_forest to multipart...")
+                    f"  Dissolving {forest_name_base} (nested, by "
+                    "level) to multipart...")
                 run_processing("native:dissolve", {
-                    "INPUT": primary_polys_path,
-                    "FIELD": [],
-                    "OUTPUT": _primary_dissolved,
+                    "INPUT": nested_polys_path,
+                    "FIELD": ["level"],
+                    "OUTPUT": nested_dissolved_path,
                 }, context=context, feedback=feedback)
+            elif vectorize_nest and not vectorize_dissolve_multipart:
+                feedback.pushInfo(
+                    "  Nested dissolve skipped (VECTORIZE_DISSOLVE_"
+                    "MULTIPART unticked) -- 06d_*_nested_dissolved "
+                    "not produced.")
 
-            if vectorize_forest:
-                _forest_dissolved = _out(
-                    "06d", f"{forest_name_base}_dissolved", ext="gpkg")
-                feedback.pushInfo(
-                    f"  Dissolving {forest_name_base} to multipart...")
-                run_processing("native:dissolve", {
-                    "INPUT": forest_polys_path,
-                    "FIELD": [],
-                    "OUTPUT": _forest_dissolved,
-                }, context=context, feedback=feedback)
+            # Defensive CRS stamp: gdal:polygonize occasionally writes
+            # vector outputs without proper CRS metadata even when the
+            # source raster has it (intermittent on Windows + some
+            # QGIS / GDAL combos). Two paths:
+            #   - Shapefile: write the .prj sidecar directly with the
+            #     target WKT. No temp file, no rename -- avoids both
+            #     the .gpkg-to-.shp format mismatch and the OneDrive
+            #     file-lock window during atomic replace.
+            #   - GPKG / other single-file: VectorTranslate to a temp
+            #     in the same format, then atomic os.replace.
+            def _stamp_crs(path):
+                if not os.path.exists(path):
+                    return
+                if vec_ext == "shp":
+                    try:
+                        from osgeo import osr
+                        _srs = osr.SpatialReference()
+                        _srs.SetFromUserInput(target_crs_str)
+                        _prj = os.path.splitext(path)[0] + ".prj"
+                        with open(_prj, "w") as _f:
+                            _f.write(_srs.ExportToWkt())
+                    except Exception as _e:
+                        feedback.pushWarning(
+                            f"  CRS stamp failed for {os.path.basename(path)}: "
+                            f"{_e}. File may load without CRS.")
+                    return
+                _tmp = path + ".__crsfix__." + vec_ext
+                try:
+                    gdal.VectorTranslate(
+                        _tmp, path, format=vec_format,
+                        options=['-a_srs', target_crs_str])
+                    os.replace(_tmp, path)
+                except Exception as _e:
+                    feedback.pushWarning(
+                        f"  CRS stamp failed for {os.path.basename(path)}: "
+                        f"{_e}. File may load without CRS.")
+                    if os.path.exists(_tmp):
+                        try:
+                            os.remove(_tmp)
+                        except OSError:
+                            pass
+
+            # CRS stamp uses the actual produced paths. Only the four
+            # outputs that this batch can produce: 06a primary, 06c plain
+            # forest, 06c nested, 06d nested_dissolved.
+            for _vec in [
+                primary_polys_path,
+                forest_polys_path,
+                nested_polys_path,
+                nested_dissolved_path,
+            ]:
+                if _vec:
+                    _stamp_crs(_vec)
 
         # ================================================================
         #  Write run metadata
@@ -2093,10 +2838,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "vectorize_primary": vectorize_primary if run_vectorize else None,
                 "vectorize_forest": vectorize_forest if run_vectorize else None,
                 "vectorize_nest": vectorize_nest if run_vectorize else None,
+                "vectorize_dissolve_multipart": (
+                    vectorize_dissolve_multipart if run_vectorize else None),
                 "vectorize_simplify_m": vectorize_simplify_m if run_vectorize else None,
                 "auto_utm": auto_utm,
                 "exclude_plantations": exclude_plantations,
                 "plantations_applied": forest_natreg_path is not None,
+                "exclude_agriculture_from_forest": exclude_agriculture_from_forest,
+                "fra_agriculture_applied": (
+                    fra_agriculture_tif is not None
+                    and exclude_agriculture_from_forest),
                 "custom_slots": {
                     key: {
                         "label": custom_slot_labels.get(key, key),
@@ -2115,6 +2866,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "primary_forest": final_path,
                 "pre_connectivity_forest": candidate_path,
                 "anthropogenic_mask": anthro_path,
+                "forest": forest_baseline_top_path,
                 "naturally_regenerating_forest": forest_natreg_path,
             },
             "raster_properties": {
@@ -2142,21 +2894,45 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         _layers_to_load = []  # list of (display_name, path) tuples
 
         if add_main_outputs_to_map:
-            _layers_to_load.append(("Primary forest", final_path))
-            if os.path.exists(candidate_path):
-                _layers_to_load.append(
-                    ("Pre-connectivity forest", candidate_path))
-            # P1.17: load both Forest and Naturally regenerating forest
-            # when both are available, so the user can compare the FRA
-            # hierarchy visually. Falls back to forest input only when
-            # plantations weren't refined (no nat reg derivation
-            # produced).
-            if os.path.exists(prepared_forest_path):
-                _layers_to_load.append(
-                    ("Forest", prepared_forest_path))
+            # Order matters: QGIS adds each new layer ABOVE the
+            # previous one in the Layers panel, so to get the GEE
+            # default panel order (Primary on top, then Pre-connectivity,
+            # then Naturally regenerating, then Forest at the bottom)
+            # we register in REVERSE -- last appended ends up on top.
+            _forest_top_path = _out("02b", "forest")
+            if os.path.exists(_forest_top_path):
+                _layers_to_load.append(("Forest", _forest_top_path))
             if forest_natreg_path is not None and os.path.exists(forest_natreg_path):
                 _layers_to_load.append(
                     ("Naturally regenerating forest", forest_natreg_path))
+            if os.path.exists(candidate_path):
+                _layers_to_load.append(
+                    ("Pre-connectivity forest", candidate_path))
+            _layers_to_load.append(("Primary forest", final_path))
+            # Vectorise outputs auto-load when produced. P1.28c output
+            # matrix: 06a (primary), 06c plain forest, 06c nested, 06d
+            # nested_dissolved. Loaded ABOVE primary so the user sees the
+            # polygon outputs as the topmost layers (CEO sampling
+            # boundary on top makes most sense).
+            if run_vectorize:
+                if (vectorize_forest and forest_polys_path is not None
+                        and os.path.exists(forest_polys_path)):
+                    _layers_to_load.append(
+                        ("Forest polygons (06c)", forest_polys_path))
+                if (vectorize_nest and nested_polys_path is not None
+                        and os.path.exists(nested_polys_path)):
+                    _layers_to_load.append(
+                        ("Forest with primary nested (06c)",
+                         nested_polys_path))
+                if (vectorize_nest and nested_dissolved_path is not None
+                        and os.path.exists(nested_dissolved_path)):
+                    _layers_to_load.append(
+                        ("Forest with primary nested, dissolved (06d)",
+                         nested_dissolved_path))
+                if (vectorize_primary and primary_polys_path is not None
+                        and os.path.exists(primary_polys_path)):
+                    _layers_to_load.append(
+                        ("Primary forest polygons (06a)", primary_polys_path))
 
         # P0.14: optional human-influence + buffer layers. Default OFF
         # (matches GEE master toggle). Adds the prepared anthro inputs +
@@ -2183,10 +2959,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _hi_candidates.append(
                     (f"Input: {_label}",
                      os.path.join(prepared_dir, f"{_key}.tif")))
-            # Combined anthropogenic mask (the union of all buffered zones).
-            _hi_candidates.append(
-                ("Anthropogenic mask (combined buffers)",
-                 _out("04e", "anthropogenic_mask")))
+            # Note: anthropogenic_mask intentionally NOT auto-loaded
+            # by default -- it's a debug/intermediate output, not a
+            # headline review layer. Available at <out>/04e_anthropogenic_mask.tif
+            # for users who want to inspect it manually.
             for _name, _path in _hi_candidates:
                 if os.path.exists(_path):
                     _layers_to_load.append((_name, _path))
