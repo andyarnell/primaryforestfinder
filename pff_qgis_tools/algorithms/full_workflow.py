@@ -339,6 +339,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     FRA_AGRICULTURE_RASTER = "FRA_AGRICULTURE_RASTER"
     AOI = "AOI"
     # -- Parameters --
+    # P1.30 batch 20a.3: free-form year string. Either a calendar year
+    # (e.g. "2020") or "all" when the dock's "All years since 2000"
+    # checkbox is on. Metadata-only for now -- the workflow runs once
+    # per invocation regardless. Future batch may iterate when "all".
+    YEAR = "YEAR"
     TARGET_CRS = "TARGET_CRS"
     TARGET_CRS_EPSG = "TARGET_CRS_EPSG"
     AUTO_UTM = "AUTO_UTM"
@@ -362,6 +367,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     REUSE_PREPARED = "REUSE_PREPARED"
     ADD_MAIN_OUTPUTS_TO_MAP = "ADD_MAIN_OUTPUTS_TO_MAP"
     ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP = "ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP"
+    # P1.30 (batch 20a.2): redirect intermediates to a non-cloud-synced
+    # scratch dir under the QGIS profile to sidestep OneDrive CFAPI
+    # placeholder issues that bite on subprocess reads of just-written
+    # rasters (gdal:polygonize, gdalwarp). Default ON. Power users can
+    # opt out for debugging or to keep everything next to outputs.
+    LOCAL_SCRATCH_INTERMEDIATES = "LOCAL_SCRATCH_INTERMEDIATES"
+    CLEANUP_INTERMEDIATES = "CLEANUP_INTERMEDIATES"
     # -- Per-stage enable tickboxes (skip stages for faster runs) --
     ENABLE_ROADS_BUFFER = "ENABLE_ROADS_BUFFER"
     ENABLE_BUILTUP_SMALL_BUFFER = "ENABLE_BUILTUP_SMALL_BUFFER"
@@ -381,6 +393,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     VECTORIZE_NEST = "VECTORIZE_NEST"
     VECTORIZE_DISSOLVE_MULTIPART = "VECTORIZE_DISSOLVE_MULTIPART"
     VECTORIZE_SIMPLIFY_M = "VECTORIZE_SIMPLIFY_M"
+    # P1.30 batch 20a.4: drop small connected components from the
+    # rasters BEFORE polygonising. Speeds up vectorise + simplify on
+    # noisy inputs and reduces output polygon count. Threshold in
+    # hectares -- converted to pixels using the raster pixel size at
+    # run time. 0 = off.
+    VECTORIZE_MIN_PATCH_AREA_HA = "VECTORIZE_MIN_PATCH_AREA_HA"
+    # P1.30 batch 20a.5: auto-remove redundant collinear vertices
+    # introduced by gdal:polygonize on raster-aligned edges. Runs
+    # native:simplifygeometries METHOD=2 (Visvalingam-Whyatt area)
+    # at half-pixel tolerance after polygonise -- shape-preserving
+    # but drops 60-80% of vertex count. Default ON.
+    VECTORIZE_REMOVE_PIXEL_STAIRS = "VECTORIZE_REMOVE_PIXEL_STAIRS"
     VECTORIZE_OUTPUT_AS_SHAPEFILE = "VECTORIZE_OUTPUT_AS_SHAPEFILE"
     # -- Output --
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
@@ -661,6 +685,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.ISO3_PREFIX,
             "00 Country: ISO3 prefix (e.g. 'KEN'; leave blank to omit)",
             defaultValue="",
+            optional=True))
+        # P1.30 batch 20a.3: time-period tag (metadata-only).
+        self.addParameter(QgsProcessingParameterString(
+            self.YEAR,
+            "00 Country: Year tag (e.g. '2020' or 'all'; metadata only)",
+            defaultValue="2020",
             optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.AUTO_UTM,
@@ -948,6 +978,23 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=0.0, minValue=0.0)
         _v_simplify.setFlags(_v_simplify.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(_v_simplify)
+        _v_min_patch = QgsProcessingParameterNumber(
+            self.VECTORIZE_MIN_PATCH_AREA_HA,
+            "06 Validation:     Vectorise: min patch area before polygonise "
+            "(ha; 0 = no sieve; applies to primary + forest backdrop)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0, minValue=0.0)
+        _v_min_patch.setFlags(_v_min_patch.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_min_patch)
+        _v_pixel_stairs = QgsProcessingParameterBoolean(
+            self.VECTORIZE_REMOVE_PIXEL_STAIRS,
+            "06 Validation:     Vectorise: auto-clean pixel-stair vertices "
+            "(Visvalingam @ half-pixel; drops redundant collinear vertices "
+            "from polygonise output)",
+            defaultValue=True)
+        _v_pixel_stairs.setFlags(_v_pixel_stairs.flags()
+                                  | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_v_pixel_stairs)
         _v_format = QgsProcessingParameterBoolean(
             self.VECTORIZE_OUTPUT_AS_SHAPEFILE,
             "06 Validation:     Output as Shapefile (.shp) instead of "
@@ -980,6 +1027,24 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             self.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP,
             "Run: Add human-influence input + buffer layers to map (default OFF)",
             defaultValue=False))
+        # P1.30 batch 20a.2: local-scratch intermediates (sidesteps
+        # OneDrive CFAPI placeholder issues). Default ON.
+        _ls_param = QgsProcessingParameterBoolean(
+            self.LOCAL_SCRATCH_INTERMEDIATES,
+            "Run: Use local scratch for intermediates (recommended; "
+            "sidesteps OneDrive sync issues)",
+            defaultValue=True)
+        _ls_param.setFlags(_ls_param.flags()
+                           | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_ls_param)
+        _cl_param = QgsProcessingParameterBoolean(
+            self.CLEANUP_INTERMEDIATES,
+            "Run: Clean up intermediates after a successful run "
+            "(default OFF — useful for debugging)",
+            defaultValue=False)
+        _cl_param.setFlags(_cl_param.flags()
+                           | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(_cl_param)
 
         self.addParameter(QgsProcessingParameterFolderDestination(
             self.OUTPUT_FOLDER, "Output folder"))
@@ -988,7 +1053,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.9.13"
+    PFF_VERSION = "0.10.7"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1001,6 +1066,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         _iso3 = _iso3_raw.upper() if _iso3_raw else None
         if _iso3:
             feedback.pushInfo(f"Output filename ISO3 prefix: {_iso3}")
+        # P1.30 batch 20a.3: optional time-period tag (metadata only).
+        _year_tag = (self.parameterAsString(
+            parameters, self.YEAR, context) or "").strip() or "2020"
+        feedback.pushInfo(f"Year tag: {_year_tag}")
 
         # Per-stage timing. _stage() closes the previous stage timer and
         # opens a new one; _close_last_stage() flushes the final stage
@@ -1061,6 +1130,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.REUSE_DISTANCE_SURFACES, context)
         reuse_prepared = self.parameterAsBool(
             parameters, self.REUSE_PREPARED, context)
+        local_scratch_intermediates = self.parameterAsBool(
+            parameters, self.LOCAL_SCRATCH_INTERMEDIATES, context)
+        cleanup_intermediates = self.parameterAsBool(
+            parameters, self.CLEANUP_INTERMEDIATES, context)
         auto_utm = self.parameterAsBool(
             parameters, self.AUTO_UTM, context)
         aoi_buffer_dist = self.parameterAsDouble(
@@ -1118,6 +1191,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                              or vectorize_nest)
         vectorize_simplify_m = self.parameterAsDouble(
             parameters, self.VECTORIZE_SIMPLIFY_M, context)
+        vectorize_min_patch_ha = self.parameterAsDouble(
+            parameters, self.VECTORIZE_MIN_PATCH_AREA_HA, context)
+        vectorize_remove_pixel_stairs = self.parameterAsBool(
+            parameters, self.VECTORIZE_REMOVE_PIXEL_STAIRS, context)
         # User-toggleable output format. Default GPKG; ESRI Shapefile
         # available for legacy / CEO workflows that require .shp.
         _vec_as_shp = self.parameterAsBool(
@@ -1315,7 +1392,30 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # 04b pre_connectivity, 04c combined_coded, 04e anthropogenic_mask,
         # 05a area_statistics, 06a/b/c/d vectors, qgis_run_metadata.json)
         # stay at out_dir top level with ISO3+platform+step prefixes via _out().
-        intermediates_dir = ensure_dir(os.path.join(out_dir, "intermediates"))
+        #
+        # P1.30 batch 20a.2: when LOCAL_SCRATCH_INTERMEDIATES is on
+        # (the default), redirect intermediates to a non-cloud-synced
+        # scratch dir under the QGIS profile. Sidesteps OneDrive CFAPI
+        # placeholder issues that bite on subprocess reads of just-
+        # written rasters. Final outputs still land in out_dir.
+        if local_scratch_intermediates:
+            from qgis.core import QgsApplication
+            from datetime import datetime
+            _run_slug = (f"{_iso3}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                         if _iso3 else
+                         datetime.now().strftime('run_%Y%m%d_%H%M%S'))
+            intermediates_dir = ensure_dir(os.path.join(
+                QgsApplication.qgisSettingsDirPath(),
+                "PFF", "intermediates", _run_slug))
+            feedback.pushInfo(
+                f"Intermediates: {intermediates_dir} "
+                "(local scratch — sidesteps OneDrive sync)")
+        else:
+            intermediates_dir = ensure_dir(
+                os.path.join(out_dir, "intermediates"))
+            feedback.pushInfo(
+                f"Intermediates: {intermediates_dir} "
+                "(next to outputs — opt-in)")
         prepared_dir = ensure_dir(os.path.join(intermediates_dir, "prepared"))
         dist_dir = ensure_dir(os.path.join(intermediates_dir, "distances"))
         # Scratch dir for per-input _reproj and _clipped intermediates. Keeps
@@ -2455,6 +2555,83 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             vector_scratch = ensure_dir(
                 os.path.join(intermediates_dir, "_vectorize"))
 
+            # P1.30 batch 20a.4: optional pre-polygonise sieve. Drops
+            # connected components below `vectorize_min_patch_ha` from
+            # the binary rasters BEFORE polygonising. Applied to both
+            # primary and the forest backdrop so the nest output also
+            # benefits. The on-disk 04a primary_forest.tif and the
+            # forest baseline rasters are NOT modified -- the sieve
+            # writes into vector_scratch and only those scratch copies
+            # feed the polygonise + nest steps.
+            import math as _pff_math
+            _v_pix_ds = gdal.Open(final_path, gdal.GA_ReadOnly)
+            _v_pix_gt = _v_pix_ds.GetGeoTransform()
+            _v_pixel_area_m2 = abs(_v_pix_gt[1] * _v_pix_gt[5])
+            _v_pix_ds = None
+
+            def _maybe_sieve(src_raster_path, layer_name):
+                """Return a sieved-copy path if vectorize_min_patch_ha > 0,
+                else the original path unchanged.
+
+                NO_MASK=True is critical: the binary primary/forest rasters
+                set nodata=0, so by default sieve treats 0 as excluded.
+                A single isolated 1-pixel surrounded by 0s would then have
+                no valid neighbour to reassign to and would survive.
+                NO_MASK=True makes 0 a valid neighbour value, so isolated
+                small 1-patches get reassigned to 0 (dropped). For the
+                coded nested raster this also fills tiny 0-holes inside
+                forest with 1 -- desired behaviour (those holes are noise).
+                """
+                if vectorize_min_patch_ha <= 0:
+                    return src_raster_path
+                threshold_px = max(1, int(_pff_math.ceil(
+                    vectorize_min_patch_ha * 10000.0
+                    / max(_v_pixel_area_m2, 1e-6))))
+                _sieved = os.path.join(
+                    vector_scratch, f"{layer_name}_sieved.tif")
+                feedback.pushInfo(
+                    f"  Pre-vectorise sieve: dropping {layer_name} patches "
+                    f"< {vectorize_min_patch_ha} ha "
+                    f"({threshold_px} px @ {_v_pixel_area_m2:.0f} m^2/px)...")
+                _safe_remove(_sieved, feedback=feedback)
+                run_processing("gdal:sieve", {
+                    "INPUT": src_raster_path,
+                    "THRESHOLD": threshold_px,
+                    "EIGHT_CONNECTEDNESS": False,
+                    "NO_MASK": True,
+                    "MASK_LAYER": None,
+                    "EXTRA": "",
+                    "OUTPUT": _sieved,
+                }, context=context, feedback=feedback)
+                return _sieved
+
+            # P1.30 batch 20a.5: auto-clean pixel-stair vertices.
+            # gdal:polygonize stamps a vertex on every pixel boundary,
+            # so straight raster edges carry many redundant collinear
+            # points. Visvalingam-Whyatt @ half-pixel tolerance drops
+            # those without changing visible shape. Runs after
+            # polygonise and before any user-driven Douglas-Peucker
+            # simplify (which then has fewer vertices to chew through).
+            _v_pixel_size_m = abs(_v_pix_gt[1])
+            _stair_tol = _v_pixel_size_m / 2.0
+
+            def _maybe_pixel_stair_clean(polys_tmp_path, layer_name):
+                if not vectorize_remove_pixel_stairs:
+                    return polys_tmp_path
+                _stair_clean = os.path.join(
+                    vector_scratch, f"{layer_name}_stairfree.gpkg")
+                feedback.pushInfo(
+                    f"  Auto-cleaning pixel-stair vertices on "
+                    f"{layer_name} (Visvalingam @ {_stair_tol:.1f} m)...")
+                _safe_remove(_stair_clean, feedback=feedback)
+                run_processing("native:simplifygeometries", {
+                    "INPUT": polys_tmp_path,
+                    "METHOD": 2,  # Visvalingam-Whyatt area
+                    "TOLERANCE": _stair_tol,
+                    "OUTPUT": _stair_clean,
+                }, context=context, feedback=feedback)
+                return _stair_clean
+
             def _do_polygonise(src_raster_path, step, layer_name,
                                target_path=None):
                 """Mask + polygonise + optional simplify. Returns polys path.
@@ -2538,6 +2715,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     "OUTPUT": polys_tmp,
                 }, context=context, feedback=feedback)
 
+                # P1.30 batch 20a.5: drop redundant collinear vertices
+                # from the polygonise output (raster pixel stairs)
+                # before any user simplify runs.
+                polys_for_translate = _maybe_pixel_stair_clean(
+                    polys_tmp, layer_name)
+
                 # Always pass through ogr2ogr to set -a_srs explicitly.
                 # If simplify is on, fold it into the same pass.
                 if vectorize_simplify_m > 0:
@@ -2563,7 +2746,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 # transient sync lock doesn't abort the whole run.
                 _safe_remove(polys_path, feedback=feedback)
                 gdal.VectorTranslate(
-                    polys_path, polys_tmp,
+                    polys_path, polys_for_translate,
                     format=vec_format,
                     options=_vt_options,
                 )
@@ -2574,10 +2757,15 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # Tick produces 06a only -- no dissolve (CEO-relevant
             # dissolve is nested-only; users wanting a dissolved primary
             # can run native:dissolve themselves).
+            # Resolve sieved-or-original primary path once so the nest
+            # path below (which builds the coded raster directly from
+            # the primary + forest backdrop rasters) gets the same
+            # patch-filtering treatment as the standalone polygonise.
+            primary_for_vec = _maybe_sieve(final_path, "primary_forest")
             primary_polys_path = None
             if vectorize_primary:
                 primary_polys_path = _do_polygonise(
-                    final_path, "06a", "primary_forest")
+                    primary_for_vec, "06a", "primary_forest")
 
             if feedback.isCanceled():
                 from qgis.core import QgsProcessingException
@@ -2592,6 +2780,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # and vectorize_nest read this raster.
             forest_src_path = None
             forest_name_base = None
+            forest_src_for_vec = None
             if vectorize_forest or vectorize_nest:
                 if forest_natreg_path is not None:
                     forest_src_path = forest_natreg_path
@@ -2599,6 +2788,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 else:
                     forest_src_path = prepared_forest_path
                     forest_name_base = "forest"
+                forest_src_for_vec = _maybe_sieve(
+                    forest_src_path, forest_name_base)
 
             # ── Vectorise forest input (plain, non-nested) ──
             # Tick produces 06c_<base>_vector only. No dissolve. When
@@ -2607,7 +2798,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             forest_polys_path = None
             if vectorize_forest:
                 forest_polys_path = _do_polygonise(
-                    forest_src_path, "06c", forest_name_base)
+                    forest_src_for_vec, "06c", forest_name_base)
 
             if feedback.isCanceled():
                 from qgis.core import QgsProcessingException
@@ -2638,7 +2829,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 # polygonise + native:difference + fieldcalculator
                 # + mergevectorlayers chain, and geometrically
                 # cleaner (no slivers from vector subtraction).
-                _nat_reg_src = forest_src_path  # set above (natreg or forest)
+                # Use the (possibly sieved) backdrop + primary so the
+                # nested output benefits from the same patch filter as
+                # the standalone vectorise paths above.
+                _nat_reg_src = forest_src_for_vec  # sieved-or-original
                 _ds_n = gdal.Open(_nat_reg_src, gdal.GA_ReadOnly)
                 _n_arr = _ds_n.GetRasterBand(1).ReadAsArray()
                 _n_gt = _ds_n.GetGeoTransform()
@@ -2646,7 +2840,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _n_xsz = _ds_n.RasterXSize
                 _n_ysz = _ds_n.RasterYSize
                 _ds_n = None
-                _ds_p = gdal.Open(final_path, gdal.GA_ReadOnly)
+                _ds_p = gdal.Open(primary_for_vec, gdal.GA_ReadOnly)
                 _p_arr = _ds_p.GetRasterBand(1).ReadAsArray()
                 _ds_p = None
                 # 2 = primary, 1 = nat reg outside primary, 0 = none
@@ -2680,6 +2874,41 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _b_n.FlushCache()
                 _ds_n_out = None
                 del _nested_arr
+                # P1.30: OneDrive CFAPI defence. After we close the
+                # GTiff dataset, OneDrive may briefly leave the file in
+                # a placeholder state that the gdal:polygonize child
+                # process can't open ("does not exist in the file
+                # system"). Verify the file is openable here, retrying
+                # for up to ~5s, before invoking polygonize.
+                import time as _pff_time_mod
+                _verified = False
+                for _retry in range(20):
+                    if os.path.exists(_nested_tif):
+                        _verify = gdal.Open(_nested_tif, gdal.GA_ReadOnly)
+                        if _verify is not None:
+                            _verify = None
+                            _verified = True
+                            break
+                    _pff_time_mod.sleep(0.25)
+                if not _verified:
+                    from qgis.core import QgsProcessingException
+                    raise QgsProcessingException(
+                        f"Nested coded raster was written but is not "
+                        f"readable after 5s: {_nested_tif}. If your "
+                        f"output folder is on OneDrive / Dropbox / "
+                        f"another sync provider, try moving it to a "
+                        f"local drive or pause sync for the run.")
+                # P1.30 batch 20a.5b: sieve on the CODED raster too.
+                # The earlier sieve only ran on the binary primary +
+                # forest rasters before they were combined. Combining
+                # can produce small level=1 slivers (forest where a
+                # primary patch cuts a hole) that escape that sieve.
+                # Sieving the coded raster catches those: gdal:sieve
+                # operates per-class, dropping small connected
+                # components in any value class.
+                _nested_tif_for_polygonize = _maybe_sieve(
+                    _nested_tif,
+                    f"{forest_name_base}_with_primary_nested_coded")
                 # P1.28: _safe_remove handles transient locks (OneDrive etc.).
                 _safe_remove(_canonical_forest_polys, feedback=feedback)
                 # Polygonise to scratch always; final pass through
@@ -2691,13 +2920,35 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 feedback.pushInfo(
                     "  Polygonising nested coded raster...")
                 run_processing("gdal:polygonize", {
-                    "INPUT": _nested_tif,
+                    "INPUT": _nested_tif_for_polygonize,
                     "BAND": 1,
                     "FIELD": "level",
                     "EIGHT_CONNECTEDNESS": False,
                     "EXTRA": "",
                     "OUTPUT": _nested_polys_raw,
                 }, context=context, feedback=feedback)
+                # Polygonize ran in a child process -- same OneDrive
+                # CFAPI symptom can hit the OUTPUT gpkg before we hand
+                # it to VectorTranslate below. Verify before continuing.
+                _verified_polys = False
+                for _retry in range(20):
+                    if (os.path.exists(_nested_polys_raw)
+                            and os.path.getsize(_nested_polys_raw) > 0):
+                        _verified_polys = True
+                        break
+                    _pff_time_mod.sleep(0.25)
+                if not _verified_polys:
+                    from qgis.core import QgsProcessingException
+                    raise QgsProcessingException(
+                        f"gdal:polygonize did not produce a readable "
+                        f"output: {_nested_polys_raw}. Check the run "
+                        f"log above for the underlying GDAL error. "
+                        f"If output is on OneDrive, try a local path.")
+                # P1.30 batch 20a.5: pixel-stair clean on the nested
+                # raw polygons before the canonical write.
+                _nested_polys_for_translate = _maybe_pixel_stair_clean(
+                    _nested_polys_raw,
+                    f"{forest_name_base}_with_primary_nested")
                 if vectorize_simplify_m > 0:
                     feedback.pushInfo(
                         f"  Simplifying nested polygons (ogr2ogr "
@@ -2713,7 +2964,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                         f"CRS ({target_crs_str})...")
                     _nest_vt_options = ['-a_srs', target_crs_str]
                 gdal.VectorTranslate(
-                    _canonical_forest_polys, _nested_polys_raw,
+                    _canonical_forest_polys, _nested_polys_for_translate,
                     format=vec_format,
                     options=_nest_vt_options,
                 )
@@ -2724,12 +2975,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException(
                     "Cancelled by user (during vectorise stage).")
 
-            # ── Dissolve nested output to multipart by level ──
+            # ── Collect nested output into multiparts by level ──
             # Scoped to the nested case only -- this is the CEO-relevant
             # output (level=1 surrounding nat-reg + level=2 primary as
             # two multipart features for stratified sampling). Primary
-            # 06a and forest 06c are NOT dissolved; users wanting that
-            # can run native:dissolve on those layers themselves.
+            # 06a and forest 06c are NOT collected; users wanting that
+            # can run native:collect / native:dissolve themselves.
+            #
+            # P1.30 batch 20a.5: switched from native:dissolve to
+            # native:collect. Collect groups features by attribute into
+            # multiparts WITHOUT unioning touching neighbours -- way
+            # faster on dense polygon sets (the union work in dissolve
+            # is wasted here; for stratified sampling only the level
+            # grouping matters, not whether touching parts are merged).
             nested_dissolved_path = None
             if vectorize_nest and vectorize_dissolve_multipart:
                 nested_dissolved_path = _out(
@@ -2737,16 +2995,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     f"{forest_name_base}_with_primary_nested_dissolved",
                     ext=vec_ext)
                 feedback.pushInfo(
-                    f"  Dissolving {forest_name_base} (nested, by "
-                    "level) to multipart...")
-                run_processing("native:dissolve", {
+                    f"  Collecting {forest_name_base} (nested, by "
+                    "level) into multipart features...")
+                run_processing("native:collect", {
                     "INPUT": nested_polys_path,
                     "FIELD": ["level"],
                     "OUTPUT": nested_dissolved_path,
                 }, context=context, feedback=feedback)
             elif vectorize_nest and not vectorize_dissolve_multipart:
                 feedback.pushInfo(
-                    "  Nested dissolve skipped (VECTORIZE_DISSOLVE_"
+                    "  Nested collect skipped (VECTORIZE_DISSOLVE_"
                     "MULTIPART unticked) -- 06d_*_nested_dissolved "
                     "not produced.")
 
@@ -2763,6 +3021,29 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             def _stamp_crs(path):
                 if not os.path.exists(path):
                     return
+                # P1.30 batch 20a.5: skip the rewrite if CRS is already
+                # set on the file. Every polygonise output now goes
+                # through ogr2ogr -a_srs at write time (or
+                # VectorTranslate -a_srs in the nest path), so the
+                # redundant rewrite was wasting I/O and occasionally
+                # failing with a Windows file-lock when native:collect
+                # had just held the file open.
+                try:
+                    _check_ds = gdal.OpenEx(
+                        path, gdal.OF_VECTOR | gdal.OF_READONLY)
+                    if _check_ds is not None:
+                        _layer = _check_ds.GetLayer(0)
+                        if _layer is not None:
+                            _srs = _layer.GetSpatialRef()
+                            if _srs is not None:
+                                # Any SRS set is enough. We don't
+                                # validate authority code -- legacy
+                                # files may have only WKT.
+                                _check_ds = None
+                                return
+                        _check_ds = None
+                except Exception:
+                    pass  # fall through to defensive stamp
                 if vec_ext == "shp":
                     try:
                         from osgeo import osr
@@ -2819,7 +3100,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "runtime_seconds": _pff_total_runtime,
             "stage_runtimes_seconds": _pff_stage_times,
             "target_crs": target_crs_str,
+            "intermediates_dir": intermediates_dir,
+            "local_scratch_intermediates": local_scratch_intermediates,
             "parameters": {
+                "year": _year_tag,
                 "aoi_buffer_m": aoi_buffer_dist,
                 "use_single_buffer_distance": use_single,
                 "single_buffer_distance_m": single_dist if use_single else None,
@@ -2885,6 +3169,24 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         feedback.pushInfo(f"Metadata: {meta_path}")
+
+        # P1.30 batch 20a.2: optional cleanup of the per-run scratch
+        # intermediates dir. Only happens on the local-scratch path
+        # (never deletes anything next to the user's outputs) and only
+        # when the user explicitly opted in.
+        # NOTE: shutil is imported at module level (line 15); no local
+        # import here -- a local `import shutil` here would shadow the
+        # module-level name and break shutil.copy2() / disk_usage()
+        # called earlier in this function.
+        if local_scratch_intermediates and cleanup_intermediates:
+            try:
+                shutil.rmtree(intermediates_dir, ignore_errors=True)
+                feedback.pushInfo(
+                    f"Cleaned up scratch intermediates: {intermediates_dir}")
+            except Exception as _e:
+                feedback.pushWarning(
+                    f"Could not clean up intermediates "
+                    f"{intermediates_dir}: {_e}")
 
         # ── Auto-load main outputs into the QGIS project (P0.5 partial) ──
         # Uses the standard Processing pattern -- works in GUI mode, no-ops
