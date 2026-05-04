@@ -95,14 +95,19 @@ def substitute_year_in_path(path: str,
     filename and return ``(resolved_path, status)``.
 
     ``status`` is one of:
+      - ``"empty"``   — input path is None / empty (the param wasn't
+                        set by the user); ``resolved_path`` is None.
+                        Caller should skip silently — this is NOT a
+                        missing-file condition.
       - ``"static"``  — no year token in filename; ``resolved_path``
                         is the original ``path`` unchanged.
       - ``"anchor"``  — anchor_year == target_year; ``resolved_path``
                         is the original.
       - ``"matched"`` — substitution found exactly one matching file;
                         ``resolved_path`` is that file.
-      - ``"missing"`` — no matching file found; ``resolved_path`` is
-                        None.
+      - ``"missing"`` — anchor path was set, year token was found, but
+                        no target-year file exists in the same folder;
+                        ``resolved_path`` is None.
       - ``"ambiguous"`` — multiple matching files; ``resolved_path``
                          is the first (lex-sorted) match.
 
@@ -112,7 +117,11 @@ def substitute_year_in_path(path: str,
     target year.
     """
     if not path:
-        return (None, "missing")
+        # "empty" distinguishes "user didn't set this param" from
+        # "param set but year-N file not found". Important for the
+        # vector/raster pair params (ROADS vs ROADS_RASTER, etc.) where
+        # the dock fills only ONE side and leaves the other blank.
+        return (None, "empty")
     if anchor_year == target_year:
         return (path, "anchor")
     base = os.path.basename(path)

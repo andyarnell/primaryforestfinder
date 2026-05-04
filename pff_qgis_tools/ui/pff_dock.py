@@ -473,51 +473,58 @@ class PffDockWidget(QgsDockWidget):
         sec = CollapsibleSection("1. Time Period", expanded=False)
         form = _form()
 
-        # P1.30 batch 20d: year input is now an editable combobox that
-        # accepts a comma-separated list (e.g. "2010, 2020") for
-        # multi-year iteration. Single year stays the common case;
-        # multi-year iterates the workflow once per year, finding
-        # year-varying input alternates by globbing the same folder.
-        # Static inputs (DEM, slope, protected) are reused unchanged.
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-
+        # P1.30 batch 20d/20e: year input is an editable combobox that
+        # accepts either a single year or a comma-separated list (e.g.
+        # "2010, 2020"). Multi-year typing auto-triggers iteration in
+        # _run_multi_year. Three tickboxes below clarify intent:
+        #   - FRA-only: filter the dropdown to FRA reporting cycles.
+        #   - Multi-year: discoverability — placeholder + auto-fill.
+        #   - year=all: legacy "tag only, no iteration" mode.
         self._year_combo = QComboBox()
         self._year_combo.setEditable(True)
-        for y in range(1990, 2026):  # 1990..2025 inclusive
-            self._year_combo.addItem(str(y), str(y))
-        self._year_combo.setCurrentText("2020")  # default
-        self._year_combo.setMinimumWidth(160)
+        self._year_combo.setMinimumWidth(220)
+        self._year_combo.setCurrentText("2020")
         self._year_combo.setToolTip(
-            "Year tag for outputs. Type a comma-separated list "
-            "(e.g. '2010, 2020' or '1990, 2000, 2010, 2015, 2020') "
-            "to iterate the workflow once per year. Year-varying "
-            "input files are auto-detected by filename year token "
-            "and globbed in the same folder; static inputs (DEM, "
-            "slope, protected areas) are reused.")
-        row.addWidget(QLabel("Year(s):"))
-        row.addWidget(self._year_combo, 1)
-        row.addSpacing(8)
+            "Year tag for outputs. Type a single year or a comma-"
+            "separated list to iterate. Year-varying input files are "
+            "auto-detected by filename year token and globbed in the "
+            "same folder; static inputs (DEM, slope, protected areas) "
+            "are reused across all years.")
+        # Populate dropdown -- helper handles FRA-only filtering too.
+        self._populate_year_dropdown(fra_only=False)
+        form.addRow("Year(s):", self._year_combo)
 
-        # FRA preset button: fills the combo with FRA-year ladder.
-        fra_btn = QPushButton("FRA preset")
-        fra_btn.setToolTip(
-            "Fill the year field with the FAO FRA reporting ladder "
-            "(1990, 2000, 2010, 2015, 2020). Useful for trend runs.")
-        fra_btn.clicked.connect(
-            lambda: self._year_combo.setCurrentText(
-                "1990, 2000, 2010, 2015, 2020"))
-        row.addWidget(fra_btn)
+        # 20e: FRA reporting years only — filters the dropdown items.
+        self._fra_only_chk = QCheckBox(
+            "FRA reporting years only (1990, 2000, 2010, 2015, 2020)")
+        self._fra_only_chk.setToolTip(
+            "When ticked, the dropdown shows only FAO FRA reporting "
+            "years. The editable text field still accepts arbitrary "
+            "input -- this only filters the dropdown items.")
+        self._fra_only_chk.toggled.connect(self._on_fra_only_toggled)
+        form.addRow("", self._fra_only_chk)
 
-        # All-years checkbox kept as a quick toggle for "tag run as
-        # year=all" without iteration. When ticked, year combo greys.
-        self._year_all_since_2000 = QCheckBox("year=all (tag only)")
+        # 20e: Run for multiple years — discoverability for the comma
+        # syntax. Drops a placeholder example + (with FRA-only on)
+        # pre-fills the FRA ladder so the user has a starter list.
+        self._multi_year_chk = QCheckBox(
+            "Run for multiple years (comma-separated; e.g. 2010, 2020)")
+        self._multi_year_chk.setToolTip(
+            "When ticked, a greyed example appears in the Year(s) "
+            "field and (combined with 'FRA reporting years only') "
+            "pre-fills the FRA ladder. Multi-year iteration itself "
+            "is triggered by typing a comma in the field; this "
+            "tickbox is a discoverability aid.")
+        self._multi_year_chk.toggled.connect(self._on_multi_year_toggled)
+        form.addRow("", self._multi_year_chk)
+
+        # Existing: year=all tag-only mode. Greys the field.
+        self._year_all_since_2000 = QCheckBox("year=all (tag only — no iteration)")
         self._year_all_since_2000.setToolTip(
-            "When ticked, the run is tagged year='all' (no iteration; "
-            "no year in filename). Use this when you don't want a "
-            "year stamp on outputs at all. To iterate multiple years, "
-            "type a comma-separated list in the Year(s) field instead.")
+            "When ticked, the run is tagged year='all' and no year "
+            "appears in output filenames. No iteration. Use this when "
+            "you don't want a year stamp at all. To iterate multiple "
+            "years, untick this and use 'Run for multiple years'.")
         self._year_all_since_2000.toggled.connect(
             lambda on: self._year_combo.setEnabled(not on))
         # 20c: re-render prefix preview whenever year inputs change.
@@ -525,12 +532,53 @@ class PffDockWidget(QgsDockWidget):
             self._refresh_prefix_preview)
         self._year_all_since_2000.toggled.connect(
             self._refresh_prefix_preview)
-        row.addWidget(self._year_all_since_2000)
-        row.addStretch(0)
+        form.addRow("", self._year_all_since_2000)
 
-        form.addRow("", row)
         sec.set_content_layout(form)
         self._sections_layout.addWidget(sec)
+
+    def _populate_year_dropdown(self, fra_only: bool):
+        """Rebuild the Year(s) combobox dropdown items.
+
+        The editable text field's current value is preserved across
+        rebuilds so toggling FRA-only doesn't blow away the user's
+        typed input.
+        """
+        FRA_YEARS = ("1990", "2000", "2010", "2015", "2020")
+        ALL_YEARS = tuple(str(y) for y in range(1990, 2026))
+        years = FRA_YEARS if fra_only else ALL_YEARS
+        current = self._year_combo.currentText()
+        self._year_combo.blockSignals(True)
+        self._year_combo.clear()
+        for y in years:
+            self._year_combo.addItem(y, y)
+        # Restore current text (covers single year, comma list, or "all").
+        self._year_combo.setCurrentText(current or "2020")
+        self._year_combo.blockSignals(False)
+
+    def _on_fra_only_toggled(self, on: bool):
+        self._populate_year_dropdown(fra_only=on)
+        # Re-apply multi-year placeholder if that box is also ticked.
+        self._on_multi_year_toggled(self._multi_year_chk.isChecked())
+
+    def _on_multi_year_toggled(self, on: bool):
+        if on:
+            # Placeholder example. If FRA-only is also ticked, pre-fill
+            # the field with the FRA ladder so the user has a starter
+            # value (only when the field is empty or holds a single
+            # year — don't overwrite an existing typed list).
+            if self._fra_only_chk.isChecked():
+                example = "1990, 2000, 2010, 2015, 2020"
+                current = self._year_combo.currentText().strip()
+                if "," not in current:  # not already a list
+                    self._year_combo.setCurrentText(example)
+                self._year_combo.lineEdit().setPlaceholderText(
+                    f"e.g. {example}")
+            else:
+                self._year_combo.lineEdit().setPlaceholderText(
+                    "e.g. 2010, 2020")
+        else:
+            self._year_combo.lineEdit().setPlaceholderText("")
 
     def _build_section_2_tree_cover(self):
         sec = CollapsibleSection("2. Tree Cover", expanded=True)
@@ -1161,7 +1209,10 @@ class PffDockWidget(QgsDockWidget):
                        if v["status"] == "missing"]
             feedback.pushInfo(f"  Year {year}:")
             for label, info in resolved.items():
-                if info["status"] in ("static", "anchor"):
+                # 20e hotfix: skip "empty" silently. "empty" means the
+                # user didn't set this param (e.g. ROADS vector when
+                # they used ROADS_RASTER instead). Not a missing-file.
+                if info["status"] in ("static", "anchor", "empty"):
                     continue
                 if info["status"] == "missing":
                     feedback.pushWarning(
@@ -1209,6 +1260,10 @@ class PffDockWidget(QgsDockWidget):
             year_params = dict(base_params)
             resolved = per_year_resolved[year]
             for name, info in resolved.items():
+                if info["status"] == "empty":
+                    # User didn't set this param; leave whatever was
+                    # in base_params (probably None) untouched.
+                    continue
                 if info["status"] in ("matched", "ambiguous", "static",
                                       "anchor"):
                     if info["path"]:
