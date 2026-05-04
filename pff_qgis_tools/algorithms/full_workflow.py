@@ -383,6 +383,46 @@ def _check_input_naming_consistency(declared_iso3, declared_year,
                     f"year='{declared_year_str}'. Confirm the right input "
                     f"is loaded, or update the year tag.")
                 n_warned += 1
+    # 20f cross-input consistency: even if every input matches the
+    # declared values individually, an OUTLIER in the input set is
+    # still suspect. E.g. user declared year=2020 and 4 of 5 inputs
+    # have 2020 in the filename, but 1 has 2010 -- worth flagging
+    # the odd one out.
+    iso3_distribution = {}  # iso3 -> [labels...]
+    year_distribution = {}  # year -> [labels...]
+    for label, path in input_paths:
+        if not path:
+            continue
+        iso3s, years = _scan_filename_tokens(path)
+        for tok in iso3s:
+            iso3_distribution.setdefault(tok, []).append(label)
+        for tok in years:
+            year_distribution.setdefault(tok, []).append(label)
+
+    def _flag_outliers(distribution, kind):
+        nonlocal n_warned
+        if len(distribution) < 2:
+            return
+        # An outlier is a value held by exactly 1 input when at least
+        # one OTHER value is held by 2+ inputs. Avoids noise when the
+        # distribution is balanced (e.g. 2 inputs say 2010 + 2 say
+        # 2020 -- could be intentional).
+        majority_values = [
+            v for v, labels in distribution.items() if len(labels) >= 2]
+        if not majority_values:
+            return
+        for value, labels in distribution.items():
+            if len(labels) == 1 and value not in majority_values:
+                feedback.pushWarning(
+                    f"Outlier {kind} in input '{labels[0]}': "
+                    f"filename contains '{value}' while "
+                    f"{', '.join(majority_values)} appear(s) in "
+                    f"other inputs. Confirm this is the right file.")
+                n_warned += 1
+
+    _flag_outliers(iso3_distribution, "ISO3")
+    _flag_outliers(year_distribution, "year")
+
     if n_warned == 0:
         feedback.pushInfo("Input filenames look consistent with "
                           "declared ISO3 / year.")
@@ -1149,7 +1189,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.11.1"
+    PFF_VERSION = "0.11.2"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
