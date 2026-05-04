@@ -37,48 +37,93 @@ STEP_STATISTICS = "05"       # stats CSV / per-zone shapefile
 STEP_VALIDATION = "06"       # vectorised + dissolved CEO outputs
 
 
+# Filenames for AOI vectors that are too generic to use as a sub-national
+# label. When the AOI layer's name matches one of these (case-insensitive,
+# after stripping common file extensions), we drop it from the prefix and
+# fall through to ISO3-only naming.
+_GENERIC_AOI_NAMES = frozenset({
+    "aoi", "boundary", "study_area", "studyarea",
+    "clip", "extent", "bbox", "country", "region",
+})
+
+
+def _sanitise_label(label):
+    """Lower-case, snake-case, strip non-alphanumerics for safe use in a
+    filename. Returns "" for None / empty / generic labels."""
+    if not label:
+        return ""
+    s = str(label).strip().lower()
+    # Strip common path/extension noise.
+    if "." in s:
+        s = s.rsplit(".", 1)[0]
+    if "/" in s or "\\" in s:
+        s = s.replace("\\", "/").rsplit("/", 1)[-1]
+    if s in _GENERIC_AOI_NAMES:
+        return ""
+    # Replace runs of non-alphanumerics with a single underscore.
+    import re as _re
+    s = _re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return s
+
+
 def generate_layer_name(iso3, platform: str, step: str, name: str,
-                        ext: str = "tif") -> str:
+                        ext: str = "tif",
+                        year=None, aoi_label=None) -> str:
     """Build a canonical PFF output filename per the Option D schema.
 
-    Format: ``{iso3}_{platform}_{step}_{name}.{ext}``  (ISO3 optional;
-    omitted when no country selected).
+    Format: ``{iso3}_{aoi_label}_{year}_{platform}_{step}_{name}.{ext}``
+
+    All of ``iso3`` / ``aoi_label`` / ``year`` are optional; missing
+    pieces drop out of the prefix. ``aoi_label`` is sanitised
+    (lowercase, snake-case) and dropped when generic (see
+    ``_GENERIC_AOI_NAMES``). ``year="all"`` is treated as "no year".
 
     Args:
-      iso3:     ISO3 country code (e.g. 'KEN'). Pass None / empty to omit.
-                Cased uppercase if supplied.
-      platform: 'gee' or 'qgis'. Use the PLATFORM_* constants in this
-                module.
-      step:     '00'-'06' with optional substep letter ('04a', '05b').
-                Use the STEP_* constants for the base.
-      name:     Snake-case layer name without step prefix or extension
-                (e.g. 'primary_forest', 'area_statistics',
-                'primary_forest_vector'). The step number already
-                encodes the production stage, so no need to repeat
-                'results_' / 'refined_' / 'validation_' qualifiers.
-      ext:      Extension without leading dot (default 'tif'). Use
-                'gpkg' for vectors, 'csv' for stats, 'shp' for
-                shapefile-zone outputs, 'json' for metadata sidecars.
+      iso3:       ISO3 country code (e.g. 'KEN'). None/empty omits.
+      platform:   'gee' or 'qgis'. Use the PLATFORM_* constants.
+      step:       '00'-'06' with optional substep letter ('04a').
+      name:       Snake-case layer name (e.g. 'primary_forest').
+      ext:        Extension without leading dot (default 'tif').
+      year:       Optional year tag (e.g. '2020'). Pass "all" or None
+                  to omit.
+      aoi_label:  Optional sub-national label (e.g. AOI layer name).
+                  Sanitised + dropped when generic.
 
     Examples:
-      >>> generate_layer_name('KEN', PLATFORM_QGIS, '04a',
-      ...                     'primary_forest')
-      'KEN_qgis_04a_primary_forest.tif'
-      >>> generate_layer_name(None, PLATFORM_QGIS, '06b',
-      ...                     'primary_forest_dissolved', ext='gpkg')
-      'qgis_06b_primary_forest_dissolved.gpkg'
-      >>> generate_layer_name('KEN', PLATFORM_GEE, '05a',
-      ...                     'area_statistics', ext='csv')
-      'KEN_gee_05a_area_statistics.csv'
-
-    Foundation utility for P1.13 (full filename rename across both
-    tools). Existing call sites currently use ad-hoc filenames; future
-    work migrates them to call this helper for a single source of
-    truth.
+      >>> generate_layer_name('BTN', PLATFORM_QGIS, '04a',
+      ...                     'primary_forest', year='2020')
+      'BTN_2020_qgis_04a_primary_forest.tif'
+      >>> generate_layer_name('BTN', PLATFORM_QGIS, '04a',
+      ...                     'primary_forest', year='2020',
+      ...                     aoi_label='bhutan_aberdares')
+      'BTN_bhutan_aberdares_2020_qgis_04a_primary_forest.tif'
+      >>> generate_layer_name('BTN', PLATFORM_QGIS, '04a',
+      ...                     'primary_forest', aoi_label='aoi')
+      'BTN_qgis_04a_primary_forest.tif'  # generic AOI dropped
+      >>> generate_layer_name(None, PLATFORM_QGIS, '06d',
+      ...                     'forest_dissolved', ext='gpkg')
+      'qgis_06d_forest_dissolved.gpkg'
     """
     parts = []
-    if iso3:
-        parts.append(str(iso3).strip().upper())
+    iso3_upper = str(iso3).strip().upper() if iso3 else ""
+    if iso3_upper:
+        parts.append(iso3_upper)
+    label_clean = _sanitise_label(aoi_label)
+    # Strip leading ISO3-like prefix from the AOI label so we don't get
+    # `BTN_btn_*` from an AOI named `BTN_0_aoi_*`. Only strips when the
+    # label STARTS WITH the lowercase ISO3 + a separator -- otherwise
+    # leaves it alone.
+    if label_clean and iso3_upper:
+        iso3_lower = iso3_upper.lower()
+        if label_clean.startswith(iso3_lower + "_"):
+            label_clean = label_clean[len(iso3_lower) + 1:]
+        elif label_clean == iso3_lower:
+            label_clean = ""
+    if label_clean:
+        parts.append(label_clean)
+    year_clean = (str(year).strip() if year else "")
+    if year_clean and year_clean.lower() != "all":
+        parts.append(year_clean)
     if platform not in (PLATFORM_GEE, PLATFORM_QGIS):
         raise ValueError(
             f"platform must be 'gee' or 'qgis' (got {platform!r}). "

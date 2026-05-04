@@ -317,11 +317,26 @@ class PffDockWidget(QgsDockWidget):
         self._iso3_edit.setMaxLength(8)
         self._iso3_edit.setPlaceholderText("e.g. KEN, BTN, BRA")
         self._iso3_edit.editingFinished.connect(self._refresh_crs_suggestions)
+        self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
 
         self._output_folder = QgsFileWidget()
         self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
         form.addRow("Output:", self._output_folder)
+
+        # P1.30 batch 20c: live preview of the output filename prefix.
+        # Updates from ISO3 / AOI layer name / year so the user sees
+        # exactly what will land on disk.
+        self._prefix_preview = QLabel("Prefix: —")
+        self._prefix_preview.setToolTip(
+            "Live preview of the output filename prefix. Built from "
+            "ISO3 + AOI layer name (sub-national label) + year. AOI "
+            "layer name doubles as the sub-national label -- name your "
+            "AOI descriptively for trends/admin runs (e.g. "
+            "'bhutan_aberdares' instead of 'aoi').")
+        self._prefix_preview.setStyleSheet("color:#666; font-style:italic;")
+        form.addRow("", self._prefix_preview)
+        self._aoi_picker.pathChanged.connect(self._refresh_prefix_preview)
 
         # Suggested-CRS dropdown — primary CRS picker. When AOI/ISO3 are
         # set, populates with pyproj suggestions ranked by AOI overlap +
@@ -405,6 +420,41 @@ class PffDockWidget(QgsDockWidget):
             self._target_crs.setCrs(
                 QgsCoordinateReferenceSystem(f"EPSG:{top_epsg}"))
 
+    def _refresh_prefix_preview(self, *_):
+        """Render the live output-filename prefix preview in §0.
+
+        Shows what `BTN_qgis_04a_primary_forest.tif` will actually look
+        like given the current ISO3 / AOI / year inputs. Built via the
+        same generate_layer_name() the algorithm uses, so what the user
+        sees here = what they get on disk.
+        """
+        try:
+            from ..utils import generate_layer_name, PLATFORM_QGIS
+        except ImportError:
+            return
+        iso3 = self._iso3_edit.text().strip() or None
+        aoi_label = ""
+        # Prefer the loaded layer's name; fall back to the path basename.
+        loaded = self._aoi_picker.current_layer()
+        if loaded is not None:
+            aoi_label = loaded.name() or ""
+        else:
+            path = self._aoi_picker.path()
+            if path:
+                import os as _os
+                aoi_label = _os.path.splitext(_os.path.basename(path))[0]
+        if self._year_all_since_2000.isChecked():
+            year = "all"
+        else:
+            year = self._year_combo.currentText() or None
+        try:
+            sample = generate_layer_name(
+                iso3, PLATFORM_QGIS, "04a", "primary_forest",
+                ext="tif", year=year, aoi_label=aoi_label)
+        except Exception:
+            sample = "—"
+        self._prefix_preview.setText(f"Prefix preview: {sample}")
+
     def _on_crs_suggestion_picked(self, idx):
         """When the user picks a suggestion, update the manual CRS picker
         too so a downstream Run sees a consistent value."""
@@ -450,6 +500,11 @@ class PffDockWidget(QgsDockWidget):
             "once per invocation.")
         self._year_all_since_2000.toggled.connect(
             lambda on: self._year_combo.setEnabled(not on))
+        # 20c: re-render prefix preview whenever year inputs change.
+        self._year_combo.currentTextChanged.connect(
+            self._refresh_prefix_preview)
+        self._year_all_since_2000.toggled.connect(
+            self._refresh_prefix_preview)
         row.addWidget(self._year_all_since_2000)
         row.addStretch(1)
 

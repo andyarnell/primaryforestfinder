@@ -300,6 +300,94 @@ def _run_preflight_checks(output_folder, feedback):
     feedback.pushInfo("Preflight checks complete.")
 
 
+# P1.30 batch 20c: input-filename consistency check.
+#
+# Scans loaded input layer source paths for tokens that look like ISO3
+# country codes or 4-digit years. If a different value appears in any
+# input filename AND the declared value (typed by the user in the dock)
+# is absent from that filename, push a non-blocking warning. Catches the
+# "loaded the 2010 forest raster but typed year=2020" class of error.
+#
+# Conservative rule: only warn on EXPLICIT mismatch. False-positive risk
+# (e.g. coincidental three-letter substrings in a path) is the price for
+# the "user error caught early" benefit. Warnings include the filename
+# so the user can fix-or-ignore.
+
+_ISO3_TOKEN_RE = None  # lazy
+_YEAR_TOKEN_RE = None
+
+
+def _scan_filename_tokens(filename):
+    """Return (iso3_tokens, year_tokens) found in a filename.
+
+    ISO3 tokens: bare 3-letter uppercase tokens between word boundaries.
+    Year tokens: 4-digit tokens in 1990-2030.
+    """
+    global _ISO3_TOKEN_RE, _YEAR_TOKEN_RE
+    if _ISO3_TOKEN_RE is None:
+        import re as _re
+        _ISO3_TOKEN_RE = _re.compile(r"(?<![A-Za-z0-9])([A-Z]{3})(?![A-Za-z0-9])")
+        _YEAR_TOKEN_RE = _re.compile(r"(?<![0-9])(19[9][0-9]|20[0-3][0-9])(?![0-9])")
+    base = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    iso3s = set(_ISO3_TOKEN_RE.findall(base))
+    years = set(_YEAR_TOKEN_RE.findall(base))
+    return iso3s, years
+
+
+def _check_input_naming_consistency(declared_iso3, declared_year,
+                                    input_paths, feedback):
+    """Warn (non-blocking) on ISO3/year mismatches in loaded input paths.
+
+    `declared_iso3` may be None/empty; `declared_year` is the YEAR string
+    (could be a comma list, "all", or single year). `input_paths` is a
+    list of (label, path) tuples for the inputs to scan.
+    """
+    feedback.pushInfo("=== Input filename sanity check ===")
+    declared_iso3 = (declared_iso3 or "").upper().strip()
+    # Parse declared year(s) into a set of single-year strings; "all"
+    # means "anything goes — don't warn on year".
+    declared_years = set()
+    declared_year_str = (declared_year or "").strip()
+    if declared_year_str.lower() == "all":
+        check_year = False
+    else:
+        check_year = True
+        for tok in declared_year_str.replace(",", " ").split():
+            tok = tok.strip()
+            if tok.isdigit() and len(tok) == 4:
+                declared_years.add(tok)
+        if not declared_years:
+            check_year = False  # nothing to check
+    n_warned = 0
+    for label, path in input_paths:
+        if not path:
+            continue
+        iso3s, years = _scan_filename_tokens(path)
+        # ISO3 mismatch warning
+        if declared_iso3 and iso3s:
+            other_iso3s = iso3s - {declared_iso3}
+            if other_iso3s and declared_iso3 not in iso3s:
+                feedback.pushWarning(
+                    f"Input '{label}' has filename containing "
+                    f"'{', '.join(sorted(other_iso3s))}' but you declared "
+                    f"ISO3='{declared_iso3}'. Confirm the right input is "
+                    f"loaded, or update the ISO3 prefix.")
+                n_warned += 1
+        # Year mismatch warning
+        if check_year and years:
+            other_years = years - declared_years
+            if other_years and not (declared_years & years):
+                feedback.pushWarning(
+                    f"Input '{label}' has filename containing year "
+                    f"'{', '.join(sorted(other_years))}' but you declared "
+                    f"year='{declared_year_str}'. Confirm the right input "
+                    f"is loaded, or update the year tag.")
+                n_warned += 1
+    if n_warned == 0:
+        feedback.pushInfo("Input filenames look consistent with "
+                          "declared ISO3 / year.")
+
+
 class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     # -- Inputs --
     FOREST_RASTER = "FOREST_RASTER"
@@ -1061,7 +1149,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.10.8"
+    PFF_VERSION = "0.10.9"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1078,6 +1166,22 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         _year_tag = (self.parameterAsString(
             parameters, self.YEAR, context) or "").strip() or "2020"
         feedback.pushInfo(f"Year tag: {_year_tag}")
+        # P1.30 batch 20c: AOI-name auto-prefix for sub-national runs.
+        # Read the AOI layer's name (sanitised; generic names dropped)
+        # once here; the _out() closure uses it as part of the filename
+        # prefix when set. Falls back to ISO3-only naming for whole-
+        # country / no-AOI runs.
+        _aoi_label = ""
+        try:
+            _aoi_layer_for_label = self.parameterAsVectorLayer(
+                parameters, self.AOI, context)
+            if _aoi_layer_for_label is not None:
+                _aoi_label = _aoi_layer_for_label.name() or ""
+        except Exception:
+            _aoi_label = ""
+        if _aoi_label:
+            feedback.pushInfo(
+                f"AOI layer name (used in output prefix): {_aoi_label}")
 
         # Per-stage timing. _stage() closes the previous stage timer and
         # opens a new one; _close_last_stage() flushes the final stage
@@ -1125,12 +1229,50 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # (cloud sync, low disk space) just emit warnings.
         _run_preflight_checks(out_dir, feedback)
 
+        # P1.30 batch 20c: input-filename consistency check. Reads the
+        # source paths of the major loaded inputs and warns (non-
+        # blocking) on ISO3 / year mismatch with the user's declared
+        # values. Catches the "loaded the wrong year by mistake" class
+        # of user error.
+        try:
+            _input_paths_for_sanity = []
+            for _label, _param_name in [
+                ("forest_raster", self.FOREST_RASTER),
+                ("aoi", self.AOI),
+                ("olwtc", self.FRA_AGRICULTURE_RASTER),
+                ("planted_forest", self.PLANTATIONS_RASTER),
+                ("roads_vector", self.ROADS),
+                ("roads_raster", self.ROADS_RASTER),
+                ("builtup_small", self.BUILTUP_SMALL_RASTER),
+                ("builtup_large", self.BUILTUP_LARGE_RASTER),
+                ("agriculture", self.AGRICULTURE_RASTER),
+                ("dem", self.DEM),
+                ("slope", self.SLOPE_RASTER),
+                ("protected_vector", self.PROTECTED_AREAS),
+                ("protected_raster", self.PROTECTED_RASTER),
+            ]:
+                try:
+                    _layer = self.parameterAsLayer(
+                        parameters, _param_name, context)
+                    if _layer is not None:
+                        _input_paths_for_sanity.append(
+                            (_label, _layer.source() or ""))
+                except Exception:
+                    pass
+            _check_input_naming_consistency(
+                _iso3, _year_tag, _input_paths_for_sanity, feedback)
+        except Exception as _e:
+            feedback.pushDebugInfo(
+                f"(input naming sanity check skipped: {_e})")
+
         # Output filename helper: builds top-level paths per Option D
         # naming. Uses _iso3 from above; closes over out_dir.
         def _out(step, name, ext="tif"):
             return os.path.join(
                 out_dir,
-                generate_layer_name(_iso3, PLATFORM_QGIS, step, name, ext))
+                generate_layer_name(
+                    _iso3, PLATFORM_QGIS, step, name, ext,
+                    year=_year_tag, aoi_label=_aoi_label))
 
         save_combined = self.parameterAsBool(
             parameters, self.SAVE_COMBINED_RASTER, context)
@@ -3185,10 +3327,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # P1.13: run metadata sidecar gets ISO3 prefix when set; otherwise
         # plain run_metadata.json. No step number — it's a contextual sidecar,
         # not a per-stage layer.
-        meta_path = os.path.join(
-            out_dir,
-            (f"{_iso3}_qgis_run_metadata.json" if _iso3
-             else "qgis_run_metadata.json"))
+        # P1.30 batch 20c: route through generate_layer_name so the
+        # metadata sidecar gets the same year + AOI prefix as the
+        # other outputs (consistency for trends + sub-national runs).
+        # Use a synthetic step "00" since metadata isn't a numbered
+        # stage; the helper still applies the prefix correctly.
+        _meta_basename = generate_layer_name(
+            _iso3, PLATFORM_QGIS, "00", "run_metadata", ext="json",
+            year=_year_tag, aoi_label=_aoi_label)
+        # Strip the "00_" step prefix to preserve the current semantic
+        # (no step number on the sidecar).
+        _meta_basename = _meta_basename.replace("_qgis_00_", "_qgis_")
+        if _meta_basename.startswith("qgis_00_"):
+            _meta_basename = "qgis_" + _meta_basename[len("qgis_00_"):]
+        meta_path = os.path.join(out_dir, _meta_basename)
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         feedback.pushInfo(f"Metadata: {meta_path}")
