@@ -473,31 +473,51 @@ class PffDockWidget(QgsDockWidget):
         sec = CollapsibleSection("1. Time Period", expanded=False)
         form = _form()
 
-        # Year combo + "All years since 2000" checkbox in a single row
-        # so the section is compact when collapsed by default. Years
-        # mirror the GEE Time Period selectors (Hansen / GLAD epochs).
+        # P1.30 batch 20d: year input is now an editable combobox that
+        # accepts a comma-separated list (e.g. "2010, 2020") for
+        # multi-year iteration. Single year stays the common case;
+        # multi-year iterates the workflow once per year, finding
+        # year-varying input alternates by globbing the same folder.
+        # Static inputs (DEM, slope, protected) are reused unchanged.
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
 
         self._year_combo = QComboBox()
+        self._year_combo.setEditable(True)
         for y in range(1990, 2026):  # 1990..2025 inclusive
             self._year_combo.addItem(str(y), str(y))
         self._year_combo.setCurrentText("2020")  # default
-        row.addWidget(QLabel("Year:"))
-        row.addWidget(self._year_combo)
-        row.addSpacing(12)
+        self._year_combo.setMinimumWidth(160)
+        self._year_combo.setToolTip(
+            "Year tag for outputs. Type a comma-separated list "
+            "(e.g. '2010, 2020' or '1990, 2000, 2010, 2015, 2020') "
+            "to iterate the workflow once per year. Year-varying "
+            "input files are auto-detected by filename year token "
+            "and globbed in the same folder; static inputs (DEM, "
+            "slope, protected areas) are reused.")
+        row.addWidget(QLabel("Year(s):"))
+        row.addWidget(self._year_combo, 1)
+        row.addSpacing(8)
 
-        # When ticked, run is tagged year="all". A future multi-year
-        # runner will iterate each year 1990..2025 as a single-year
-        # run; the current workflow runs once per invocation.
-        self._year_all_since_2000 = QCheckBox(
-            "All years 1990-2025")
+        # FRA preset button: fills the combo with FRA-year ladder.
+        fra_btn = QPushButton("FRA preset")
+        fra_btn.setToolTip(
+            "Fill the year field with the FAO FRA reporting ladder "
+            "(1990, 2000, 2010, 2015, 2020). Useful for trend runs.")
+        fra_btn.clicked.connect(
+            lambda: self._year_combo.setCurrentText(
+                "1990, 2000, 2010, 2015, 2020"))
+        row.addWidget(fra_btn)
+
+        # All-years checkbox kept as a quick toggle for "tag run as
+        # year=all" without iteration. When ticked, year combo greys.
+        self._year_all_since_2000 = QCheckBox("year=all (tag only)")
         self._year_all_since_2000.setToolTip(
-            "When ticked, the run is tagged year=all. The future "
-            "multi-year runner will iterate each year 1990..2025 as "
-            "a separate single-year run. The current workflow runs "
-            "once per invocation.")
+            "When ticked, the run is tagged year='all' (no iteration; "
+            "no year in filename). Use this when you don't want a "
+            "year stamp on outputs at all. To iterate multiple years, "
+            "type a comma-separated list in the Year(s) field instead.")
         self._year_all_since_2000.toggled.connect(
             lambda on: self._year_combo.setEnabled(not on))
         # 20c: re-render prefix preview whenever year inputs change.
@@ -506,7 +526,7 @@ class PffDockWidget(QgsDockWidget):
         self._year_all_since_2000.toggled.connect(
             self._refresh_prefix_preview)
         row.addWidget(self._year_all_since_2000)
-        row.addStretch(1)
+        row.addStretch(0)
 
         form.addRow("", row)
         sec.set_content_layout(form)
@@ -1046,8 +1066,7 @@ class PffDockWidget(QgsDockWidget):
 
         params = self._collect_params()
         # Persist the run BEFORE invoking processing.run so the entry
-        # is preserved even if the run fails or is cancelled. The
-        # recorded entry's status is updated in _on_run_finished.
+        # is preserved even if the run fails or is cancelled.
         self._active_history_index = self._record_run_history(
             params, status="started")
         self._refresh_recent_combo()
@@ -1056,11 +1075,22 @@ class PffDockWidget(QgsDockWidget):
         self._active_feedback = feedback
         self._enter_running_state()
 
+        # P1.30 batch 20d: parse YEAR as comma-separated list. Single
+        # year (or "all") runs once as before. Multi-year runs the
+        # workflow once per year, substituting year-varying input
+        # paths between iterations.
+        from ..utils_year_iter import parse_year_list
+        year_list = parse_year_list(params.get(FW.YEAR, "") or "")
+
         status = "failed"
         try:
-            feedback.pushInfo("Starting workflow…")
-            QApplication.processEvents()
-            try:
+            if len(year_list) > 1 and "all" not in year_list:
+                self._run_multi_year(params, year_list, feedback)
+                status = ("cancelled" if feedback.isCanceled()
+                          else "finished")
+            else:
+                feedback.pushInfo("Starting workflow…")
+                QApplication.processEvents()
                 processing.run("pff:full_workflow", params, feedback=feedback)
                 if feedback.isCanceled():
                     status = "cancelled"
@@ -1068,14 +1098,14 @@ class PffDockWidget(QgsDockWidget):
                 else:
                     status = "finished"
                     feedback.pushInfo("✔ Workflow finished.")
-            except Exception as e:
-                if feedback.isCanceled():
-                    status = "cancelled"
-                    feedback.pushWarning(
-                        f"⚠ Workflow cancelled by user ({e}).")
-                else:
-                    status = "failed"
-                    feedback.reportError(f"Workflow failed: {e}")
+        except Exception as e:
+            if feedback.isCanceled():
+                status = "cancelled"
+                feedback.pushWarning(
+                    f"⚠ Workflow cancelled by user ({e}).")
+            else:
+                status = "failed"
+                feedback.reportError(f"Workflow failed: {e}")
         finally:
             self._leave_running_state()
             if status == "finished":
@@ -1084,9 +1114,125 @@ class PffDockWidget(QgsDockWidget):
             self._update_history_status(self._active_history_index, status)
             self._refresh_recent_combo()
             self._active_history_index = None
-            # Best-effort QGIS Processing > History entry on success.
             if status == "finished":
                 self._record_qgis_history(params)
+
+    def _run_multi_year(self, base_params, year_list, feedback):
+        """Iterate the workflow once per year in `year_list`, with
+        year-varying input paths substituted between runs.
+
+        Anchor year = first year in the list. Inputs whose filenames
+        contain the anchor year token get substituted for each target
+        year via filename glob. Inputs without a year token (DEM,
+        slope, protected, AOI vector) are passed through unchanged.
+        """
+        from ..utils_year_iter import build_year_paths
+
+        # The set of param names whose values are file paths we want
+        # to consider for year substitution. Output folder + ISO3 +
+        # numeric params are skipped.
+        path_param_names = [
+            FW.FOREST_RASTER, FW.AOI, FW.FRA_AGRICULTURE_RASTER,
+            FW.PLANTATIONS_RASTER, FW.ROADS, FW.ROADS_RASTER,
+            FW.BUILTUP_SMALL_RASTER, FW.BUILTUP_LARGE_RASTER,
+            FW.AGRICULTURE_RASTER, FW.DEM, FW.SLOPE_RASTER,
+            FW.PROTECTED_AREAS, FW.PROTECTED_RASTER,
+            FW.CUSTOM_1_RASTER, FW.CUSTOM_2_RASTER, FW.CUSTOM_3_RASTER,
+            FW.ZONE_LAYER,
+        ]
+
+        anchor_year = year_list[0]
+        feedback.pushInfo(
+            f"=== Multi-year run: {len(year_list)} years "
+            f"({', '.join(year_list)}) ===")
+        feedback.pushInfo(f"Anchor year: {anchor_year}")
+
+        # Pre-flight: resolve every (year, input) cell so the user
+        # sees what's about to happen BEFORE iterating.
+        feedback.pushInfo("\n--- Per-year input availability ---")
+        per_year_resolved = {}
+        for year in year_list:
+            resolved = build_year_paths(
+                [(name, base_params.get(name) or "")
+                 for name in path_param_names],
+                anchor_year, year)
+            per_year_resolved[year] = resolved
+            missing = [k for k, v in resolved.items()
+                       if v["status"] == "missing"]
+            feedback.pushInfo(f"  Year {year}:")
+            for label, info in resolved.items():
+                if info["status"] in ("static", "anchor"):
+                    continue
+                if info["status"] == "missing":
+                    feedback.pushWarning(
+                        f"    [missing] {label}: no file matching "
+                        f"year={year} found in same folder")
+                else:
+                    feedback.pushInfo(
+                        f"    [{info['status']}] {label}: "
+                        f"{os.path.basename(info['path'])}")
+
+        # Confirm with user if any year has missing inputs.
+        missing_years = [
+            y for y, r in per_year_resolved.items()
+            if any(v["status"] == "missing" for v in r.values())
+        ]
+        if missing_years:
+            ans = QMessageBox.question(
+                self, "Primary Forest Finder",
+                f"Some inputs are missing for year(s): "
+                f"{', '.join(missing_years)}.\n\n"
+                "Skip those years and continue with the rest? "
+                "(Choose No to abort the whole run.)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes)
+            if ans != QMessageBox.Yes:
+                feedback.pushWarning("⚠ Multi-year run aborted by user.")
+                feedback.cancel()
+                return
+            year_list = [y for y in year_list if y not in missing_years]
+            if not year_list:
+                feedback.pushWarning(
+                    "⚠ No years remaining after skipping missing. "
+                    "Nothing to run.")
+                return
+
+        # Iterate.
+        for i, year in enumerate(year_list, start=1):
+            if feedback.isCanceled():
+                feedback.pushWarning(
+                    f"⚠ Cancelled before year {year}.")
+                return
+            feedback.pushInfo(
+                f"\n=== YEAR {year} ({i} of {len(year_list)}) ===")
+            QApplication.processEvents()
+            year_params = dict(base_params)
+            resolved = per_year_resolved[year]
+            for name, info in resolved.items():
+                if info["status"] in ("matched", "ambiguous", "static",
+                                      "anchor"):
+                    if info["path"]:
+                        year_params[name] = info["path"]
+                    else:
+                        year_params[name] = base_params.get(name)
+            year_params[FW.YEAR] = year
+            try:
+                processing.run("pff:full_workflow", year_params,
+                               feedback=feedback)
+                if feedback.isCanceled():
+                    feedback.pushWarning(
+                        f"⚠ Cancelled during year {year}.")
+                    return
+            except Exception as e:
+                if feedback.isCanceled():
+                    feedback.pushWarning(
+                        f"⚠ Cancelled during year {year} ({e}).")
+                    return
+                feedback.reportError(
+                    f"Year {year} failed: {e}. Continuing with "
+                    "remaining years.")
+        feedback.pushInfo(
+            f"\n✔ Multi-year run complete ({len(year_list)} years).")
 
     # ────────────────────────────────────────────────────────────────
     # Run history
