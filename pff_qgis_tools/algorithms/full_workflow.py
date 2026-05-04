@@ -692,9 +692,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "00 Country: Year tag (e.g. '2020' or 'all'; metadata only)",
             defaultValue="2020",
             optional=True))
+        # P1.30 batch 20b.1: AUTO_UTM is deprecated. The dock no longer
+        # exposes the checkbox; the parameter is parsed and ignored at
+        # run time so saved Recent runs / Processing > History entries
+        # with AUTO_UTM=True don't crash on replay. Failure modes: zone-
+        # straddling AOIs, countries with proper national grids, silent
+        # mismatch between heuristic and real-world expectations. Use
+        # the dock's suggested-CRS dropdown or set Target CRS / EPSG.
         self.addParameter(QgsProcessingParameterBoolean(
             self.AUTO_UTM,
-            "00 Country: Auto-detect UTM zone from AOI / forest centroid",
+            "00 Country: Auto-detect UTM (DEPRECATED -- set Target CRS "
+            "explicitly; this flag is ignored)",
             defaultValue=False))
         self.addParameter(QgsProcessingParameterCrs(
             self.TARGET_CRS,
@@ -1053,7 +1061,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.10.7"
+    PFF_VERSION = "0.10.8"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1134,8 +1142,23 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.LOCAL_SCRATCH_INTERMEDIATES, context)
         cleanup_intermediates = self.parameterAsBool(
             parameters, self.CLEANUP_INTERMEDIATES, context)
-        auto_utm = self.parameterAsBool(
+        # P1.30 batch 20b.1: AUTO_UTM is deprecated. Parameter still
+        # parsed (so saved runs replay without crash) but the value is
+        # FORCED TO FALSE here -- the centroid-derived UTM heuristic
+        # was a footgun for zone-straddling AOIs / countries with
+        # proper national grids. Users now pick a CRS explicitly via
+        # the dock's suggested-CRS dropdown OR Manual CRS / EPSG fields.
+        _auto_utm_user = self.parameterAsBool(
             parameters, self.AUTO_UTM, context)
+        if _auto_utm_user:
+            feedback.pushWarning(
+                "AUTO_UTM=True is DEPRECATED and will be ignored. Set "
+                "Target CRS explicitly in dock §0 (or via Manual CRS / "
+                "EPSG override). The centroid-derived UTM heuristic is "
+                "removed because it silently gave the wrong answer for "
+                "zone-straddling AOIs and countries with proper national "
+                "grids.")
+        auto_utm = False
         aoi_buffer_dist = self.parameterAsDouble(
             parameters, self.AOI_BUFFER, context)
         max_dist = self.parameterAsDouble(

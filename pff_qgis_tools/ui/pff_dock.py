@@ -310,35 +310,53 @@ class PffDockWidget(QgsDockWidget):
             file_filter="Vector (*.gpkg *.shp *.geojson *.kml *.gml);;"
                         "All (*.*)",
             browse_caption="Pick AOI vector file")
+        self._aoi_picker.pathChanged.connect(self._refresh_crs_suggestions)
         form.addRow("AOI:", self._aoi_picker)
 
         self._iso3_edit = QLineEdit()
         self._iso3_edit.setMaxLength(8)
         self._iso3_edit.setPlaceholderText("e.g. KEN, BTN, BRA")
+        self._iso3_edit.editingFinished.connect(self._refresh_crs_suggestions)
         form.addRow("ISO3:", self._iso3_edit)
 
         self._output_folder = QgsFileWidget()
         self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
         form.addRow("Output:", self._output_folder)
 
-        self._auto_utm_chk = QCheckBox("Auto-detect UTM zone")
-        form.addRow("", self._auto_utm_chk)
+        # Suggested-CRS dropdown — primary CRS picker. When AOI/ISO3 are
+        # set, populates with pyproj suggestions ranked by AOI overlap +
+        # name-match boost. The first non-placeholder entry is selected
+        # by default. Custom EPSG and full QGIS CRS picker remain in
+        # advanced as the manual fallback.
+        self._crs_suggest_combo = QComboBox()
+        self._crs_suggest_combo.setToolTip(
+            "Projected CRSes appropriate for this AOI/country, suggested "
+            "by pyproj's offline EPSG database. Pick the top entry, or "
+            "use Custom EPSG / QGIS CRS picker in Advanced for manual "
+            "control. Auto-UTM is deprecated -- pick a CRS explicitly.")
+        self._crs_suggest_combo.addItem(
+            "(suggestions appear when AOI or ISO3 is set)", None)
+        self._crs_suggest_combo.currentIndexChanged.connect(
+            self._on_crs_suggestion_picked)
+        form.addRow("Target CRS:", self._crs_suggest_combo)
 
         sec.set_content_layout(form)
 
-        # ── Advanced (collapsed) ──
-        adv = CollapsibleSection("Advanced (CRS, AOI buffer)",
-                                 expanded=False, indent_px=8,
-                                 header_bold=False)
+        # ── Advanced (collapsed) — manual fallback ──
+        adv = CollapsibleSection(
+            "Advanced (manual CRS, AOI buffer)",
+            expanded=False, indent_px=8, header_bold=False)
         adv_form = _form()
 
         self._target_crs = QgsProjectionSelectionWidget()
         self._target_crs.setCrs(QgsCoordinateReferenceSystem("EPSG:32717"))
-        adv_form.addRow("Target CRS:", self._target_crs)
+        self._target_crs.setToolTip(
+            "Manual CRS picker. Overrides the suggested-CRS dropdown.")
+        adv_form.addRow("Manual CRS:", self._target_crs)
 
         self._target_crs_epsg = QLineEdit()
         self._target_crs_epsg.setPlaceholderText(
-            "e.g. 5266 (overrides picker)")
+            "e.g. 5266 (overrides picker + suggestions)")
         adv_form.addRow("EPSG:", self._target_crs_epsg)
 
         self._aoi_buffer = _spin(default=D_AOI_BUFFER, mn=0.0, mx=100000.0)
@@ -349,6 +367,57 @@ class PffDockWidget(QgsDockWidget):
         sec._content_outer_layout.addWidget(adv)
 
         self._sections_layout.addWidget(sec)
+
+    def _refresh_crs_suggestions(self):
+        """Rebuild the suggested-CRS dropdown when AOI or ISO3 changes."""
+        try:
+            from ..utils_crs_suggest import suggest_crses
+        except ImportError:
+            return
+        aoi_path = self._aoi_picker.path() or None
+        iso3 = (self._iso3_edit.text().strip() or None)
+        if not aoi_path and not iso3:
+            return
+        try:
+            results = suggest_crses(
+                aoi_path=aoi_path, iso3=iso3, max_results=5)
+        except Exception:
+            results = []
+        # Block signals so we don't fire _on_crs_suggestion_picked while
+        # rebuilding.
+        self._crs_suggest_combo.blockSignals(True)
+        self._crs_suggest_combo.clear()
+        if not results:
+            self._crs_suggest_combo.addItem(
+                "(no suggestions — set Manual CRS in Advanced)", None)
+        else:
+            for code, name, reason in results:
+                label = f"EPSG:{code} — {name}"
+                if reason:
+                    label += f"  [{reason}]"
+                self._crs_suggest_combo.addItem(label, code)
+        self._crs_suggest_combo.blockSignals(False)
+        # Auto-pick the top suggestion.
+        if results:
+            self._crs_suggest_combo.setCurrentIndex(0)
+            # Drive the manual CRS picker too so both stay in sync.
+            top_epsg = results[0][0]
+            self._target_crs.setCrs(
+                QgsCoordinateReferenceSystem(f"EPSG:{top_epsg}"))
+
+    def _on_crs_suggestion_picked(self, idx):
+        """When the user picks a suggestion, update the manual CRS picker
+        too so a downstream Run sees a consistent value."""
+        if idx < 0:
+            return
+        epsg = self._crs_suggest_combo.itemData(idx)
+        if epsg is None:
+            return
+        try:
+            self._target_crs.setCrs(
+                QgsCoordinateReferenceSystem(f"EPSG:{int(epsg)}"))
+        except Exception:
+            pass
 
     def _build_section_1_time_period(self):
         sec = CollapsibleSection("1. Time Period", expanded=False)
@@ -760,7 +829,12 @@ class PffDockWidget(QgsDockWidget):
         params[FW.AOI] = self._aoi_picker.path() or None
         params[FW.ISO3_PREFIX] = self._iso3_edit.text().strip()
         params[FW.OUTPUT_FOLDER] = self._output_folder.filePath()
-        params[FW.AUTO_UTM] = self._auto_utm_chk.isChecked()
+        # P1.30 batch 20b.1: AUTO_UTM is deprecated. The dock never
+        # ticks it; the algorithm ignores the parameter at run time.
+        # Saved Recent runs that have AUTO_UTM=True still load (the
+        # param is parsed and dropped) -- replay still works because
+        # the algorithm now ignores it regardless.
+        params[FW.AUTO_UTM] = False
         params[FW.TARGET_CRS] = self._target_crs.crs()
         params[FW.TARGET_CRS_EPSG] = self._target_crs_epsg.text().strip()
         params[FW.AOI_BUFFER] = self._aoi_buffer.value()
@@ -1095,7 +1169,8 @@ class PffDockWidget(QgsDockWidget):
         self._aoi_picker.set_path(s(FW.AOI))
         self._iso3_edit.setText(s(FW.ISO3_PREFIX))
         self._output_folder.setFilePath(s(FW.OUTPUT_FOLDER))
-        self._auto_utm_chk.setChecked(b(FW.AUTO_UTM))
+        # P1.30 batch 20b.1: AUTO_UTM is deprecated and the dock no
+        # longer has a checkbox for it. Saved values are ignored.
         self._target_crs_epsg.setText(s(FW.TARGET_CRS_EPSG))
         self._aoi_buffer.setValue(n(FW.AOI_BUFFER))
 
