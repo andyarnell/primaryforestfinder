@@ -493,9 +493,13 @@ class PffDockWidget(QgsDockWidget):
         # The two widgets are stacked in a tiny QStackedWidget; only
         # one is visible at a time. Single-source-of-truth for the
         # YEAR param string is `_current_year_text()`.
-        from qgis.PyQt.QtWidgets import QStackedWidget
+        from qgis.PyQt.QtWidgets import QStackedWidget, QSizePolicy
         self._year_stack = QStackedWidget()
-        self._year_stack.setMinimumWidth(240)
+        # 20g: thinner. A 4-digit year only needs ~70 px; multi-year
+        # field comfortably fits at ~180. Use Maximum so the field
+        # stays compact rather than stretching to fill the dock.
+        self._year_stack.setSizePolicy(
+            QSizePolicy.Maximum, QSizePolicy.Fixed)
 
         # Index 0: single-year combobox.
         self._year_single_combo = QComboBox()
@@ -540,10 +544,10 @@ class PffDockWidget(QgsDockWidget):
         self._multi_year_chk.toggled.connect(self._on_multi_year_toggled)
         form.addRow("", self._multi_year_chk)
 
-        self._year_all_since_2000 = QCheckBox("year=all (tag only — no iteration)")
+        self._year_all_since_2000 = QCheckBox("Year unspecified")
         self._year_all_since_2000.setToolTip(
-            "When ticked, the run is tagged year='all' and no year "
-            "appears in output filenames. No iteration.")
+            "When ticked, no year is recorded for this run. Output "
+            "filenames omit the year segment. No iteration.")
         self._year_all_since_2000.toggled.connect(
             lambda on: self._year_stack.setEnabled(not on))
         # 20c: re-render prefix preview whenever year inputs change.

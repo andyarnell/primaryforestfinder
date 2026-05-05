@@ -69,20 +69,28 @@ class LayerOrFilePicker(QWidget):
         self._combo = QgsMapLayerComboBox(self)
         self._combo.setFilters(layer_filter)
         self._combo.setAllowEmptyLayer(True)
-        # Combo expands; minimum width set so content (layer names) doesn't
-        # collapse to nothing when the dock is narrow.
+        # P1.30 batch 20g: prevent the combo from expanding to its
+        # widest item (long layer source paths sometimes pushed the
+        # browse button off-screen on narrow docks). MinimumContents-
+        # Length pins the combo's preferred width to ~10 chars so the
+        # browse button always fits.
+        from qgis.PyQt.QtWidgets import QComboBox as _QComboBox
+        self._combo.setSizeAdjustPolicy(
+            _QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._combo.setMinimumContentsLength(10)
         self._combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._combo.setMinimumWidth(80)
+        self._combo.setMinimumWidth(60)
         self._combo.layerChanged.connect(self._on_layer_changed)
         layout.addWidget(self._combo, 1)
 
-        # Browse button has FIXED size policy so it can never be clipped
-        # when the dock is narrow — the combo gives way instead.
+        # Browse button has FIXED size policy so it's never clipped.
+        # The combo gives way (shrinks) before the button does.
         self._browse_btn = QToolButton(self)
         self._browse_btn.setText("…")
         self._browse_btn.setToolTip("Browse for file on disk")
         self._browse_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._browse_btn.setMinimumWidth(28)
+        self._browse_btn.setMinimumHeight(self._combo.sizeHint().height())
         self._browse_btn.clicked.connect(self._on_browse)
         layout.addWidget(self._browse_btn, 0)
 
