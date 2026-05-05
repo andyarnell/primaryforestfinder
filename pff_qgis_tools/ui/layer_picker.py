@@ -69,25 +69,29 @@ class LayerOrFilePicker(QWidget):
         self._combo = QgsMapLayerComboBox(self)
         self._combo.setFilters(layer_filter)
         self._combo.setAllowEmptyLayer(True)
-        # P1.30 batch 20g: prevent the combo from expanding to its
-        # widest item (long layer source paths sometimes pushed the
-        # browse button off-screen on narrow docks). MinimumContents-
-        # Length pins the combo's preferred width to ~10 chars so the
-        # browse button always fits.
+        # P1.30 batch 20h: combo uses QSizePolicy.Ignored horizontally
+        # so it has NO horizontal min-size requirement. It shrinks to
+        # any width Qt gives it (down to a pixel if necessary). This
+        # guarantees the fixed-size browse button to its right is
+        # never clipped, regardless of dock width or form-column
+        # constraints. Trade-off: when the dock is very narrow, the
+        # combo may show only the dropdown arrow + a sliver of text.
+        # User can widen the dock to see more, or click to drop down.
         from qgis.PyQt.QtWidgets import QComboBox as _QComboBox
         self._combo.setSizeAdjustPolicy(
             _QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self._combo.setMinimumContentsLength(10)
-        self._combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._combo.setMinimumWidth(60)
+        self._combo.setMinimumContentsLength(1)
+        self._combo.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._combo.setMinimumWidth(0)
         self._combo.layerChanged.connect(self._on_layer_changed)
         layout.addWidget(self._combo, 1)
 
-        # Browse button has FIXED size policy so it's never clipped.
-        # The combo gives way (shrinks) before the button does.
+        # Browse button: FIXED + non-zero min width = always visible.
         self._browse_btn = QToolButton(self)
         self._browse_btn.setText("…")
-        self._browse_btn.setToolTip("Browse for file on disk")
+        self._browse_btn.setToolTip(
+            "Browse for file on disk (file picker also lets you load "
+            "files that aren't currently in the QGIS Layers panel)")
         self._browse_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._browse_btn.setMinimumWidth(28)
         self._browse_btn.setMinimumHeight(self._combo.sizeHint().height())

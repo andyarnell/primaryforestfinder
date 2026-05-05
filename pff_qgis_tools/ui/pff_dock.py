@@ -540,7 +540,13 @@ class PffDockWidget(QgsDockWidget):
         self._multi_year_chk.setToolTip(
             "When ticked, the Year(s) dropdown is replaced by a free-"
             "form text field. Type a comma-separated list. The "
-            "workflow then iterates once per year.")
+            "workflow then iterates once per year.\n\n"
+            "Convention: assumes year-varying inputs (forest, OLWTC, "
+            "planted, agriculture, built-up, roads) for OTHER years "
+            "are in the SAME FOLDER as the loaded inputs, with only "
+            "the year token differing in the filename "
+            "(e.g. forest_2010_*.tif <-> forest_2020_*.tif). Static "
+            "inputs (DEM, slope, protected) are reused unchanged.")
         self._multi_year_chk.toggled.connect(self._on_multi_year_toggled)
         form.addRow("", self._multi_year_chk)
 
