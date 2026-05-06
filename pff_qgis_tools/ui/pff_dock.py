@@ -24,12 +24,12 @@ import os
 
 import processing
 from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QTextCursor
+from qgis.PyQt.QtGui import QStandardItem, QStandardItemModel, QTextCursor
 from qgis.PyQt.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
-    QPushButton, QScrollArea, QSizePolicy, QSplitter, QTextEdit,
-    QVBoxLayout, QWidget
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+    QTextEdit, QToolButton, QVBoxLayout, QWidget
 )
 from qgis.core import (
     QgsApplication, QgsCoordinateReferenceSystem, QgsMapLayer,
@@ -37,7 +37,7 @@ from qgis.core import (
 )
 from qgis.gui import (
     QgsDockWidget, QgsFieldComboBox, QgsFileWidget,
-    QgsProjectionSelectionWidget
+    QgsProjectionSelectionDialog
 )
 
 from .collapsible_section import CollapsibleSection
@@ -215,6 +215,15 @@ class PffDockWidget(QgsDockWidget):
         outer_layout.setContentsMargins(6, 6, 6, 6)
         outer_layout.setSpacing(2)
 
+        # P1.30 batch 20i: plugin version banner at the top so the
+        # user can confirm at a glance which version they have loaded.
+        # Pulls from FullWorkflowAlgorithm.PFF_VERSION (single source).
+        version_label = QLabel(
+            f"<b>Primary Forest Finder</b> "
+            f"<span style='color:#666;'>v{FW.PFF_VERSION}</span>")
+        version_label.setStyleSheet("padding: 2px 0;")
+        outer_layout.addWidget(version_label)
+
         # Splitter so the user can drag the divider to give sections
         # vs log more or less space. Both panes can be dragged freely;
         # min heights enforced on the panes themselves.
@@ -247,6 +256,20 @@ class PffDockWidget(QgsDockWidget):
         self._build_section_6_vectorise_outputs()
         self._build_section_7_run_options()
         self._sections_layout.addStretch(1)
+
+        # P1.30 batch 20i: accordion -- only one top-level section
+        # expanded at a time. Collect refs to all top-level
+        # CollapsibleSections that ended up in the sections layout
+        # and wire their toggled() signal to a dispatcher.
+        self._top_level_sections = []
+        self._in_accordion_dispatch = False
+        for i in range(self._sections_layout.count()):
+            w = self._sections_layout.itemAt(i).widget()
+            if isinstance(w, CollapsibleSection):
+                self._top_level_sections.append(w)
+                w.toggled.connect(
+                    lambda expanded, sec=w:
+                        self._on_section_toggled(sec, expanded))
 
         scroll.setWidget(body)
         self._splitter.addWidget(scroll)
@@ -310,13 +333,13 @@ class PffDockWidget(QgsDockWidget):
             file_filter="Vector (*.gpkg *.shp *.geojson *.kml *.gml);;"
                         "All (*.*)",
             browse_caption="Pick AOI vector file")
-        self._aoi_picker.pathChanged.connect(self._refresh_crs_suggestions)
+        self._aoi_picker.pathChanged.connect(self._on_aoi_or_iso3_changed)
         form.addRow("AOI:", self._aoi_picker)
 
         self._iso3_edit = QLineEdit()
         self._iso3_edit.setMaxLength(8)
         self._iso3_edit.setPlaceholderText("e.g. KEN, BTN, BRA")
-        self._iso3_edit.editingFinished.connect(self._refresh_crs_suggestions)
+        self._iso3_edit.editingFinished.connect(self._on_aoi_or_iso3_changed)
         self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
 
@@ -338,87 +361,353 @@ class PffDockWidget(QgsDockWidget):
         form.addRow("", self._prefix_preview)
         self._aoi_picker.pathChanged.connect(self._refresh_prefix_preview)
 
-        # Suggested-CRS dropdown — primary CRS picker. When AOI/ISO3 are
-        # set, populates with pyproj suggestions ranked by AOI overlap +
-        # name-match boost. The first non-placeholder entry is selected
-        # by default. Custom EPSG and full QGIS CRS picker remain in
-        # advanced as the manual fallback.
-        self._crs_suggest_combo = QComboBox()
-        self._crs_suggest_combo.setToolTip(
-            "Projected CRSes appropriate for this AOI/country, suggested "
-            "by pyproj's offline EPSG database. Pick the top entry, or "
-            "use Custom EPSG / QGIS CRS picker in Advanced for manual "
-            "control. Auto-UTM is deprecated -- pick a CRS explicitly.")
-        self._crs_suggest_combo.addItem(
-            "(suggestions appear when AOI or ISO3 is set)", None)
-        self._crs_suggest_combo.currentIndexChanged.connect(
-            self._on_crs_suggestion_picked)
-        form.addRow("Target CRS:", self._crs_suggest_combo)
+        # P1.30 batch 20i: single CRS picker replacing the previous
+        # Suggested-CRS dropdown + Manual CRS + EPSG fields. Items are
+        # grouped under disabled headers ("AOI-based suggestions",
+        # "Recent", "Other"). The "Other" group has actions for
+        # typing an EPSG code or browsing the full QGIS CRS list.
+        # No default selection -- user must explicitly pick.
+        crs_row = QHBoxLayout()
+        crs_row.setContentsMargins(0, 0, 0, 0)
+        crs_row.setSpacing(4)
+        self._crs_combo = QComboBox()
+        self._crs_combo.setToolTip(
+            "Pick a CRS. Top entries are AOI-based suggestions from "
+            "pyproj. 'Recent' lists CRSes used in past runs. 'Other' "
+            "has actions for typing an EPSG code or browsing the "
+            "full QGIS CRS list. No silent default -- you must pick.")
+        self._crs_combo.activated.connect(self._on_crs_combo_picked)
+        crs_row.addWidget(self._crs_combo, 1)
+        # Quick-browse button: shorthand for the "Browse all CRSes" action.
+        self._crs_browse_btn = QToolButton()
+        self._crs_browse_btn.setText("…")
+        self._crs_browse_btn.setToolTip(
+            "Browse the full QGIS CRS list (same as 'Other > "
+            "Browse all CRSes' in the dropdown)")
+        self._crs_browse_btn.clicked.connect(self._on_crs_browse_clicked)
+        crs_row.addWidget(self._crs_browse_btn)
+        form.addRow("Target CRS:", crs_row)
+
+        # Internal state: the chosen CRS as a QgsCoordinateReferenceSystem
+        # (None until user picks). Drives _collect_params -- written to
+        # both TARGET_CRS and TARGET_CRS_EPSG so the algorithm picks it
+        # up regardless of which path it follows.
+        self._chosen_crs = None  # type: ignore[assignment]
+        self._chosen_crs_label = ""
+        self._rebuild_crs_combo()
 
         sec.set_content_layout(form)
 
-        # ── Advanced (collapsed) — manual fallback ──
+        # ── Advanced (collapsed) — AOI buffer only now ──
         adv = CollapsibleSection(
-            "Advanced (manual CRS, AOI buffer)",
+            "Advanced (AOI buffer)",
             expanded=False, indent_px=8, header_bold=False)
         adv_form = _form()
-
-        self._target_crs = QgsProjectionSelectionWidget()
-        self._target_crs.setCrs(QgsCoordinateReferenceSystem("EPSG:32717"))
-        self._target_crs.setToolTip(
-            "Manual CRS picker. Overrides the suggested-CRS dropdown.")
-        adv_form.addRow("Manual CRS:", self._target_crs)
-
-        self._target_crs_epsg = QLineEdit()
-        self._target_crs_epsg.setPlaceholderText(
-            "e.g. 5266 (overrides picker + suggestions)")
-        adv_form.addRow("EPSG:", self._target_crs_epsg)
 
         self._aoi_buffer = _spin(default=D_AOI_BUFFER, mn=0.0, mx=100000.0)
         adv_form.addRow("AOI buffer:", self._aoi_buffer)
 
         adv.set_content_layout(adv_form)
-        # Append advanced inside the section's content area.
         sec._content_outer_layout.addWidget(adv)
 
         self._sections_layout.addWidget(sec)
 
-    def _refresh_crs_suggestions(self):
-        """Rebuild the suggested-CRS dropdown when AOI or ISO3 changes."""
+    def _on_aoi_or_iso3_changed(self, *_):
+        """AOI path or ISO3 changed -- refresh prefix preview AND
+        rebuild the CRS combo so suggestions track the new inputs."""
+        self._refresh_prefix_preview()
+        self._rebuild_crs_combo()
+
+    # ────────────────────────────────────────────────────────────────
+    # P1.30 batch 20i: CRS picker (single combobox + browse button)
+    # ────────────────────────────────────────────────────────────────
+    # Item UserRole sentinels — distinguish action items from real picks.
+    _CRS_ROLE_HEADER = "header"
+    _CRS_ROLE_NONE = "none"
+    _CRS_ROLE_BROWSE = "browse"
+    _CRS_ROLE_EPSG_INPUT = "epsg_input"
+
+    def _rebuild_crs_combo(self):
+        """Populate the CRS combobox with grouped sources.
+
+        Three groups under disabled headers:
+          - AOI-based suggestions (from utils_crs_suggest.suggest_crses)
+          - Recent (last 10 unique CRSes from run_history.json)
+          - Other (Type EPSG code…, Browse all CRSes…)
+
+        Section headers are non-selectable. Selectable items carry an
+        EPSG integer (for picks) or one of the role sentinels (for
+        actions) in their UserRole data.
+
+        If nothing is currently chosen AND there are no AOI/ISO3 inputs
+        yet, the combo shows a single placeholder telling the user to
+        provide AOI/ISO3 or pick manually.
+        """
         try:
             from ..utils_crs_suggest import suggest_crses
         except ImportError:
-            return
+            suggest_crses = None  # graceful when pyproj unavailable
+
         aoi_path = self._aoi_picker.path() or None
         iso3 = (self._iso3_edit.text().strip() or None)
-        if not aoi_path and not iso3:
-            return
-        try:
-            results = suggest_crses(
-                aoi_path=aoi_path, iso3=iso3, max_results=5)
-        except Exception:
-            results = []
-        # Block signals so we don't fire _on_crs_suggestion_picked while
-        # rebuilding.
-        self._crs_suggest_combo.blockSignals(True)
-        self._crs_suggest_combo.clear()
-        if not results:
-            self._crs_suggest_combo.addItem(
-                "(no suggestions — set Manual CRS in Advanced)", None)
+
+        suggestions = []
+        if suggest_crses is not None and (aoi_path or iso3):
+            try:
+                suggestions = suggest_crses(
+                    aoi_path=aoi_path, iso3=iso3, max_results=5)
+            except Exception:
+                suggestions = []
+
+        recents = self._recent_target_crses(n=10)
+
+        model = QStandardItemModel(self._crs_combo)
+
+        def _add_header(text):
+            item = QStandardItem(f"── {text} ──")
+            item.setData(self._CRS_ROLE_HEADER, Qt.UserRole)
+            item.setSelectable(False)
+            item.setEnabled(False)
+            model.appendRow(item)
+
+        def _add_action(text, role):
+            item = QStandardItem(text)
+            item.setData(role, Qt.UserRole)
+            model.appendRow(item)
+
+        def _add_epsg(epsg, label):
+            item = QStandardItem(label)
+            item.setData(int(epsg), Qt.UserRole)
+            model.appendRow(item)
+
+        # Track whether the chosen CRS appears in any group so we can
+        # set the combo's currentIndex to it after population.
+        chosen_idx = -1
+
+        # If no AOI/ISO3 AND no recent runs AND no chosen CRS yet,
+        # show a single placeholder + the Other actions only.
+        has_anything = (
+            bool(suggestions) or bool(recents) or self._chosen_crs is not None)
+
+        if not has_anything:
+            placeholder = QStandardItem(
+                "(no CRS selected — set AOI or ISO3, or type/browse)")
+            placeholder.setData(self._CRS_ROLE_NONE, Qt.UserRole)
+            placeholder.setSelectable(False)
+            placeholder.setEnabled(False)
+            model.appendRow(placeholder)
         else:
-            for code, name, reason in results:
-                label = f"EPSG:{code} — {name}"
-                if reason:
-                    label += f"  [{reason}]"
-                self._crs_suggest_combo.addItem(label, code)
-        self._crs_suggest_combo.blockSignals(False)
-        # Auto-pick the top suggestion.
-        if results:
-            self._crs_suggest_combo.setCurrentIndex(0)
-            # Drive the manual CRS picker too so both stay in sync.
-            top_epsg = results[0][0]
-            self._target_crs.setCrs(
-                QgsCoordinateReferenceSystem(f"EPSG:{top_epsg}"))
+            # If the user has already chosen a CRS, show it as the
+            # current entry at the top so the combo reflects state.
+            if self._chosen_crs is not None:
+                _add_header("Current selection")
+                _add_epsg(
+                    self._chosen_crs_epsg() or 0,
+                    self._chosen_crs_label or self._format_crs_label(
+                        self._chosen_crs))
+                chosen_idx = model.rowCount() - 1
+
+            if suggestions:
+                _add_header("AOI-based suggestions")
+                for code, name, reason in suggestions:
+                    label = f"EPSG:{code} — {name}"
+                    if reason:
+                        label += f"  [{reason}]"
+                    _add_epsg(code, label)
+
+            if recents:
+                _add_header("Recent")
+                for code, label in recents:
+                    _add_epsg(code, label)
+
+        _add_header("Other")
+        _add_action("Type EPSG code…", self._CRS_ROLE_EPSG_INPUT)
+        _add_action("Browse all CRSes (QGIS picker)…", self._CRS_ROLE_BROWSE)
+
+        self._crs_combo.blockSignals(True)
+        self._crs_combo.setModel(model)
+        if chosen_idx >= 0:
+            self._crs_combo.setCurrentIndex(chosen_idx)
+        else:
+            # Find first selectable row to land on.
+            for r in range(model.rowCount()):
+                if model.item(r).isSelectable():
+                    self._crs_combo.setCurrentIndex(r)
+                    break
+        self._crs_combo.blockSignals(False)
+
+    def _chosen_crs_epsg(self):
+        """Return the integer EPSG code of the currently chosen CRS, or None."""
+        if self._chosen_crs is None:
+            return None
+        authid = self._chosen_crs.authid() or ""
+        if authid.startswith("EPSG:"):
+            try:
+                return int(authid.split(":", 1)[1])
+            except ValueError:
+                return None
+        return None
+
+    def _format_crs_label(self, crs):
+        """Build a human-readable label for a QgsCoordinateReferenceSystem."""
+        try:
+            authid = crs.authid() or ""
+            description = crs.description() or ""
+            if authid and description:
+                return f"{authid} — {description}"
+            return authid or description or "(custom CRS)"
+        except Exception:
+            return "(custom CRS)"
+
+    def _set_chosen_crs_from_epsg(self, epsg: int):
+        """Set self._chosen_crs from an EPSG integer; refresh combo state."""
+        crs = QgsCoordinateReferenceSystem(f"EPSG:{int(epsg)}")
+        if not crs.isValid():
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                f"EPSG:{epsg} is not a valid CRS code.")
+            return
+        self._chosen_crs = crs
+        self._chosen_crs_label = self._format_crs_label(crs)
+        self._rebuild_crs_combo()
+
+    def _set_chosen_crs(self, crs):
+        """Set self._chosen_crs from a QgsCoordinateReferenceSystem."""
+        if crs is None or not crs.isValid():
+            return
+        self._chosen_crs = crs
+        self._chosen_crs_label = self._format_crs_label(crs)
+        self._rebuild_crs_combo()
+
+    def _on_crs_combo_picked(self, idx):
+        """Handle a user pick from the CRS combobox."""
+        if idx < 0:
+            return
+        model = self._crs_combo.model()
+        if model is None:
+            return
+        item = model.item(idx)
+        if item is None:
+            return
+        role = item.data(Qt.UserRole)
+        if role == self._CRS_ROLE_HEADER or role == self._CRS_ROLE_NONE:
+            return  # disabled, shouldn't fire — but be defensive
+        if role == self._CRS_ROLE_BROWSE:
+            self._on_crs_browse_clicked()
+            return
+        if role == self._CRS_ROLE_EPSG_INPUT:
+            self._on_crs_epsg_input()
+            return
+        if isinstance(role, int):
+            self._set_chosen_crs_from_epsg(role)
+            return
+
+    def _on_crs_browse_clicked(self):
+        """Open the QGIS CRS picker dialog."""
+        dlg = QgsProjectionSelectionDialog(self)
+        if self._chosen_crs is not None:
+            dlg.setCrs(self._chosen_crs)
+        if dlg.exec_():
+            crs = dlg.crs()
+            if crs is not None and crs.isValid():
+                self._set_chosen_crs(crs)
+            else:
+                # User confirmed an invalid/empty CRS; rebuild to drop
+                # any partial state.
+                self._rebuild_crs_combo()
+        else:
+            # Cancelled — restore the combo display.
+            self._rebuild_crs_combo()
+
+    def _on_crs_epsg_input(self):
+        """Prompt the user to type an EPSG code."""
+        text, ok = QInputDialog.getText(
+            self, "Enter EPSG code",
+            "EPSG code (e.g. 5266):")
+        if not ok:
+            self._rebuild_crs_combo()
+            return
+        text = (text or "").strip().upper()
+        if text.startswith("EPSG:"):
+            text = text.split(":", 1)[1].strip()
+        try:
+            epsg = int(text)
+        except ValueError:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                f"'{text}' is not a valid EPSG code.")
+            self._rebuild_crs_combo()
+            return
+        self._set_chosen_crs_from_epsg(epsg)
+
+    def _recent_target_crses(self, n: int = 10):
+        """Read the run-history JSON and return the last N unique
+        target_crs values as ``[(epsg_int, label), ...]``.
+
+        Each label includes the relative-age string e.g.
+        ``EPSG:5266 — DRUKREF 03 (used 2 runs ago)``. CRSes are de-
+        duplicated by EPSG; the most recent occurrence wins.
+        """
+        try:
+            entries = self._load_history()
+        except Exception:
+            return []
+        seen = {}
+        order = []
+        for i, entry in enumerate(entries):
+            crs_str = entry.get("target_crs") or ""
+            if not crs_str:
+                # Older entries pre-20i didn't track this. Skip.
+                continue
+            crs_str = str(crs_str).strip()
+            if not crs_str.startswith("EPSG:"):
+                continue
+            try:
+                epsg = int(crs_str.split(":", 1)[1])
+            except (ValueError, IndexError):
+                continue
+            if epsg in seen:
+                continue
+            seen[epsg] = i  # 0 = most recent run
+            order.append(epsg)
+            if len(order) >= n:
+                break
+        out = []
+        for epsg in order:
+            crs = QgsCoordinateReferenceSystem(f"EPSG:{epsg}")
+            name = crs.description() if crs.isValid() else ""
+            age_idx = seen[epsg]
+            if age_idx == 0:
+                age = "(used most recently)"
+            elif age_idx == 1:
+                age = "(used 1 run ago)"
+            else:
+                age = f"(used {age_idx} runs ago)"
+            label = f"EPSG:{epsg}"
+            if name:
+                label += f" — {name}"
+            label += f" {age}"
+            out.append((epsg, label))
+        return out
+
+    def _on_section_toggled(self, section, expanded: bool):
+        """Accordion: when one section expands, collapse the others.
+
+        Only the top-level sections registered in self._top_level_sections
+        participate -- nested collapsibles inside §3 (Buffer Exceptions,
+        Custom 1/2/3) are independent.
+        """
+        if not expanded:
+            return  # collapse events don't trigger the accordion
+        if self._in_accordion_dispatch:
+            return  # avoid reentrant storms when we collapse others
+        self._in_accordion_dispatch = True
+        try:
+            for other in self._top_level_sections:
+                if other is not section and other.is_expanded():
+                    other.set_expanded(False)
+        finally:
+            self._in_accordion_dispatch = False
 
     def _refresh_prefix_preview(self, *_):
         """Render the live output-filename prefix preview in §0.
@@ -465,20 +754,6 @@ class PffDockWidget(QgsDockWidget):
         except Exception:
             sample = "—"
         self._prefix_preview.setText(f"Prefix preview: {sample}")
-
-    def _on_crs_suggestion_picked(self, idx):
-        """When the user picks a suggestion, update the manual CRS picker
-        too so a downstream Run sees a consistent value."""
-        if idx < 0:
-            return
-        epsg = self._crs_suggest_combo.itemData(idx)
-        if epsg is None:
-            return
-        try:
-            self._target_crs.setCrs(
-                QgsCoordinateReferenceSystem(f"EPSG:{int(epsg)}"))
-        except Exception:
-            pass
 
     def _build_section_1_time_period(self):
         sec = CollapsibleSection("1. Time Period", expanded=False)
@@ -992,8 +1267,22 @@ class PffDockWidget(QgsDockWidget):
         # param is parsed and dropped) -- replay still works because
         # the algorithm now ignores it regardless.
         params[FW.AUTO_UTM] = False
-        params[FW.TARGET_CRS] = self._target_crs.crs()
-        params[FW.TARGET_CRS_EPSG] = self._target_crs_epsg.text().strip()
+        # P1.30 batch 20i: single chosen CRS feeds both algorithm params.
+        # TARGET_CRS_EPSG (string) takes priority; TARGET_CRS (object)
+        # mirrors it so the auto-Processing dialog also shows correctly
+        # if the user replays via Processing > History.
+        epsg = self._chosen_crs_epsg()
+        if epsg is not None:
+            params[FW.TARGET_CRS_EPSG] = str(epsg)
+            params[FW.TARGET_CRS] = QgsCoordinateReferenceSystem(
+                f"EPSG:{epsg}")
+        elif self._chosen_crs is not None and self._chosen_crs.isValid():
+            # Custom (non-EPSG) CRS — pass the object only.
+            params[FW.TARGET_CRS_EPSG] = ""
+            params[FW.TARGET_CRS] = self._chosen_crs
+        else:
+            params[FW.TARGET_CRS_EPSG] = ""
+            params[FW.TARGET_CRS] = QgsCoordinateReferenceSystem()
         params[FW.AOI_BUFFER] = self._aoi_buffer.value()
 
         # §1 Time Period (single source of truth via _current_year_text)
@@ -1334,10 +1623,27 @@ class PffDockWidget(QgsDockWidget):
         try:
             entries = self._load_history()
             from datetime import datetime
+            # P1.30 batch 20i: capture the chosen CRS at top level so
+            # _recent_target_crses() can read it without parsing every
+            # entry's full params blob. Prefer EPSG, fall back to authid.
+            crs_str = ""
+            epsg_val = (params.get(FW.TARGET_CRS_EPSG) or "").strip()
+            if epsg_val:
+                try:
+                    crs_str = f"EPSG:{int(epsg_val)}"
+                except (ValueError, TypeError):
+                    pass
+            if not crs_str:
+                tc = params.get(FW.TARGET_CRS)
+                if isinstance(tc, QgsCoordinateReferenceSystem):
+                    crs_str = tc.authid() or ""
+                elif isinstance(tc, str):
+                    crs_str = tc
             entry = {
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "iso3": params.get(FW.ISO3_PREFIX, "") or "",
                 "output": params.get(FW.OUTPUT_FOLDER, "") or "",
+                "target_crs": crs_str,
                 "status": status,
                 "params": _serialise_params(params),
             }
@@ -1458,7 +1764,26 @@ class PffDockWidget(QgsDockWidget):
         self._output_folder.setFilePath(s(FW.OUTPUT_FOLDER))
         # P1.30 batch 20b.1: AUTO_UTM is deprecated and the dock no
         # longer has a checkbox for it. Saved values are ignored.
-        self._target_crs_epsg.setText(s(FW.TARGET_CRS_EPSG))
+        # P1.30 batch 20i: restore _chosen_crs from saved EPSG (preferred)
+        # or QgsCoordinateReferenceSystem authid string. Empty / unset =
+        # leave the dock with no chosen CRS so the user must pick again.
+        self._chosen_crs = None
+        self._chosen_crs_label = ""
+        crs_epsg_str = s(FW.TARGET_CRS_EPSG)
+        crs_str = s(FW.TARGET_CRS)  # may be authid like "EPSG:5266"
+        if crs_epsg_str:
+            try:
+                self._set_chosen_crs_from_epsg(int(crs_epsg_str))
+            except (TypeError, ValueError):
+                pass
+        elif crs_str:
+            try:
+                crs = QgsCoordinateReferenceSystem(str(crs_str))
+                if crs.isValid():
+                    self._set_chosen_crs(crs)
+            except Exception:
+                pass
+        self._rebuild_crs_combo()
         self._aoi_buffer.setValue(n(FW.AOI_BUFFER))
 
         # §1 Time Period — restore mode based on the saved YEAR value.
