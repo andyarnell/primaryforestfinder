@@ -1189,7 +1189,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.11.5"
+    PFF_VERSION = "0.11.6"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1206,22 +1206,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         _year_tag = (self.parameterAsString(
             parameters, self.YEAR, context) or "").strip() or "2020"
         feedback.pushInfo(f"Year tag: {_year_tag}")
-        # P1.30 batch 20c: AOI-name auto-prefix for sub-national runs.
-        # Read the AOI layer's name (sanitised; generic names dropped)
-        # once here; the _out() closure uses it as part of the filename
-        # prefix when set. Falls back to ISO3-only naming for whole-
-        # country / no-AOI runs.
+        # P1.30 batch 20j: AOI-name auto-prefix dropped. The 20c bet
+        # was that users would name their AOI vectors descriptively
+        # (e.g. "bhutan_aberdares") but real prepared data has noisy
+        # mechanical names (e.g. "BTN_0_aoi_bhutan_vector_16h03m") that
+        # produce ugly output filenames. Disambiguation now lives in
+        # the user-controlled output folder name. _aoi_label is kept as
+        # an empty placeholder so the generate_layer_name() signature
+        # still works; future batches can re-enable via a manual
+        # "Run label" field if needed.
         _aoi_label = ""
-        try:
-            _aoi_layer_for_label = self.parameterAsVectorLayer(
-                parameters, self.AOI, context)
-            if _aoi_layer_for_label is not None:
-                _aoi_label = _aoi_layer_for_label.name() or ""
-        except Exception:
-            _aoi_label = ""
-        if _aoi_label:
-            feedback.pushInfo(
-                f"AOI layer name (used in output prefix): {_aoi_label}")
 
         # Per-stage timing. _stage() closes the previous stage timer and
         # opens a new one; _close_last_stage() flushes the final stage

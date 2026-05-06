@@ -33,7 +33,8 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import (
     QgsApplication, QgsCoordinateReferenceSystem, QgsMapLayer,
-    QgsMapLayerProxyModel, QgsProcessingFeedback, QgsProject
+    QgsMapLayerProxyModel, QgsProcessingContext, QgsProcessingFeedback,
+    QgsProject, QgsRasterLayer, QgsVectorLayer
 )
 from qgis.gui import (
     QgsDockWidget, QgsFieldComboBox, QgsFileWidget,
@@ -44,6 +45,7 @@ from .collapsible_section import CollapsibleSection
 from .layer_picker import (
     DemSlopeLayerPicker, LayerOrFilePicker, SmartLayerPicker
 )
+from .pff_symbology import apply_pff_symbology
 from ..algorithms.full_workflow import FullWorkflowAlgorithm as FW
 from ..defaults import (
     AGRICULTURE_DIST as D_AGRI,
@@ -347,19 +349,18 @@ class PffDockWidget(QgsDockWidget):
         self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
         form.addRow("Output:", self._output_folder)
 
-        # P1.30 batch 20c: live preview of the output filename prefix.
-        # Updates from ISO3 / AOI layer name / year so the user sees
-        # exactly what will land on disk.
+        # P1.30 batch 20j: live preview of the output filename prefix.
+        # Built from ISO3 + year only -- AOI layer name no longer
+        # contributes (was the source of noisy mechanical-named
+        # filenames in 20c-20i). For sub-national runs, distinguish via
+        # the output folder name instead.
         self._prefix_preview = QLabel("Prefix: —")
         self._prefix_preview.setToolTip(
-            "Live preview of the output filename prefix. Built from "
-            "ISO3 + AOI layer name (sub-national label) + year. AOI "
-            "layer name doubles as the sub-national label -- name your "
-            "AOI descriptively for trends/admin runs (e.g. "
-            "'bhutan_aberdares' instead of 'aoi').")
+            "Live preview of the output filename. Built from "
+            "ISO3 + year. For sub-national runs, distinguish by the "
+            "output folder name (full control of disambiguation).")
         self._prefix_preview.setStyleSheet("color:#666; font-style:italic;")
         form.addRow("", self._prefix_preview)
-        self._aoi_picker.pathChanged.connect(self._refresh_prefix_preview)
 
         # P1.30 batch 20i: single CRS picker replacing the previous
         # Suggested-CRS dropdown + Manual CRS + EPSG fields. Items are
@@ -712,26 +713,15 @@ class PffDockWidget(QgsDockWidget):
     def _refresh_prefix_preview(self, *_):
         """Render the live output-filename prefix preview in §0.
 
-        Shows what `BTN_qgis_04a_primary_forest.tif` will actually look
-        like given the current ISO3 / AOI / year inputs. Built via the
-        same generate_layer_name() the algorithm uses, so what the user
-        sees here = what they get on disk.
+        Shows what `BTN_2020_qgis_04a_primary_forest.tif` will actually
+        look like given the current ISO3 + year inputs. P1.30 batch 20j:
+        the AOI layer name no longer feeds the prefix.
         """
         try:
             from ..utils import generate_layer_name, PLATFORM_QGIS
         except ImportError:
             return
         iso3 = self._iso3_edit.text().strip() or None
-        aoi_label = ""
-        # Prefer the loaded layer's name; fall back to the path basename.
-        loaded = self._aoi_picker.current_layer()
-        if loaded is not None:
-            aoi_label = loaded.name() or ""
-        else:
-            path = self._aoi_picker.path()
-            if path:
-                import os as _os
-                aoi_label = _os.path.splitext(_os.path.basename(path))[0]
         # 20f: use _current_year_text() as single source of truth.
         year_text = self._current_year_text()
         # Multi-year: preview shows what the FIRST year would produce
@@ -750,7 +740,7 @@ class PffDockWidget(QgsDockWidget):
         try:
             sample = generate_layer_name(
                 iso3, PLATFORM_QGIS, "04a", "primary_forest",
-                ext="tif", year=year, aoi_label=aoi_label)
+                ext="tif", year=year)
         except Exception:
             sample = "—"
         self._prefix_preview.setText(f"Prefix preview: {sample}")
@@ -1459,13 +1449,19 @@ class PffDockWidget(QgsDockWidget):
             else:
                 feedback.pushInfo("Starting workflow…")
                 QApplication.processEvents()
-                processing.run("pff:full_workflow", params, feedback=feedback)
+                # P1.30 batch 20j: project-bound context so the
+                # algorithm's addLayerToLoadOnCompletion list can be
+                # harvested + loaded with PFF symbology.
+                ctx = self._make_processing_context(feedback)
+                processing.run("pff:full_workflow", params,
+                               context=ctx, feedback=feedback)
                 if feedback.isCanceled():
                     status = "cancelled"
                     feedback.pushWarning("⚠ Workflow cancelled by user.")
                 else:
                     status = "finished"
                     feedback.pushInfo("✔ Workflow finished.")
+                    self._add_outputs_to_project(ctx)
         except Exception as e:
             if feedback.isCanceled():
                 status = "cancelled"
@@ -1592,12 +1588,17 @@ class PffDockWidget(QgsDockWidget):
                         year_params[name] = base_params.get(name)
             year_params[FW.YEAR] = year
             try:
+                # P1.30 batch 20j: per-iteration project-bound context
+                # so each year's outputs land in the project as that
+                # year completes (with PFF symbology applied).
+                ctx = self._make_processing_context(feedback)
                 processing.run("pff:full_workflow", year_params,
-                               feedback=feedback)
+                               context=ctx, feedback=feedback)
                 if feedback.isCanceled():
                     feedback.pushWarning(
                         f"⚠ Cancelled during year {year}.")
                     return
+                self._add_outputs_to_project(ctx)
             except Exception as e:
                 if feedback.isCanceled():
                     feedback.pushWarning(
@@ -1608,6 +1609,68 @@ class PffDockWidget(QgsDockWidget):
                     "remaining years.")
         feedback.pushInfo(
             f"\n✔ Multi-year run complete ({len(year_list)} years).")
+
+    # ────────────────────────────────────────────────────────────────
+    # P1.30 batch 20j: project-bound context + add-to-map helpers
+    # ────────────────────────────────────────────────────────────────
+    def _make_processing_context(self, feedback) -> QgsProcessingContext:
+        """Build a project-bound QgsProcessingContext for one run.
+
+        The dock's processing.run() calls have to pass a context bound
+        to the active QgsProject so the algorithm's
+        addLayerToLoadOnCompletion list can be harvested and loaded
+        post-run. Without setProject(), the algorithm's registrations
+        land on a detached context that gets discarded.
+        """
+        ctx = QgsProcessingContext()
+        ctx.setFeedback(feedback)
+        ctx.setProject(QgsProject.instance())
+        return ctx
+
+    def _add_outputs_to_project(self, ctx) -> None:
+        """Walk ctx.layersToLoadOnCompletion() and add each layer to
+        the project, applying PFF symbology to recognised binary
+        rasters.
+
+        Called after a successful processing.run() from the dock.
+        Tolerates missing files / invalid layers silently -- a single
+        bad entry shouldn't stop the rest from loading.
+        """
+        try:
+            details_map = ctx.layersToLoadOnCompletion() or {}
+        except Exception as e:
+            self._log.append(
+                f"<span style='color:#888;'>(add-to-map skipped: "
+                f"{_html_escape(str(e))})</span>")
+            return
+        if not details_map:
+            return
+        loaded = 0
+        for path, details in details_map.items():
+            try:
+                if not path or not os.path.exists(path):
+                    continue
+                name = (getattr(details, "name", None) or "").strip() \
+                    or os.path.splitext(os.path.basename(path))[0]
+                ext = os.path.splitext(path)[1].lower()
+                if ext in (".gpkg", ".shp", ".geojson", ".kml", ".gml"):
+                    layer = QgsVectorLayer(path, name, "ogr")
+                else:
+                    layer = QgsRasterLayer(path, name)
+                if not layer.isValid():
+                    continue
+                apply_pff_symbology(layer, path)
+                QgsProject.instance().addMapLayer(layer)
+                loaded += 1
+            except Exception as e:
+                self._log.append(
+                    f"<span style='color:#888;'>(skipped "
+                    f"{_html_escape(os.path.basename(path or ''))}: "
+                    f"{_html_escape(str(e))})</span>")
+        if loaded:
+            self._log.append(
+                f"<span>Added {loaded} layer(s) to the map "
+                "with PFF symbology.</span>")
 
     # ────────────────────────────────────────────────────────────────
     # Run history
