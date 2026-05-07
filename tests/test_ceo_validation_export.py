@@ -246,6 +246,10 @@ def _params_template(input_path: str, out_dir: str) -> dict:
         A.OUTPUT_FOLDER: out_dir,
         A.OUTPUT_GEOPACKAGE: True,
         A.OUTPUT_ZIPPED_SHAPEFILE: False,
+        # Existing rules assert spatial properties in the projected
+        # source CRS. Default to NOT reproject so those assertions stay
+        # valid; rule 7 explicitly tests the default-True path.
+        A.REPROJECT_TO_WGS84: False,
         A.ADD_PROVENANCE_FIELDS: True,
         A.ALLOW_EMPTY_STRATUM: False,
     }
@@ -504,6 +508,50 @@ def test_rule6_ceo_file_size_sanity(tmp_path):
             prj_present = any(n.endswith(".prj") for n in names)
             assert shp_present and dbf_present and prj_present, (
                 f"{z.name} missing core SHP files: {names}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# RULE 7 — REPROJECT_TO_WGS84 default: outputs are EPSG:4326
+# ──────────────────────────────────────────────────────────────────────
+def test_rule7_reproject_to_wgs84_default(tmp_path):
+    _ensure_qgis()
+    out_dir = tmp_path / "rule7"
+    out_dir.mkdir()
+    A = CeoValidationExportAlgorithm
+    params = _params_template(str(BHUTAN_06C), str(out_dir))
+    # Override: switch ON the reproject (default in real use, but the
+    # template sets it False so other rules pass).
+    params[A.REPROJECT_TO_WGS84] = True
+    params[A.EXPORT_METHOD] = A.METHOD_CIRCULAR
+    params[A.SAMPLE_GEOM_POINT] = True
+    params[A.SAMPLE_GEOM_SQUARE] = True
+    params[A.N_SAMPLES] = 10
+    params[A.RANDOM_SEED] = 17
+
+    processing.run("pff:ceo_validation_export", params)
+
+    expected = ("ceo_plot_boundaries.gpkg",
+                "ceo_samples_points.gpkg",
+                "ceo_samples_squares.gpkg")
+    for fname in expected:
+        path = str(out_dir / fname)
+        assert os.path.exists(path), f"Missing: {fname}"
+        layer = QgsVectorLayer(path, "tmp", "ogr")
+        assert layer.isValid(), f"Invalid output: {path}"
+        authid = layer.crs().authid()
+        assert authid == "EPSG:4326", (
+            f"{fname} CRS is {authid!r}, expected 'EPSG:4326' "
+            "after reproject")
+        # Sanity: geometries are in degree-space (Bhutan ≈ 89-92E, 26-28N)
+        for feat in layer.getFeatures():
+            bbox = feat.geometry().boundingBox()
+            assert 80 < bbox.xMinimum() < 100, (
+                f"X coords look wrong for WGS84 Bhutan: "
+                f"{bbox.xMinimum()}")
+            assert 25 < bbox.yMinimum() < 30, (
+                f"Y coords look wrong for WGS84 Bhutan: "
+                f"{bbox.yMinimum()}")
+            break  # one feature is enough
 
 
 # ──────────────────────────────────────────────────────────────────────

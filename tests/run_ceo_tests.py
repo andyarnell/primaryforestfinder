@@ -60,6 +60,7 @@ def main():
         "test_rule4_plotid_sampleid_consistency",
         "test_rule5_geographic_crs_aborts",
         "test_rule6_ceo_file_size_sanity",
+        "test_rule7_reproject_to_wgs84_default",
     ]
     results = {n: run_one(n) for n in tests}
     print("\n=== Summary ===")

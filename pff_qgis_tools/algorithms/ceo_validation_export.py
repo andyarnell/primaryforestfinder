@@ -154,6 +154,7 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     OUTPUT_GEOPACKAGE = "OUTPUT_GEOPACKAGE"
     OUTPUT_ZIPPED_SHAPEFILE = "OUTPUT_ZIPPED_SHAPEFILE"
+    REPROJECT_TO_WGS84 = "REPROJECT_TO_WGS84"
     ADD_PROVENANCE_FIELDS = "ADD_PROVENANCE_FIELDS"
     ALLOW_EMPTY_STRATUM = "ALLOW_EMPTY_STRATUM"
 
@@ -281,6 +282,10 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
             "Write zipped Shapefile outputs (CEO upload)",
             defaultValue=False))
         self.addParameter(QgsProcessingParameterBoolean(
+            self.REPROJECT_TO_WGS84,
+            "Reproject outputs to WGS84 (EPSG:4326)",
+            defaultValue=True))
+        self.addParameter(QgsProcessingParameterBoolean(
             self.ADD_PROVENANCE_FIELDS,
             "Add provenance fields (class_value, class_name, "
             "radius_m, ring_width_m, sample_type, sampling_method, "
@@ -359,10 +364,25 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
             parameters, self.OUTPUT_GEOPACKAGE, context)
         write_zip = self.parameterAsBool(
             parameters, self.OUTPUT_ZIPPED_SHAPEFILE, context)
+        reproject_to_wgs84 = self.parameterAsBool(
+            parameters, self.REPROJECT_TO_WGS84, context)
         add_provenance = self.parameterAsBool(
             parameters, self.ADD_PROVENANCE_FIELDS, context)
         allow_empty = self.parameterAsBool(
             parameters, self.ALLOW_EMPTY_STRATUM, context)
+
+        # P1.30 batch 21.1: target output CRS. CEO ingests WGS84, so the
+        # default flips outputs to EPSG:4326 even though all sampling +
+        # buffering happens in the projected source CRS (so distances
+        # remain in metres). User can untick to keep outputs in the
+        # source CRS for QGIS-side post-processing.
+        if reproject_to_wgs84:
+            output_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+            feedback.pushInfo(
+                "Outputs will be reprojected to WGS84 (EPSG:4326) for "
+                "CEO upload.")
+        else:
+            output_crs = layer.crs()
 
         os.makedirs(out_dir, exist_ok=True)
 
@@ -456,14 +476,14 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
 
         if method == self.METHOD_SIMPLE_POINTS:
             outputs.update(self._write_simple_points(
-                out_dir, layer, all_centres, plotid_seq,
+                out_dir, layer, output_crs, all_centres, plotid_seq,
                 add_provenance, provenance_meta,
                 write_gpkg, write_zip,
                 primary_val, other_val,
                 feedback))
         else:
             outputs.update(self._write_circular(
-                out_dir, layer, all_centres, plotid_seq,
+                out_dir, layer, output_crs, all_centres, plotid_seq,
                 radius, ring_w, gen_point, gen_square, square_side,
                 add_provenance, provenance_meta,
                 write_gpkg, write_zip,
@@ -569,18 +589,50 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
             return "other forest"
         return f"class_{class_value}"
 
-    def _write_layer(self, fields, geometry_type, src_crs, features,
-                     out_path, layer_name, feedback):
+    def _write_layer(self, fields, geometry_type, src_crs, target_crs,
+                     features, out_path, layer_name, feedback):
+        """Write *features* (built in *src_crs*) to a GPKG layer in
+        *target_crs*. If the two CRSes differ, geometries are
+        transformed before write.
+        """
         opts = QgsVectorFileWriter.SaveVectorOptions()
         opts.driverName = "GPKG"
         opts.layerName = layer_name
         opts.fileEncoding = "UTF-8"
         ctx = QgsProject.instance().transformContext()
-        # Build an in-memory provider then save -- simpler than the
-        # raw VectorFileWriter writeFeature loop and avoids the
-        # signature discrepancy between QGIS minor versions.
+
+        # If reprojection is needed, transform each feature's geometry
+        # before adding it to the in-memory layer (which will be in
+        # target_crs). Sampling + buffering ran in src_crs (metres);
+        # the transform is purely an output coordinate change.
+        same_crs = (src_crs.authid() and
+                    src_crs.authid() == target_crs.authid())
+        if not same_crs:
+            transform = QgsCoordinateTransform(
+                src_crs, target_crs, QgsProject.instance())
+            transformed = []
+            for f in features:
+                geom = QgsGeometry(f.geometry())
+                try:
+                    geom.transform(transform)
+                except Exception as e:
+                    raise QgsProcessingException(
+                        f"Reprojection {src_crs.authid()} -> "
+                        f"{target_crs.authid()} failed: {e}")
+                new_f = QgsFeature(fields)
+                new_f.setGeometry(geom)
+                # Preserve attribute values
+                for fld in fields:
+                    new_f.setAttribute(fld.name(),
+                                       f.attribute(fld.name()))
+                transformed.append(new_f)
+            features = transformed
+            feedback.pushDebugInfo(
+                f"  reprojected {len(features)} features to "
+                f"{target_crs.authid()}")
+
         mem = QgsVectorLayer(
-            f"{geometry_type}?crs={src_crs.authid()}",
+            f"{geometry_type}?crs={target_crs.authid()}",
             layer_name, "memory")
         mem_pr = mem.dataProvider()
         mem_pr.addAttributes(list(fields))
@@ -595,7 +647,8 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(
             f"Wrote {len(features)} features -> {out_path}")
 
-    def _write_simple_points(self, out_dir, src_layer, centres, plotids,
+    def _write_simple_points(self, out_dir, src_layer, output_crs,
+                             centres, plotids,
                              add_provenance, provenance_meta,
                              write_gpkg, write_zip,
                              primary_val, other_val, feedback):
@@ -629,8 +682,9 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
 
         gpkg = os.path.join(out_dir, "ceo_point_plots.gpkg")
         if write_gpkg or write_zip:  # always need GPKG to source the zip
-            self._write_layer(fields, "Point", src_layer.crs(), feats,
-                              gpkg, "ceo_point_plots", feedback)
+            self._write_layer(fields, "Point", src_layer.crs(),
+                              output_crs, feats, gpkg,
+                              "ceo_point_plots", feedback)
             outputs["ceo_point_plots"] = gpkg
         if write_zip:
             zip_path = os.path.join(out_dir, "ceo_point_plots.zip")
@@ -638,8 +692,8 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
             outputs["ceo_point_plots_zip"] = zip_path
         return outputs
 
-    def _write_circular(self, out_dir, src_layer, centres, plotids,
-                        radius, ring_w, gen_point, gen_square,
+    def _write_circular(self, out_dir, src_layer, output_crs, centres,
+                        plotids, radius, ring_w, gen_point, gen_square,
                         square_side,
                         add_provenance, provenance_meta,
                         write_gpkg, write_zip,
@@ -686,7 +740,7 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
             ring_feats.append(f)
         gpkg_rings = os.path.join(out_dir, "ceo_plot_boundaries.gpkg")
         self._write_layer(plot_fields, "Polygon", src_layer.crs(),
-                          ring_feats, gpkg_rings,
+                          output_crs, ring_feats, gpkg_rings,
                           "ceo_plot_boundaries", feedback)
         outputs["ceo_plot_boundaries"] = gpkg_rings
         if write_zip:
@@ -722,7 +776,7 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
                 point_feats.append(f)
             gpkg_points = os.path.join(out_dir, "ceo_samples_points.gpkg")
             self._write_layer(sample_fields, "Point", src_layer.crs(),
-                              point_feats, gpkg_points,
+                              output_crs, point_feats, gpkg_points,
                               "ceo_samples_points", feedback)
             outputs["ceo_samples_points"] = gpkg_points
             if write_zip:
@@ -758,7 +812,7 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
                 square_feats.append(f)
             gpkg_sq = os.path.join(out_dir, "ceo_samples_squares.gpkg")
             self._write_layer(sample_fields, "Polygon", src_layer.crs(),
-                              square_feats, gpkg_sq,
+                              output_crs, square_feats, gpkg_sq,
                               "ceo_samples_squares", feedback)
             outputs["ceo_samples_squares"] = gpkg_sq
             if write_zip:

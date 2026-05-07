@@ -1303,10 +1303,17 @@ class PffDockWidget(QgsDockWidget):
             layer_filter=QgsMapLayerProxyModel.PolygonLayer,
             file_filter="Vector (*.gpkg *.shp *.geojson);;All (*.*)",
             browse_caption="Pick forest / primary forest vector")
+        self._ceo_input.setToolTip(
+            "Forest / primary forest polygon layer (e.g. PFF stage-6 "
+            "nested vector). Must be in a projected CRS with metre "
+            "units.")
         form.addRow("Input vector:", self._ceo_input)
 
         self._ceo_class_field = QgsFieldComboBox()
         self._ceo_class_field.setAllowEmptyFieldName(False)
+        self._ceo_class_field.setToolTip(
+            "Integer field that distinguishes primary forest from other "
+            "forest. Auto-picks 'level' for PFF stage-6 outputs.")
         # Cap natural width so this combo doesn't dominate the field column.
         self._ceo_class_field.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -1317,10 +1324,16 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_primary_value.setRange(-99, 9999)
         self._ceo_primary_value.setValue(2)
         self._ceo_primary_value.setMaximumWidth(70)
+        self._ceo_primary_value.setToolTip(
+            "Field value that flags primary-forest features "
+            "(default 2 in PFF outputs).")
         self._ceo_other_value = QSpinBox()
         self._ceo_other_value.setRange(-99, 9999)
         self._ceo_other_value.setValue(1)
         self._ceo_other_value.setMaximumWidth(70)
+        self._ceo_other_value.setToolTip(
+            "Field value that flags other-forest features "
+            "(default 1 in PFF outputs).")
         form.addRow("Class values:", _row(
             "Primary:", self._ceo_primary_value, 8,
             "Other:", self._ceo_other_value))
@@ -1330,6 +1343,9 @@ class PffDockWidget(QgsDockWidget):
             ["All forest", "Primary only", "Other forest only"])
         self._ceo_domain.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._ceo_domain.setToolTip(
+            "Which class(es) to sample from. Ignored when 'Stratified "
+            "by class' is ticked (stratified always samples both).")
         form.addRow("Sampling domain:", self._ceo_domain)
 
         self._ceo_stratified = QCheckBox("Stratified by class")
@@ -1337,38 +1353,59 @@ class PffDockWidget(QgsDockWidget):
             "When ticked, sample N_primary + N_other independently per "
             "class. When unticked, sample N_total uniformly across the "
             "selected sampling domain.")
+        self._ceo_stratified.toggled.connect(
+            self._on_ceo_stratified_toggled)
         form.addRow("", self._ceo_stratified)
 
         self._ceo_n_total = QSpinBox()
         self._ceo_n_total.setRange(1, 100000)
         self._ceo_n_total.setValue(50)
         self._ceo_n_total.setMaximumWidth(110)
+        self._ceo_n_total.setToolTip(
+            "Total number of random samples to generate. Used in "
+            "non-stratified mode only.")
         form.addRow("N samples:", _row(self._ceo_n_total))
 
         self._ceo_n_primary = QSpinBox()
         self._ceo_n_primary.setRange(0, 100000)
         self._ceo_n_primary.setValue(25)
         self._ceo_n_primary.setMaximumWidth(80)
+        self._ceo_n_primary.setToolTip(
+            "Random samples to generate inside primary-forest polygons. "
+            "Used in stratified mode only.")
         self._ceo_n_other = QSpinBox()
         self._ceo_n_other.setRange(0, 100000)
         self._ceo_n_other.setValue(25)
         self._ceo_n_other.setMaximumWidth(80)
+        self._ceo_n_other.setToolTip(
+            "Random samples to generate inside other-forest polygons. "
+            "Used in stratified mode only.")
         form.addRow("N per class:", _row(
             "Primary:", self._ceo_n_primary, 8,
             "Other:", self._ceo_n_other))
 
+        # Min spacing + Random seed moved into the Advanced sub-section
+        # below to keep §8 default uncluttered. Widgets stay top-level
+        # attributes so handlers + collect_params keep working.
         self._ceo_min_distance = QDoubleSpinBox()
         self._ceo_min_distance.setRange(0, 1000000)
         self._ceo_min_distance.setValue(0)
         self._ceo_min_distance.setSuffix(" m")
         self._ceo_min_distance.setDecimals(0)
         self._ceo_min_distance.setMaximumWidth(110)
-        form.addRow("Min distance:", _row(self._ceo_min_distance))
+        self._ceo_min_distance.setToolTip(
+            "Minimum distance between any two sample centres. 0 = no "
+            "constraint. Useful to reduce overlap of interpretation "
+            "areas — but it is NOT the fix for the ring-bite issue "
+            "(rings are built per-point regardless).")
 
         self._ceo_seed = QLineEdit()
         self._ceo_seed.setPlaceholderText("blank = system random")
         self._ceo_seed.setMaximumWidth(160)
-        form.addRow("Random seed:", _row(self._ceo_seed))
+        self._ceo_seed.setToolTip(
+            "Integer seed for reproducible sampling. Leave blank for "
+            "system-random (different each run). Saved into provenance "
+            "fields when those are enabled.")
 
         self._ceo_method = QComboBox()
         self._ceo_method.addItems(
@@ -1376,6 +1413,11 @@ class PffDockWidget(QgsDockWidget):
              "Custom circular ring boundaries"])
         self._ceo_method.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._ceo_method.setToolTip(
+            "Simple = point centres only (CEO renders a default ~500 m "
+            "visualisation buffer). Custom circular = thin ring "
+            "polygons + your choice of sample geometry; gives you "
+            "control over the interpretation radius.")
         self._ceo_method.currentIndexChanged.connect(
             self._on_ceo_method_changed)
         form.addRow("Export method:", self._ceo_method)
@@ -1386,19 +1428,36 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_radius.setSuffix(" m")
         self._ceo_radius.setDecimals(0)
         self._ceo_radius.setMaximumWidth(110)
+        self._ceo_radius.setToolTip(
+            "Half-width of the interpretation area for each plot. The "
+            "ring's inner radius. Default 2000 m matches a 2 km plot "
+            "used in many CEO workshops.")
         self._ceo_ring_w = QDoubleSpinBox()
         self._ceo_ring_w.setRange(0.1, 1000)
         self._ceo_ring_w.setValue(1)
         self._ceo_ring_w.setSuffix(" m")
         self._ceo_ring_w.setDecimals(1)
         self._ceo_ring_w.setMaximumWidth(90)
+        self._ceo_ring_w.setToolTip(
+            "Thickness of the ring polygon (outer_radius − inner_"
+            "radius). 1 m keeps the ring visible at typical CEO zoom "
+            "levels without obscuring the imagery.")
         form.addRow("Circular:", _row(
             "Radius:", self._ceo_radius, 8,
             "Ring:", self._ceo_ring_w))
 
         self._ceo_sample_point = QCheckBox("Centre point")
         self._ceo_sample_point.setChecked(True)
+        self._ceo_sample_point.setToolTip(
+            "Emit a centre-point sample layer. Each row's "
+            "PLOTID == SAMPLEID.")
         self._ceo_sample_square = QCheckBox("1 ha square")
+        self._ceo_sample_square.setToolTip(
+            "Emit a 1 ha square sample layer (separate file). Centred "
+            "on the random point. PLOTID and SAMPLEID also match per "
+            "row.")
+        self._ceo_sample_square.toggled.connect(
+            self._on_ceo_sample_square_toggled)
         form.addRow("Sample geom:", _row(
             self._ceo_sample_point, self._ceo_sample_square))
 
@@ -1408,18 +1467,42 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_square_size.setSuffix(" m")
         self._ceo_square_size.setDecimals(0)
         self._ceo_square_size.setMaximumWidth(110)
+        self._ceo_square_size.setToolTip(
+            "Side length of the 1 ha square sample. Default 100 m → "
+            "1 hectare.")
         form.addRow("Square size:", _row(self._ceo_square_size))
 
         self._ceo_output_folder = QgsFileWidget()
         self._ceo_output_folder.setStorageMode(QgsFileWidget.GetDirectory)
+        self._ceo_output_folder.setToolTip(
+            "Folder where ceo_*.gpkg / .zip files are written. "
+            "Disambiguate runs via the folder name "
+            "(e.g. BTN/aberdares_2020).")
         form.addRow("Output folder:", self._ceo_output_folder)
 
+        # Output format + provenance moved into Advanced sub-section.
         self._ceo_out_gpkg = QCheckBox("GeoPackage")
         self._ceo_out_gpkg.setChecked(True)
+        self._ceo_out_gpkg.setToolTip(
+            "Write outputs as .gpkg (single file, full attribute "
+            "names).")
         self._ceo_out_zip = QCheckBox("Zipped SHP (CEO upload)")
         self._ceo_out_zip.setChecked(True)
-        form.addRow("Output format:", _row(
-            self._ceo_out_gpkg, self._ceo_out_zip))
+        self._ceo_out_zip.setToolTip(
+            "Write outputs as zipped .shp (CEO's most reliable upload "
+            "format). Note: DBF truncates field names > 10 chars "
+            "(class_value → class_valu, etc.).")
+
+        self._ceo_reproject_wgs84 = QCheckBox(
+            "Reproject outputs to WGS84 (EPSG:4326)")
+        self._ceo_reproject_wgs84.setChecked(True)
+        self._ceo_reproject_wgs84.setToolTip(
+            "Default ON. CEO uses WGS84 (EPSG:4326) — geographic "
+            "lat/lon — as its standard upload format. Buffering and "
+            "sampling still happen in the projected source CRS so all "
+            "distances are correct in metres; only the final written "
+            "geometry is reprojected. Untick to keep outputs in the "
+            "input layer's projected CRS for QGIS-side post-processing.")
 
         self._ceo_provenance = QCheckBox("Add provenance fields")
         self._ceo_provenance.setToolTip(
@@ -1429,9 +1512,39 @@ class PffDockWidget(QgsDockWidget):
             "random_seed, source_id. Note: Shapefile DBF truncates "
             "names > 10 chars (class_value -> class_valu); GeoPackage "
             "keeps full names.")
-        form.addRow("", self._ceo_provenance)
 
+        # Stash form ref + row indices so the toggle handlers can hide
+        # rows. PyQt5 in QGIS 3.38 doesn't expose QFormLayout's Qt 5.15
+        # `setRowVisible`; we walk row items by index instead.
+        self._ceo_form = form
+        self._ceo_rows = {
+            "input": 0,
+            "class_field": 1,
+            "class_values": 2,
+            "domain": 3,
+            "stratified": 4,
+            "n_total": 5,
+            "n_per_class": 6,
+            "method": 7,
+            "circular": 8,
+            "sample_geom": 9,
+            "square_size": 10,
+            "output_folder": 11,
+        }
         body.addLayout(form)
+
+        # ── Advanced (collapsed by default) ──
+        adv = CollapsibleSection(
+            "Advanced", expanded=False, indent_px=8, header_bold=False)
+        adv_form = _form()
+        adv_form.addRow("Min spacing:", _row(self._ceo_min_distance))
+        adv_form.addRow("Random seed:", _row(self._ceo_seed))
+        adv_form.addRow("Output format:", _row(
+            self._ceo_out_gpkg, self._ceo_out_zip))
+        adv_form.addRow("", self._ceo_reproject_wgs84)
+        adv_form.addRow("", self._ceo_provenance)
+        adv.set_content_layout(adv_form)
+        body.addWidget(adv)
 
         self._ceo_run_btn = QPushButton("Generate CEO inputs ▶")
         self._ceo_run_btn.setMinimumHeight(28)
@@ -1440,8 +1553,14 @@ class PffDockWidget(QgsDockWidget):
 
         sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
-        # Initial state: hide circular-only widgets (method = simple).
-        self._on_ceo_method_changed(0)
+        # P1.30 batch 21.1: initial enabled state for the three
+        # mutually-exclusive control axes (stratified, method,
+        # sample-square). Each handler is idempotent and references the
+        # current widget values, so calling them in any order is safe.
+        self._on_ceo_method_changed(self._ceo_method.currentIndex())
+        self._on_ceo_stratified_toggled(self._ceo_stratified.isChecked())
+        self._on_ceo_sample_square_toggled(
+            self._ceo_sample_square.isChecked())
 
     def _refresh_ceo_class_field(self):
         layer = self._ceo_input.current_layer()
@@ -1453,10 +1572,69 @@ class PffDockWidget(QgsDockWidget):
                     self._ceo_class_field.setField(f.name())
                     break
 
+    def _set_ceo_row_visible(self, row_key, visible):
+        """Hide / show one row of the §8 form by row-key index.
+
+        Walks the row's label item and field item (which may be a
+        widget or a child layout) and toggles visibility on every
+        widget under it. PyQt5/Qt5 here doesn't have
+        QFormLayout.setRowVisible (Qt 5.15+ only) so we DIY.
+        """
+        from qgis.PyQt.QtWidgets import QFormLayout
+        idx = self._ceo_rows.get(row_key)
+        if idx is None:
+            return
+        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+            item = self._ceo_form.itemAt(idx, role)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None:
+                w.setVisible(visible)
+                continue
+            sublayout = item.layout()
+            if sublayout is not None:
+                self._set_layout_widgets_visible(sublayout, visible)
+
+    def _set_layout_widgets_visible(self, layout, visible):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            w = item.widget()
+            if w is not None:
+                w.setVisible(visible)
+                continue
+            sub = item.layout()
+            if sub is not None:
+                self._set_layout_widgets_visible(sub, visible)
+
     def _on_ceo_method_changed(self, idx):
+        """Hide circular-only rows when method = Simple.
+
+        Custom circular: Radius/Ring + Sample geom + (conditionally)
+        Square size are visible. Simple point plots: all of those rows
+        disappear from the form -- cleaner than greying.
+        """
         circular = (idx == 1)
-        for w in (self._ceo_radius, self._ceo_ring_w):
-            w.setEnabled(circular)
+        self._set_ceo_row_visible("circular", circular)
+        self._set_ceo_row_visible("sample_geom", circular)
+        # square_size visibility delegated to the dedicated handler.
+        self._on_ceo_sample_square_toggled(
+            self._ceo_sample_square.isChecked())
+
+    def _on_ceo_stratified_toggled(self, on):
+        """Stratified ON  -> per-class row visible, single-N + domain
+        rows hidden. Stratified OFF -> single-N + domain visible,
+        per-class hidden.
+        """
+        self._set_ceo_row_visible("n_total", not on)
+        self._set_ceo_row_visible("domain", not on)
+        self._set_ceo_row_visible("n_per_class", on)
+
+    def _on_ceo_sample_square_toggled(self, on):
+        """Square size row is shown only when method = circular AND
+        the 1-ha-square sample geometry is ticked."""
+        circular = (self._ceo_method.currentIndex() == 1)
+        self._set_ceo_row_visible("square_size", circular and on)
 
     def _on_generate_ceo_clicked(self):
         from ..algorithms.ceo_validation_export import (
@@ -1498,6 +1676,7 @@ class PffDockWidget(QgsDockWidget):
             A.OUTPUT_FOLDER: out_dir,
             A.OUTPUT_GEOPACKAGE: self._ceo_out_gpkg.isChecked(),
             A.OUTPUT_ZIPPED_SHAPEFILE: self._ceo_out_zip.isChecked(),
+            A.REPROJECT_TO_WGS84: self._ceo_reproject_wgs84.isChecked(),
             A.ADD_PROVENANCE_FIELDS: self._ceo_provenance.isChecked(),
             A.ALLOW_EMPTY_STRATUM: False,
         }
