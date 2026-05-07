@@ -262,10 +262,12 @@ class PffDockWidget(QgsDockWidget):
         self._build_section_2_tree_cover()
         self._build_section_3_human_influence()
         self._build_section_4_refine_output()
+        # P1.30 batch 23: §6 Outputs is the new parent that consolidates
+        # the former §6 Vectorise / §7 Run Options / §8 CEO Export +
+        # Output folder (moved from §0) + Save list (moved from §7) +
+        # Add-to-map toggle. Stats keeps its §5 slot.
         self._build_section_5_area_statistics()
-        self._build_section_6_vectorise_outputs()
-        self._build_section_7_run_options()
-        self._build_section_8_ceo_export()
+        self._build_section_6_outputs()
         self._sections_layout.addStretch(1)
 
         # P1.30 batch 20i: accordion -- only one top-level section
@@ -354,9 +356,14 @@ class PffDockWidget(QgsDockWidget):
         self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
 
-        self._output_folder = QgsFileWidget()
-        self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
-        form.addRow("Output:", self._output_folder)
+        # P1.30 batch 23: Output folder moved to §6 Outputs (alongside
+        # Save list + Vectorise + Validation sampling). Tip below.
+        _output_tip = QLabel(
+            "<i>Output folder is now in §6 Outputs.</i>")
+        _output_tip.setStyleSheet("color:#888;")
+        _output_tip.setMinimumWidth(0)
+        _output_tip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        form.addRow("", _output_tip)
 
         # P1.30 batch 20j: live preview of the output filename prefix.
         # Built from ISO3 + year only -- AOI layer name no longer
@@ -1156,6 +1163,9 @@ class PffDockWidget(QgsDockWidget):
         self._sections_layout.addWidget(sec)
 
     def _build_section_5_area_statistics(self):
+        # P1.30 batch 23: stays at §5 (unchanged). New §6 Outputs is
+        # the consolidated parent for Vectorise / Validation sampling /
+        # Save list / Run config / Performance.
         sec = CollapsibleSection("5. Area Statistics", expanded=False)
         form = _form()
 
@@ -1180,8 +1190,13 @@ class PffDockWidget(QgsDockWidget):
         layer = self._zone_layer_combo.current_layer()
         self._zone_field.setLayer(layer)
 
-    def _build_section_6_vectorise_outputs(self):
-        sec = CollapsibleSection("6. Vectorise Outputs", expanded=False)
+    def _build_subsection_vectorise(self):
+        # P1.30 batch 23: was top-level §6 "Vectorise Outputs"; now a
+        # sub-section inside §6 Outputs. Caller adds the returned
+        # CollapsibleSection to the §6 body layout.
+        sec = CollapsibleSection(
+            "Vectorise outputs", expanded=False,
+            indent_px=8, header_bold=False)
         form = _form()
 
         self._vec_primary = QCheckBox("Primary forest")
@@ -1230,13 +1245,18 @@ class PffDockWidget(QgsDockWidget):
         form.addRow("", self._vec_as_shp)
 
         sec.set_content_layout(form)
-        self._sections_layout.addWidget(sec)
+        return sec
 
-    def _build_section_7_run_options(self):
+    # P1.30 batch 23: §7 Run Options replaced. Save list moved to §6
+    # Outputs top via _build_save_list_form_rows. Reuse-cache toggles
+    # moved to the Performance sub-section. Add-to-map moved to §6
+    # Outputs top.
+
+    def _build_save_list_form_rows(self, form):
+        """Add the Save outputs summary + Customise sub-section to the
+        passed-in form layout. Used by _build_section_6_outputs.
+        """
         from qgis.PyQt.QtWidgets import QPushButton as _QPushButton
-        sec = CollapsibleSection("7. Run Options", expanded=False)
-        form = _form()
-
         # P1.30 batch 22: per-layer Save list. Default view shows a
         # summary line + small reset button + collapsible Customise.
         # Each output raster has its own tickbox; defaults match
@@ -1297,11 +1317,15 @@ class PffDockWidget(QgsDockWidget):
 
         self._save_customise_section.set_content_layout(cust_layout)
         form.addRow("", self._save_customise_section)
+        # Initial summary
+        self._refresh_save_summary()
 
-        # P1.30 batch 22.1: combined coded raster (debug) tickbox
-        # removed from the dock as overkill for normal use. Algorithm
-        # param SAVE_COMBINED_RASTER stays for Processing-toolbox
-        # power users + Recent-run replay. Dock always sends False.
+    def _build_subsection_performance(self):
+        """Performance / cache sub-section for §6 Outputs."""
+        sec = CollapsibleSection(
+            "Performance / cache", expanded=False,
+            indent_px=8, header_bold=False)
+        form = _form()
 
         self._reuse_distance = QCheckBox("Reuse cached distance surfaces")
         form.addRow("", self._reuse_distance)
@@ -1310,14 +1334,139 @@ class PffDockWidget(QgsDockWidget):
         self._reuse_prepared.setChecked(True)
         form.addRow("", self._reuse_prepared)
 
-        self._add_main_to_map = QCheckBox("Add main outputs to map")
+        sec.set_content_layout(form)
+        return sec
+
+    def _build_subsection_save_load_config(self):
+        """Save / Load run config sub-section for §6 Outputs.
+
+        P1.30 batch 23: lets users persist the dock's full panel state
+        as a human-readable JSON, then reload it later. Mirrors the
+        GEE app's Save Settings feature for cross-tool parity.
+        """
+        from qgis.PyQt.QtWidgets import QPushButton as _QPushButton
+        sec = CollapsibleSection(
+            "Run config (save / load)", expanded=False,
+            indent_px=8, header_bold=False)
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(4)
+
+        intro = QLabel(
+            "<i>Save the dock's current settings to a JSON file you "
+            "can reload later. Mirrors the GEE app's Save Settings.</i>")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#666;")
+        intro.setMinimumWidth(0)
+        intro.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        body.addWidget(intro)
+
+        save_btn = _QPushButton("Save current settings to file…")
+        save_btn.clicked.connect(self._on_save_run_config)
+        body.addWidget(save_btn)
+
+        load_btn = _QPushButton("Load settings from file…")
+        load_btn.clicked.connect(self._on_load_run_config)
+        body.addWidget(load_btn)
+
+        sec.set_content_layout(body)
+        return sec
+
+    def _build_section_6_outputs(self):
+        """§6 Outputs — consolidated parent for everything output-
+        related. Contains:
+          - Output folder picker (moved from §0)
+          - Save list summary + Customise (moved from §7, batch 22)
+          - "Add saved outputs to map" toggle (renamed from §7)
+          - ▸ Vectorise outputs (was §6)
+          - ▸ Validation sampling (experimental) (was §8, renamed)
+          - ▸ Run config (save / load) (NEW in batch 23)
+          - ▸ Performance / cache (was rest of §7)
+        """
+        sec = CollapsibleSection("6. Outputs", expanded=False)
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+
+        form = _form()
+
+        self._output_folder = QgsFileWidget()
+        self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
+        self._output_folder.setToolTip(
+            "Folder where all PFF outputs land. Disambiguate runs by "
+            "naming this folder descriptively (e.g. BTN/aberdares_2020).")
+        form.addRow("Output folder:", self._output_folder)
+
+        self._build_save_list_form_rows(form)
+
+        self._add_main_to_map = QCheckBox("Add saved outputs to map")
         self._add_main_to_map.setChecked(True)
+        self._add_main_to_map.setToolTip(
+            "After run, load the saved output rasters into the QGIS "
+            "Layers panel with PFF symbology. Honours the Save list "
+            "above — only saved layers are added.")
         form.addRow("", self._add_main_to_map)
 
-        sec.set_content_layout(form)
+        body.addLayout(form)
+
+        # Sub-sections (collapsed by default).
+        body.addWidget(self._build_subsection_vectorise())
+        body.addWidget(self._build_subsection_validation_sampling())
+        body.addWidget(self._build_subsection_save_load_config())
+        body.addWidget(self._build_subsection_performance())
+
+        sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
-        # Initial summary
-        self._refresh_save_summary()
+
+    # ── Run config save / load handlers ───────────────────────────────
+    def _on_save_run_config(self):
+        from qgis.PyQt.QtWidgets import QFileDialog
+        path, _flt = QFileDialog.getSaveFileName(
+            self, "Save PFF run config", "",
+            "PFF config JSON (*.json);;All (*.*)")
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        try:
+            params = self._collect_params()
+            from datetime import datetime
+            payload = {
+                "_pff_config_format": 1,
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+                "pff_version": FW.PFF_VERSION,
+                "params": _serialise_params(params),
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2, default=str)
+            self._log.append(
+                f"<span>Run config saved to {_html_escape(path)}</span>")
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                f"Could not save run config:\n{e}")
+
+    def _on_load_run_config(self):
+        from qgis.PyQt.QtWidgets import QFileDialog
+        path, _flt = QFileDialog.getOpenFileName(
+            self, "Load PFF run config", "",
+            "PFF config JSON (*.json);;All (*.*)")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            params = payload.get("params") or payload  # tolerate flat dicts
+            self._apply_params(params)
+            saved_at = payload.get("saved_at", "?")
+            self._log.append(
+                f"<span>Run config loaded from "
+                f"{_html_escape(path)} (saved {_html_escape(saved_at)})"
+                "</span>")
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                f"Could not load run config:\n{e}")
 
     # ── Save-list handlers ────────────────────────────────────────────
     def _on_save_defaults(self):
@@ -1353,10 +1502,16 @@ class PffDockWidget(QgsDockWidget):
     # P1.30 batch 21: §8 CEO Validation Export (experimental)
     # Independent flow from full_workflow -- has its own Run button.
     # ────────────────────────────────────────────────────────────────
-    def _build_section_8_ceo_export(self):
+    def _build_subsection_validation_sampling(self):
+        # P1.30 batch 23: was top-level §8 "Validation: CEO Export";
+        # now a sub-section inside §6 Outputs. Renamed to "Validation
+        # sampling" per user feedback (more descriptive of what the
+        # section does — generates samples for validation; CEO is the
+        # downstream consumer).
         from qgis.PyQt.QtWidgets import QSpinBox, QDoubleSpinBox, QStackedWidget
         sec = CollapsibleSection(
-            "8. Validation: CEO Export (experimental)", expanded=False)
+            "Validation sampling (experimental)", expanded=False,
+            indent_px=8, header_bold=False)
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(6)
@@ -1648,8 +1803,7 @@ class PffDockWidget(QgsDockWidget):
         body.addWidget(self._ceo_run_btn)
 
         sec.set_content_layout(body)
-        self._sections_layout.addWidget(sec)
-        # P1.30 batch 21.1: initial enabled state for the three
+        # P1.30 batch 23: initial enabled state for the three
         # mutually-exclusive control axes (stratified, method,
         # sample-square). Each handler is idempotent and references the
         # current widget values, so calling them in any order is safe.
@@ -1657,6 +1811,7 @@ class PffDockWidget(QgsDockWidget):
         self._on_ceo_stratified_toggled(self._ceo_stratified.isChecked())
         self._on_ceo_sample_square_toggled(
             self._ceo_sample_square.isChecked())
+        return sec
 
     def _refresh_ceo_class_field(self):
         layer = self._ceo_input.current_layer()

@@ -29,13 +29,21 @@ from pff_qgis_tools.ui.pff_dock import PffDockWidget
 from pff_qgis_tools.ui.collapsible_section import CollapsibleSection
 
 dock = PffDockWidget(FakeIface())
-# Force the §8 section to expand so child visibility reflects intent.
-sec_8 = dock._top_level_sections[-1]  # last is §8
-sec_8.set_expanded(True)
-# Also expand the Advanced sub-section inside §8 so its widgets are
-# considered "visible to user" by isVisible() walks.
-adv = sec_8.findChildren(CollapsibleSection)[0]
-adv.set_expanded(True)
+# P1.30 batch 23: Validation sampling is now a sub-section of §6
+# Outputs (was top-level §8). Walk all top-level sections + all their
+# nested CollapsibleSections to find the "Validation sampling" one.
+adv = None
+val_sec = None
+for top in dock._top_level_sections:
+    top.set_expanded(True)
+    for child in top.findChildren(CollapsibleSection):
+        title = getattr(child, "_title", "") or ""
+        if "Validation sampling" in title:
+            val_sec = child
+            val_sec.set_expanded(True)
+        elif "Advanced" == title:
+            adv = child
+            adv.set_expanded(True)
 # Process events so layout settles.
 app.processEvents()
 
@@ -114,23 +122,27 @@ dock._ceo_method.setCurrentIndex(1)
 all_ok &= report("after method=circular, square off", False, True, False)
 
 # Advanced sub-section sanity: the moved widgets should be findable
-# inside the Advanced collapsible.
+# inside the Advanced collapsible (lives under Validation sampling).
 print("\n=== Advanced sub-section ===")
-adv_widgets = [
-    ("ceo_min_distance", dock._ceo_min_distance),
-    ("ceo_seed", dock._ceo_seed),
-    ("ceo_out_gpkg", dock._ceo_out_gpkg),
-    ("ceo_out_zip", dock._ceo_out_zip),
-    ("ceo_provenance", dock._ceo_provenance),
-]
-adv_descendants = set(adv.findChildren(type(dock._ceo_min_distance)) +
-                      adv.findChildren(type(dock._ceo_seed)) +
-                      adv.findChildren(type(dock._ceo_out_gpkg)))
-for name, widget in adv_widgets:
-    found = widget in adv_descendants
-    print(f"  {'OK' if found else 'FAIL':4}  {name}")
-    if not found:
-        all_ok = False
+if adv is None:
+    print("  FAIL: Advanced sub-section not found in widget tree")
+    all_ok = False
+else:
+    adv_widgets = [
+        ("ceo_min_distance", dock._ceo_min_distance),
+        ("ceo_seed", dock._ceo_seed),
+        ("ceo_out_gpkg", dock._ceo_out_gpkg),
+        ("ceo_out_zip", dock._ceo_out_zip),
+        ("ceo_provenance", dock._ceo_provenance),
+    ]
+    adv_descendants = set(adv.findChildren(type(dock._ceo_min_distance)) +
+                          adv.findChildren(type(dock._ceo_seed)) +
+                          adv.findChildren(type(dock._ceo_out_gpkg)))
+    for name, widget in adv_widgets:
+        found = widget in adv_descendants
+        print(f"  {'OK' if found else 'FAIL':4}  {name}")
+        if not found:
+            all_ok = False
 
 # Tooltip presence
 print("\n=== Tooltip presence check ===")
