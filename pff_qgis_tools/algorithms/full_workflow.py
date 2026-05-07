@@ -489,6 +489,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     FAST_APPROXIMATION = "FAST_APPROXIMATION"
     REFINE_MIN_PATCH_AREA_HA = "REFINE_MIN_PATCH_AREA_HA"
     SAVE_COMBINED_RASTER = "SAVE_COMBINED_RASTER"
+    # P1.30 batch 22: per-layer Save list. Each flag gates whether the
+    # corresponding final output is COPIED from scratch into out_dir.
+    # Defaults preserve historical behaviour: 02b/02d/04a always saved
+    # (today's de-facto), 03c/04e default OFF (intermediate / debug).
+    # Algorithm always computes the rasters internally; flags only
+    # control disk presence in the user's output folder.
+    SAVE_02B_FOREST = "SAVE_02B_FOREST"
+    SAVE_02D_NRF = "SAVE_02D_NRF"
+    SAVE_03C_PRE_CONN = "SAVE_03C_PRE_CONN"
+    SAVE_04A_PRIMARY = "SAVE_04A_PRIMARY"
+    SAVE_04E_ANTHRO_MASK = "SAVE_04E_ANTHRO_MASK"
     EXCLUDE_PLANTATIONS = "EXCLUDE_PLANTATIONS"
     EXCLUDE_AGRICULTURE_FROM_FOREST = "EXCLUDE_AGRICULTURE_FROM_FOREST"
     REUSE_DISTANCE_SURFACES = "REUSE_DISTANCE_SURFACES"
@@ -1143,6 +1154,33 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # ────────────────────────────────────────────────────────────
         # Run options (orthogonal to workflow steps)
         # ────────────────────────────────────────────────────────────
+        # P1.30 batch 22: per-layer Save flags. Default values preserve
+        # historical behaviour. Marked FlagAdvanced so the auto-
+        # Processing-dialog tucks them away under "Advanced parameters".
+        for _save_param, _label, _default in (
+            (self.SAVE_02B_FOREST,
+             "Run: Save 02b forest output",
+             True),
+            (self.SAVE_02D_NRF,
+             "Run: Save 02d naturally regenerating forest output",
+             True),
+            (self.SAVE_03C_PRE_CONN,
+             "Run: Save 03c pre-connectivity primary forest "
+             "(intermediate)",
+             False),
+            (self.SAVE_04A_PRIMARY,
+             "Run: Save 04a primary forest output (final)",
+             True),
+            (self.SAVE_04E_ANTHRO_MASK,
+             "Run: Save 04e anthropogenic mask (debug)",
+             False),
+        ):
+            _save_p = QgsProcessingParameterBoolean(
+                _save_param, _label, defaultValue=_default)
+            _save_p.setFlags(
+                _save_p.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+            self.addParameter(_save_p)
+
         self.addParameter(QgsProcessingParameterBoolean(
             self.SAVE_COMBINED_RASTER,
             "Run: Save combined coded raster (debug)",
@@ -1189,7 +1227,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.12.0"
+    PFF_VERSION = "0.12.1"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1299,17 +1337,50 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             feedback.pushDebugInfo(
                 f"(input naming sanity check skipped: {_e})")
 
-        # Output filename helper: builds top-level paths per Option D
-        # naming. Uses _iso3 from above; closes over out_dir.
+        # P1.30 batch 22: per-layer Save list. _step_save_map gates
+        # whether a final output file lands in out_dir (saved) or in
+        # intermediates_dir (computed for the pipeline but not exposed
+        # to the user). Steps not listed default to "save" — that
+        # covers vector outputs (06a/c/d), CSVs (05a/b), and any
+        # future stages that don't have a Save flag yet.
+        _step_save_map = {}
+        # _intermediates_dir_holder is mutable so the closure below
+        # picks it up after intermediates_dir is created (line ~1614).
+        # Until then, _out() falls back to out_dir.
+        _intermediates_dir_holder = []
+
         def _out(step, name, ext="tif"):
+            save_flag = _step_save_map.get(step, True)
+            if save_flag or not _intermediates_dir_holder:
+                target_dir = out_dir
+            else:
+                target_dir = _intermediates_dir_holder[0]
             return os.path.join(
-                out_dir,
+                target_dir,
                 generate_layer_name(
                     _iso3, PLATFORM_QGIS, step, name, ext,
                     year=_year_tag, aoi_label=_aoi_label))
 
         save_combined = self.parameterAsBool(
             parameters, self.SAVE_COMBINED_RASTER, context)
+        # P1.30 batch 22: per-layer Save flags.
+        save_02b_forest = self.parameterAsBool(
+            parameters, self.SAVE_02B_FOREST, context)
+        save_02d_nrf = self.parameterAsBool(
+            parameters, self.SAVE_02D_NRF, context)
+        save_03c_pre_conn = self.parameterAsBool(
+            parameters, self.SAVE_03C_PRE_CONN, context)
+        save_04a_primary = self.parameterAsBool(
+            parameters, self.SAVE_04A_PRIMARY, context)
+        save_04e_anthro_mask = self.parameterAsBool(
+            parameters, self.SAVE_04E_ANTHRO_MASK, context)
+        _step_save_map.update({
+            "02b": save_02b_forest,
+            "02d": save_02d_nrf,
+            "03c": save_03c_pre_conn,
+            "04a": save_04a_primary,
+            "04e": save_04e_anthro_mask,
+        })
         reuse_distances = self.parameterAsBool(
             parameters, self.REUSE_DISTANCE_SURFACES, context)
         reuse_prepared = self.parameterAsBool(
@@ -1615,6 +1686,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo(
                 f"Intermediates: {intermediates_dir} "
                 "(next to outputs — opt-in)")
+        # P1.30 batch 22: now that intermediates_dir exists, plug it
+        # into the _out() closure so un-saved final outputs route here
+        # instead of out_dir.
+        _intermediates_dir_holder.append(intermediates_dir)
+
         prepared_dir = ensure_dir(os.path.join(intermediates_dir, "prepared"))
         dist_dir = ensure_dir(os.path.join(intermediates_dir, "distances"))
         # Scratch dir for per-input _reproj and _clipped intermediates. Keeps
@@ -3410,16 +3486,23 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # default panel order (Primary on top, then Pre-connectivity,
             # then Naturally regenerating, then Forest at the bottom)
             # we register in REVERSE -- last appended ends up on top.
+            #
+            # P1.30 batch 22: gate each registration by the per-layer
+            # SAVE flag. When SAVE=False the layer file lives in
+            # scratch (cleaned up post-run); loading it to map would
+            # produce a broken layer reference. Skip those.
             _forest_top_path = _out("02b", "forest")
-            if os.path.exists(_forest_top_path):
+            if save_02b_forest and os.path.exists(_forest_top_path):
                 _layers_to_load.append(("Forest", _forest_top_path))
-            if forest_natreg_path is not None and os.path.exists(forest_natreg_path):
+            if (save_02d_nrf and forest_natreg_path is not None
+                    and os.path.exists(forest_natreg_path)):
                 _layers_to_load.append(
                     ("Naturally regenerating forest", forest_natreg_path))
-            if os.path.exists(candidate_path):
+            if save_03c_pre_conn and os.path.exists(candidate_path):
                 _layers_to_load.append(
                     ("Pre-connectivity forest", candidate_path))
-            _layers_to_load.append(("Primary forest", final_path))
+            if save_04a_primary:
+                _layers_to_load.append(("Primary forest", final_path))
             # Vectorise outputs auto-load when produced. P1.28c output
             # matrix: 06a (primary), 06c plain forest, 06c nested, 06d
             # nested_dissolved. Loaded ABOVE primary so the user sees the

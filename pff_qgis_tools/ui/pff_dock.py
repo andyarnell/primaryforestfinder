@@ -1233,8 +1233,70 @@ class PffDockWidget(QgsDockWidget):
         self._sections_layout.addWidget(sec)
 
     def _build_section_7_run_options(self):
+        from qgis.PyQt.QtWidgets import QPushButton as _QPushButton
         sec = CollapsibleSection("7. Run Options", expanded=False)
         form = _form()
+
+        # P1.30 batch 22: per-layer Save list. Default view shows a
+        # summary line + small reset button + collapsible Customise.
+        # Each output raster has its own tickbox; defaults match
+        # historical behaviour (Forest + NRF + Primary saved; pre-conn
+        # + anthro mask off). The 5 SAVE_* algorithm params route
+        # un-saved layers to scratch instead of out_dir.
+        self._save_layers = [
+            ("save_02b_forest", "Forest", "(02b)", True),
+            ("save_02d_nrf", "Naturally regenerating forest", "(02d)", True),
+            ("save_03c_pre_conn", "Pre-connectivity primary forest",
+             "(03c, intermediate)", False),
+            ("save_04a_primary", "Primary forest", "(04a, final)", True),
+            ("save_04e_anthro_mask", "Anthropogenic mask",
+             "(04e, debug)", False),
+        ]
+        self._save_checkboxes = {}
+
+        save_summary_row = QHBoxLayout()
+        save_summary_row.setContentsMargins(0, 0, 0, 0)
+        self._save_summary_label = QLabel("")
+        self._save_summary_label.setStyleSheet("color:#444;")
+        save_summary_row.addWidget(self._save_summary_label, 1)
+        self._save_reset_btn = QToolButton()
+        self._save_reset_btn.setText("↺")
+        self._save_reset_btn.setToolTip(
+            "Reset Save list to defaults: Forest, Naturally regenerating "
+            "forest, Primary forest.")
+        self._save_reset_btn.clicked.connect(self._on_save_defaults)
+        save_summary_row.addWidget(self._save_reset_btn, 0)
+        form.addRow("Save outputs:", save_summary_row)
+
+        self._save_customise_section = CollapsibleSection(
+            "Customise output rasters", expanded=False,
+            indent_px=8, header_bold=False)
+        cust_layout = QVBoxLayout()
+        cust_layout.setContentsMargins(0, 0, 0, 0)
+        cust_layout.setSpacing(4)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        for label, handler in (
+                ("Defaults", self._on_save_defaults),
+                ("Select all", self._on_save_all),
+                ("Select none", self._on_save_none)):
+            b = _QPushButton(label)
+            b.setMinimumHeight(22)
+            b.clicked.connect(handler)
+            btn_row.addWidget(b)
+        btn_row.addStretch(1)
+        cust_layout.addLayout(btn_row)
+
+        for key, name, suffix, default in self._save_layers:
+            cb = QCheckBox(f"{name}  {suffix}")
+            cb.setChecked(default)
+            cb.toggled.connect(self._refresh_save_summary)
+            cust_layout.addWidget(cb)
+            self._save_checkboxes[key] = cb
+
+        self._save_customise_section.set_content_layout(cust_layout)
+        form.addRow("", self._save_customise_section)
 
         self._save_combined = QCheckBox("Save combined coded raster (debug)")
         form.addRow("", self._save_combined)
@@ -1252,6 +1314,38 @@ class PffDockWidget(QgsDockWidget):
 
         sec.set_content_layout(form)
         self._sections_layout.addWidget(sec)
+        # Initial summary
+        self._refresh_save_summary()
+
+    # ── Save-list handlers ────────────────────────────────────────────
+    def _on_save_defaults(self):
+        for key, _name, _suffix, default in self._save_layers:
+            self._save_checkboxes[key].setChecked(default)
+
+    def _on_save_all(self):
+        for cb in self._save_checkboxes.values():
+            cb.setChecked(True)
+
+    def _on_save_none(self):
+        for cb in self._save_checkboxes.values():
+            cb.setChecked(False)
+
+    def _refresh_save_summary(self):
+        """Live summary line above the Customise sub-section."""
+        ticked = [name for key, name, _suffix, _default in self._save_layers
+                  if self._save_checkboxes[key].isChecked()]
+        defaults_set = {name for _key, name, _suffix, default
+                        in self._save_layers if default}
+        ticked_set = set(ticked)
+        if not ticked:
+            text = "Saved: nothing"
+        elif ticked_set == defaults_set:
+            text = "Saved: " + ", ".join(ticked)
+        elif len(ticked) <= 3:
+            text = "Saved: " + ", ".join(ticked)
+        else:
+            text = f"Saved: {len(ticked)} of {len(self._save_layers)} layers"
+        self._save_summary_label.setText(text)
 
     # ────────────────────────────────────────────────────────────────
     # P1.30 batch 21: §8 CEO Validation Export (experimental)
@@ -1860,6 +1954,17 @@ class PffDockWidget(QgsDockWidget):
         params[FW.VECTORIZE_OUTPUT_AS_SHAPEFILE] = self._vec_as_shp.isChecked()
 
         # §7 Run Options
+        # P1.30 batch 22: per-layer Save flags.
+        params[FW.SAVE_02B_FOREST] = (
+            self._save_checkboxes["save_02b_forest"].isChecked())
+        params[FW.SAVE_02D_NRF] = (
+            self._save_checkboxes["save_02d_nrf"].isChecked())
+        params[FW.SAVE_03C_PRE_CONN] = (
+            self._save_checkboxes["save_03c_pre_conn"].isChecked())
+        params[FW.SAVE_04A_PRIMARY] = (
+            self._save_checkboxes["save_04a_primary"].isChecked())
+        params[FW.SAVE_04E_ANTHRO_MASK] = (
+            self._save_checkboxes["save_04e_anthro_mask"].isChecked())
         params[FW.SAVE_COMBINED_RASTER] = self._save_combined.isChecked()
         params[FW.REUSE_DISTANCE_SURFACES] = self._reuse_distance.isChecked()
         params[FW.REUSE_PREPARED] = self._reuse_prepared.isChecked()
@@ -2437,6 +2542,21 @@ class PffDockWidget(QgsDockWidget):
         self._vec_as_shp.setChecked(b(FW.VECTORIZE_OUTPUT_AS_SHAPEFILE))
 
         # §7
+        # P1.30 batch 22: per-layer Save flags. Defaults match the
+        # historical de-facto behaviour for entries saved before this
+        # batch (ie. defaults pre-set; old run replays produce the
+        # same on-disk artefacts as they always did).
+        self._save_checkboxes["save_02b_forest"].setChecked(
+            b(FW.SAVE_02B_FOREST, True))
+        self._save_checkboxes["save_02d_nrf"].setChecked(
+            b(FW.SAVE_02D_NRF, True))
+        self._save_checkboxes["save_03c_pre_conn"].setChecked(
+            b(FW.SAVE_03C_PRE_CONN, False))
+        self._save_checkboxes["save_04a_primary"].setChecked(
+            b(FW.SAVE_04A_PRIMARY, True))
+        self._save_checkboxes["save_04e_anthro_mask"].setChecked(
+            b(FW.SAVE_04E_ANTHRO_MASK, False))
+        self._refresh_save_summary()
         self._save_combined.setChecked(b(FW.SAVE_COMBINED_RASTER))
         self._reuse_distance.setChecked(b(FW.REUSE_DISTANCE_SURFACES))
         self._reuse_prepared.setChecked(b(FW.REUSE_PREPARED, True))
