@@ -74,8 +74,8 @@ def _find_bhutan_inputs():
 
 
 _LAYER_BASES = (
-    "qgis_02b_forest.tif",
-    "qgis_02d_naturally_regenerating_forest.tif",
+    "qgis_02c_forest.tif",
+    "qgis_02e_naturally_regenerating_forest.tif",
     "qgis_03c_pre_connectivity_primary_forest.tif",
     "qgis_04a_primary_forest.tif",
     "qgis_04e_anthropogenic_mask.tif",
@@ -138,8 +138,8 @@ def test_rule1_defaults():
         })
         finals = _list_finals(out)
         expected = {
-            "qgis_02b_forest.tif",
-            "qgis_02d_naturally_regenerating_forest.tif",
+            "qgis_02c_forest.tif",
+            "qgis_02e_naturally_regenerating_forest.tif",
             "qgis_04a_primary_forest.tif",
         }
         # 03c + 04e are NOT expected by default.

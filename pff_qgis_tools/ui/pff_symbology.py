@@ -26,8 +26,8 @@ from qgis.core import (
 # basename via "endswith(suffix)" before the extension. Order matters
 # only for tie-breaking; entries are mutually exclusive in practice.
 _PFF_STEP_COLOURS = (
-    ("_02b_forest", "#7fc97f"),                          # light green
-    ("_02d_naturally_regenerating_forest", "#41ab5d"),   # mid green
+    ("_02c_forest", "#7fc97f"),                          # light green
+    ("_02e_naturally_regenerating_forest", "#41ab5d"),   # mid green
     ("_03c_pre_connectivity_primary_forest", "#7a9c2f"), # olive
     ("_04a_primary_forest", "#1b6e3a"),                  # dark green
     ("_04e_anthropogenic_mask", "#cf3a4a"),              # red

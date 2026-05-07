@@ -797,7 +797,7 @@ exports.processingTreeCropsSDPT = processingTreeCropsSDPT;
 // plantations (eucalyptus, pine, teak). It IS forest per FRA
 // (just planted, not naturally regenerating), so it's the correct
 // subtractor for deriving Naturally Regenerating Forest:
-//   02d_naturally_regenerating_forest = 02b_forest - 02c_plantations
+//   02e_naturally_regenerating_forest = 02c_forest - 02d_planted_forest
 // Compare with processingPlantationsMosaic() which historically
 // also bundled SDPT class 2 (tree crops) + Descals oil palm --
 // per FRA those are agriculture, not forest, and now route through
@@ -919,6 +919,84 @@ var getGripRoadsForYear = function(year) {
   ));
 };
 exports.getGripRoadsForYear = getGripRoadsForYear;
+
+
+// ============================================================
+// OSM ROADS (vector, global)  --  FOR VECTOR EXPORTS ONLY
+// ============================================================
+//
+// Global OSM roads merged from 33 regional CSV uploads. Source:
+// geofabrik regional pbf -> pyosmium -> gpkg -> CSV chunks (CSV
+// chosen for size + no DBF column header limits). See
+// docs/osm_roads_prep for upload provenance.
+//
+// Filtered to drop highway = 'proposed' / 'planned' (data-quality
+// issue noted during ingestion).
+//
+// CAVEAT: OSM-ONLY. Congo-specific logging roads from
+// `wurnrt-loggingroads` are NOT in this merge -- see
+// getCongoRoadsUpToYear() below for that distinct source.
+//
+// CAVEAT: no differentiation between road types -- some highways
+// may be foot/bike-only and not vehicle-accessible. Buffered
+// outputs may overstate human accessibility in some regions.
+//
+// Intended consumer: the QGIS plugin's vector roads input slot
+// (Export.table.toDrive(...) the result, then load in plugin).
+// For RASTER roads use the existing getRoadsCollection() (GRIP4)
+// which is already well-conditioned.
+function getOsmRoadsAll(aoi) {
+  // P1.30 batch 24.1: optional `aoi` arg pushes filterBounds INSIDE
+  // the per-asset construction so each child FC's spatial index is
+  // queried directly (mirrors WDPA's fast-path). Without this the
+  // flatten() defeats per-child pushdown and the planner has to scan
+  // all 33 children. With this, 27 of 33 assets return empty FCs for
+  // a small AOI and GEE skips them via index lookup.
+  var assetIds = [
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_0_to_10000000_of_20329501",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_10000000_to_20000000_of_20329501",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_20000000_to_20329501_of_20329501",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/antartica_0_to_1102_of_1102",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_0_to_10000000_of_62409033",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_10000000_to_20000000_of_62409033",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_30000000_to_40000000_of_62409033",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_40000000_to_50000000_of_62409033",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_50000000_to_60000000_of_62409033",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_60000000_to_62409033_of_62409033",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/australia_oceania_0_to_4176086_of_4176086",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/central_america_0_to_2174319_of_2174319",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_0_to_9945776_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_9945776_to_11974838_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_11974838_to_21974838_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_21974838_to_23598911_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_23598911_to_33598911_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_33598911_to_42897747_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_42897747_to_50932175_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_50932175_to_55425784_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_55425784_to_63749243_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_63749243_to_73035626_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_73035626_to_81889699_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_81889699_to_88610282_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_88610282_to_96258629_of_96258629",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_0_to_10000000_of_55568828",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_10000000_to_20000000_of_55568828",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_20000000_to_30000000_of_55568828",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_30000000_to_40000000_of_55568828",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_40000000_to_50000000_of_55568828",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_50000000_to_55568828_of_55568828",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/south_america_0_to_10000000_of_13549774",
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/south_america_10000000_to_13549774_of_13549774"
+  ];
+  var fcs = assetIds.map(function (id) {
+    var fc = ee.FeatureCollection(id);
+    return aoi ? fc.filterBounds(aoi) : fc;
+  });
+  return ee.FeatureCollection(fcs).flatten()
+    .filter(ee.Filter.neq('highway', 'proposed'))
+    .filter(ee.Filter.neq('highway', 'planned'));
+}
+
+exports.getOsmRoadsAll = getOsmRoadsAll;
 
 
 // ------------------ ACCESS INPUT DATASETS ------------------

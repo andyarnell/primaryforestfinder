@@ -609,17 +609,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "    Binary 1/0 raster. Defines the reference grid (extent /\n"
             "    resolution / pixel origin) -- all other rasters align to it.\n"
             "    Example sources: Hansen GFC thresholded, GLAD LULC forest\n"
-            "    class, national forest map. GEE filename: 02b_forest_*\n\n"
+            "    class, national forest map. GEE filename: 02c_forest_*\n\n"
             "Other land with tree cover raster (optional)\n"
             "    Binary 1/0. FRA-Note-10 'other land with tree cover':\n"
             "    oil palm, orchards, agroforestry-with-crops, urban trees.\n"
             "    NOT the broader buffered agriculture (cropland + pasture).\n"
             "    Paired with 'Refine to forest' toggle. Example sources:\n"
-            "    GEE export 03a_plantations_tree_crops (Descals oil palm\n"
-            "    + SDPT class 2).\n\n"
+            "    GEE export 02b_other_land_with_tree_cover (Descals oil\n"
+            "    palm + SDPT class 2 + urban tree cover).\n\n"
             "Refine to forest (default ON)\n"
             "    Requires OLWTC raster above. When on: narrows\n"
-            "    02b_forest = tree_cover MINUS other land with tree cover,\n"
+            "    02c_forest = tree_cover MINUS other land with tree cover,\n"
             "    BEFORE the planted-forest subtraction. Harmless no-op when\n"
             "    no OLWTC raster supplied.\n\n"
             "Planted forest raster (optional)\n"
@@ -627,13 +627,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "    eucalyptus, pine, teak. Paired with 'Refine to naturally\n"
             "    regenerating forest' toggle. Example sources: SDPT class 1,\n"
             "    national planted-forest registry. When supplied AND toggle\n"
-            "    is on, workflow outputs 02d_naturally_regenerating_forest.tif\n"
+            "    is on, workflow outputs 02e_naturally_regenerating_forest.tif\n"
             "    (≈ FRA NRF = Forest minus planted forest -- proxy, depends\n"
             "    on planted-forest layer completeness).\n"
-            "    GEE filename: 02c_planted_forest_*\n\n"
+            "    GEE filename: 02d_planted_forest_*\n\n"
             "Refine to naturally regenerating forest (default ON)\n"
             "    Requires Planted forest raster above. When on: derives\n"
-            "    02d_naturally_regenerating_forest as 02b MINUS 02c\n"
+            "    02e_naturally_regenerating_forest as 02c MINUS 02d\n"
             "    (Forest minus Planted forest).\n\n"
             "═══════════════════════════════════════════════\n"
             "§03 HUMAN INFLUENCE -- (a) DISTURBANCE INPUTS\n"
@@ -768,9 +768,9 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "OUTPUT FOLDER LAYOUT\n"
             "═══════════════════════════════════════════════\n"
             "OUT = your chosen output folder. ISO3_ prefix when 00 set.\n\n"
-            "  OUT/[ISO3_]qgis_02b_forest.tif (Forest baseline; FRA-strict\n"
+            "  OUT/[ISO3_]qgis_02c_forest.tif (Forest baseline; FRA-strict\n"
             "      when 02 ticked)\n"
-            "  OUT/[ISO3_]qgis_02d_naturally_regenerating_forest.tif\n"
+            "  OUT/[ISO3_]qgis_02e_naturally_regenerating_forest.tif\n"
             "      (if plantations refined)\n"
             "  OUT/[ISO3_]qgis_03c_pre_connectivity_primary_forest.tif\n"
             "      (after Step 03 disturbance + protection logic)\n"
@@ -1227,7 +1227,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.12.2"
+    PFF_VERSION = "0.13.0"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1374,9 +1374,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             parameters, self.SAVE_04A_PRIMARY, context)
         save_04e_anthro_mask = self.parameterAsBool(
             parameters, self.SAVE_04E_ANTHRO_MASK, context)
+        # Batch 25.1: step letters re-lettered to match new GEE schema
+        # (OLWTC at 02b, forest at 02c, NRF at 02e). SAVE_* symbolic
+        # param names kept unchanged for backwards-compat with saved
+        # Recent runs / Processing-toolbox callers.
         _step_save_map.update({
-            "02b": save_02b_forest,
-            "02d": save_02d_nrf,
+            "02c": save_02b_forest,
+            "02e": save_02d_nrf,
             "03c": save_03c_pre_conn,
             "04a": save_04a_primary,
             "04e": save_04e_anthro_mask,
@@ -1708,8 +1712,8 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             _out("04a", "primary_forest"),
             _out("03c", "pre_connectivity_primary_forest"),
             _out("04e", "anthropogenic_mask"),
-            _out("02b", "forest"),
-            _out("02d", "naturally_regenerating_forest"),
+            _out("02c", "forest"),
+            _out("02e", "naturally_regenerating_forest"),
             os.path.join(
                 out_dir,
                 (f"{_iso3}_qgis_run_metadata.json" if _iso3
@@ -2153,16 +2157,17 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "but 'Refine to forest' is off — Forest baseline NOT "
                 "narrowed. Tick the option to derive FRA-strict Forest.")
 
-        # ─── Top-level 02b_forest.tif (FRA Forest baseline output) ───
-        # Per spec, 02b_forest belongs at top level (not just as the
-        # internal cache at intermediates/prepared/forest.tif). Writing
-        # it as a separate file means QGIS can hold open the top-level
-        # 02b_forest.tif (via auto-load) without locking the prepared/
-        # cache file -- which would otherwise fail the next run's
-        # forest preparation step (PermissionError on remove).
-        # Reflects the post-P1.18 forest_raw_path: FRA-strict version
-        # when the toggle is on, thresholded tree cover otherwise.
-        forest_baseline_top_path = _out("02b", "forest")
+        # ─── Top-level 02c_forest.tif (FRA Forest baseline output) ───
+        # Per spec (Batch 25.1), 02c_forest belongs at top level (not
+        # just as the internal cache at intermediates/prepared/forest.
+        # tif). Writing it as a separate file means QGIS can hold open
+        # the top-level 02c_forest.tif (via auto-load) without locking
+        # the prepared/ cache file -- which would otherwise fail the
+        # next run's forest preparation step (PermissionError on
+        # remove). Reflects the post-P1.18 forest_raw_path: FRA-strict
+        # version when the toggle is on, thresholded tree cover
+        # otherwise.
+        forest_baseline_top_path = _out("02c", "forest")
         # P1.28: _safe_remove handles transient locks (OneDrive etc.).
         _safe_remove(forest_baseline_top_path, feedback=feedback)
         shutil.copy2(forest_raw_path, forest_baseline_top_path)
@@ -2206,16 +2211,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _pds = None
                 _natreg = ((_farr == 1) & (_parr != 1)).astype(np.uint8)
                 # Headline output (≈ FRA Naturally Regenerating Forest),
-                # lives at top level. P1.16: renamed from
-                # 04d_forest_naturally_regenerating to
-                # 02d_naturally_regenerating_forest (workflow-progression
-                # ordering: 02b forest -> 02c plantations -> 02d nat reg
-                # = 02b minus 02c). The layer represents
-                # Forest minus Plantations -- per FRA, this IS "Naturally
-                # regenerating forest" (Forest decomposes as Naturally
-                # regenerating + Planted). Primary forest is a subset of
-                # naturally regenerating forest, not a sibling.
-                forest_natreg_path = _out("02d", "naturally_regenerating_forest")
+                # lives at top level. Batch 25.1: renumbered to 02e to
+                # accommodate new 02b_other_land_with_tree_cover slot
+                # (workflow-progression ordering: 02a raw -> 02b OLWTC ->
+                # 02c forest -> 02d planted forest -> 02e nat reg = 02c
+                # minus 02d). The layer represents Forest minus Planted
+                # Forest -- per FRA, this IS "Naturally regenerating
+                # forest" (Forest decomposes as Naturally regenerating +
+                # Planted). Primary forest is a subset of naturally
+                # regenerating forest, not a sibling.
+                forest_natreg_path = _out("02e", "naturally_regenerating_forest")
                 _drv = gdal.GetDriverByName("GTiff")
                 # P1.28: _safe_remove handles transient locks (OneDrive etc.).
                 _safe_remove(forest_natreg_path, feedback=feedback)
@@ -3491,7 +3496,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # SAVE flag. When SAVE=False the layer file lives in
             # scratch (cleaned up post-run); loading it to map would
             # produce a broken layer reference. Skip those.
-            _forest_top_path = _out("02b", "forest")
+            _forest_top_path = _out("02c", "forest")
             if save_02b_forest and os.path.exists(_forest_top_path):
                 _layers_to_load.append(("Forest", _forest_top_path))
             if (save_02d_nrf and forest_natreg_path is not None

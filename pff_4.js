@@ -1,5 +1,127 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.11.0";
+var PFF_SCRIPT_VERSION = "4.13.1";
+
+// Changes vs v4.13.0 (Batch 25.1 -- 02-step renumber for OLWTC):
+//  - Re-lettered step 02 so OLWTC slots in BEFORE planted forest,
+//    matching the Tree Cover panel's pipeline order (raw tree cover ->
+//    subtract OLWTC = Forest -> subtract Planted forest = NRF). Each
+//    "discriminator letter N" is now followed by its "output letter
+//    N+1" -- pipeline reads top-to-bottom alphabetically.
+//
+//    NEW SCHEMA               OLD                          ROLE
+//    --------                 ----                         ----
+//    02a_hansen_*  / glad_*   (unchanged)                  Raw inputs
+//    02b_other_land_with_     03a_other_land_with_         OLWTC discriminator
+//      tree_cover               tree_cover                  (subtracted at step 1)
+//    02c_forest               02b_forest                   FRA Forest (output of step 1)
+//    02d_planted_forest       02c_planted_forest           Planted-forest discriminator
+//                                                            (subtracted at step 2)
+//    02e_naturally_           02d_naturally_               FRA NRF (output of step 2)
+//      regenerating_forest      regenerating_forest
+//
+//  - Export tickbox labels updated to show new letters. About-panel
+//    "How PFF outputs map to FRA" block updated + new entry for
+//    02b_other_land_with_tree_cover.
+//
+//  BREAKING: any cached GEE outputs from v4.13.0 or earlier with the
+//    old filenames (03a_other_land_with_tree_cover, 02b_forest,
+//    02c_planted_forest, 02d_naturally_regenerating_forest) keep
+//    working as standalone files but won't auto-fit any pipeline
+//    that hardcodes the new names. Plugin updated in lockstep
+//    (v0.13.0) so plugin-side outputs use the same letters.
+
+// Changes vs v4.12.2 (Batch 25 -- OLWTC includes urban tree cover):
+//  - OLWTC bucket expanded to match FRA Note 10 ("Other Land with
+//    Tree Cover" = non-Forest land that is tree-covered, including
+//    urban tree cover). Previously OLWTC was only oil palm + SDPT
+//    class 2 tree crops. Now it also includes URBAN TREE COVER:
+//    tree-covered pixels falling inside built-up small or large.
+//    Each urban-tree-cover pixel must genuinely have tree cover
+//    (intersection with the chosen tree-cover source) -- so no
+//    bare-rooftop overshoot in the OLWTC layer.
+//  - Affected sites:
+//      * Forest-baseline exclusion (analysis "Refine to forest"):
+//        narrows 02b_forest by ALL of OLWTC including urban tree
+//        cover -- FRA-strict (urban land is non-Forest).
+//      * 03a_other_land_with_tree_cover export: includes urban tree
+//        cover. Cleaner FRA-aligned export for plugin / external use.
+//  - Behaviour:
+//      * 02b_forest area shrinks slightly in cities -- FRA-correct.
+//      * 04a_primary_forest essentially unchanged: built-up was
+//        already removed via the disturbance-buffer step at any
+//        positive built-up buffer distance.
+//      * Agriculture aggregation (used for buffer calc) is NOT
+//        changed: built-up has its own bucket / buffer there. OLWTC
+//        and the buffered "agriculture" bucket are conceptually
+//        different (FRA non-Forest tree-cover vs disturbance source).
+//  - Implementation: defined a single `olwtc` variable per year in
+//    both exportRastersToDrive() and addLayersToMap(). In the
+//    analysis path, the built-up block + national built-up overrides
+//    relocated UP to be above the OLWTC exclusion (downstream
+//    distance-buffer code unchanged; same vars in scope).
+
+// Changes vs v4.12.1 (Batch 24.3 -- 03a filename FRA realignment):
+//  - Renamed export 03a_plantations_tree_crops -> 03a_other_land_with_
+//    tree_cover. The new name matches FRA 2025 Note 10 wording (the
+//    canonical category for the non-Forest tree-cover bucket: oil
+//    palm, fruit orchards, agroforestry, urban trees) AND the QGIS
+//    plugin's user-facing input slot label, so a user downloading
+//    this file from GEE no longer has to mentally translate when
+//    loading it into the plugin. Concept unchanged: still SDPT class
+//    2 + Descals oil palm.
+//  - Renamed export tickbox label "Plantations (agri tree crops,
+//    03a)" -> "Other land with tree cover (03a)" to match.
+//  - About-panel "Plantations layer" wording (in the rubber caveat
+//    block) intentionally LEFT IN PLACE because that paragraph is
+//    educational -- it explains why the everyday word "plantation"
+//    fits these crops better than timber forestry. Filename + UI
+//    align to FRA; the explanatory text retains the everyday term.
+//  BREAKING: any cached GEE outputs from v4.12.1 or earlier with the
+//    old name will need to be renamed manually if downstream tooling
+//    references the old filename.
+
+// Changes vs v4.12.0 (Batch 24.2 -- export panel polish):
+//  - Drop redundant "_<scale>m" suffix from the OSM roads vector
+//    filename. Vectors don't have a pixel size; the existing AOI +
+//    WDPA vector exports already drop the suffix. Result:
+//    BTN_gee_03a_roads_osm_vector_<HHhMMm>.shp instead of
+//    BTN_gee_03a_roads_osm_vector_30m_<HHhMMm>.shp.
+//  - Add a "Select all / none" master tickbox at the top of the
+//    Export All Layers tickbox list. One-click bulk on/off for every
+//    per-layer checkbox below. Default unticked (per-layer defaults
+//    are mixed). Toggling overwrites all children; manual per-layer
+//    edits afterwards don't auto-resync the master.
+
+// Changes vs v4.11.0 (Batch 24 / 24.1 -- OSM roads vector export):
+//  - New "Roads (vector, OSM)" tickbox in the Export All Layers panel
+//    (default OFF). When ticked, exports the OSM roads merge clipped
+//    to country + buffer as a zipped Shapefile (LineString geometry).
+//    Drives the QGIS plugin's vector roads input slot for users who
+//    want vector roads (e.g. for finer buffer modelling) instead of
+//    the raster mosaic.
+//  - Renamed existing "Roads" tickbox to "Roads (binary image, OSM+)"
+//    so the pair reads consistently. The "+" anticipates future
+//    multi-source merging (today the raster IS OSM-only).
+//  - timeseriesAnthro.js gains a new function getOsmRoadsAll(aoi).
+//    Merges the 33 regional OSM CSV-uploaded FeatureCollections,
+//    filters out highway = 'proposed' / 'planned' (data-quality
+//    issue noted during ingestion), and returns the result. Optional
+//    aoi argument applies filterBounds INSIDE the per-asset map
+//    BEFORE flatten() -- mirrors WDPA's spatial-index pushdown so
+//    GEE skips non-overlapping assets via index lookup. Bhutan
+//    benchmark: 7+ min today; per-asset filtering is incremental but
+//    the WDPA pattern.
+//  - doExportTable() helper extended with optional geometryTypes
+//    argument (defaults to ['Polygon','MultiPolygon'] for backwards
+//    compat). OSM roads pass ['LineString','MultiLineString'] so the
+//    SHP exports include the LineStrings (default polygon-only filter
+//    would silently empty the export).
+//  - OSM caveats inline in the new module function's comments:
+//      * OSM-only (Congo logging roads via getCongoRoadsUpToYear stay
+//        separate, sourced from wurnrt-loggingroads).
+//      * No road-type differentiation -- some highways may be foot/
+//        bike-only and not vehicle-accessible. Buffered outputs may
+//        overstate accessibility in some regions.
 
 // Changes vs v4.8.4 (P1.23 -- Custom forest section + input declaration):
 //  - "Custom Forest" pulled out of the Source dropdown into its own
@@ -1693,14 +1815,18 @@ var aboutContent = ui.Panel({
 
     ui.Label('How PFF outputs map to FRA (operational proxies, ≈)', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
     ui.Label(
-      '02b_forest                   ≈ FRA Forest (when "Exclude ' +
-      'plantations" is on; tree cover MINUS FRA-aligned agriculture)',
+      '02b_other_land_with_tree_cover ≈ FRA OLWTC (Note 10: oil palm + ' +
+      'orchards + agroforestry + urban tree cover)',
       {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
     ui.Label(
-      '02c_planted_forest           ≈ FRA Planted Forest (SDPT class 1)',
+      '02c_forest                   ≈ FRA Forest (when "Refine to forest" ' +
+      'is on; tree cover MINUS 02b_other_land_with_tree_cover)',
       {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
     ui.Label(
-      '02d_naturally_regenerating   ≈ FRA NRF (= 02b - 02c)',
+      '02d_planted_forest           ≈ FRA Planted Forest (SDPT class 1)',
+      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
+    ui.Label(
+      '02e_naturally_regenerating   ≈ FRA NRF (= 02c - 02d)',
       {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
     ui.Label(
       '04a_primary_forest           ≈ FRA Primary Forest -- geographic ' +
@@ -2313,14 +2439,15 @@ var exportRasterStatusLabel = ui.Label('', {margin: '4px 0 0 8px', width: '280px
 var exportChkStyle = {fontSize: '11px', margin: '1px 0'};
 var exportChk_final           = ui.Checkbox({label: 'Primary forest (final)',        value: true,  style: exportChkStyle});
 var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-connectivity forest',       value: true,  style: exportChkStyle});
-var exportChk_inputForest     = ui.Checkbox({label: 'Input forest (02b)',            value: true,  style: exportChkStyle});
-var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02d)', value: true,  style: exportChkStyle});
-var exportChk_roads           = ui.Checkbox({label: 'Roads',                         value: true,  style: exportChkStyle});
+var exportChk_inputForest     = ui.Checkbox({label: 'Input forest (02c)',            value: true,  style: exportChkStyle});
+var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02e)', value: true,  style: exportChkStyle});
+var exportChk_roads           = ui.Checkbox({label: 'Roads (binary image, OSM+)',   value: true,  style: exportChkStyle});
+var exportChk_roadsOsmVector  = ui.Checkbox({label: 'Roads (vector, OSM)',           value: false, style: exportChkStyle});
 var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up (small)',              value: true,  style: exportChkStyle});
 var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up (large)',              value: true,  style: exportChkStyle});
 var exportChk_agriculture     = ui.Checkbox({label: 'Agriculture',                   value: true,  style: exportChkStyle});
-var exportChk_plantations     = ui.Checkbox({label: 'Planted forest (timber/pulp/fibre, 02c)', value: true,  style: exportChkStyle});
-var exportChk_fraAgriculture  = ui.Checkbox({label: 'Plantations (agri tree crops, 03a)', value: false, style: exportChkStyle});
+var exportChk_plantations     = ui.Checkbox({label: 'Planted forest (timber/pulp/fibre, 02d)', value: true,  style: exportChkStyle});
+var exportChk_fraAgriculture  = ui.Checkbox({label: 'Other land with tree cover (02b)', value: false, style: exportChkStyle});
 var exportChk_dem             = ui.Checkbox({label: 'DEM',                           value: true,  style: exportChkStyle});
 var exportChk_slope           = ui.Checkbox({label: 'Slope',                         value: false, style: exportChkStyle});
 var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas (binary image)', value: true,  style: exportChkStyle});
@@ -2330,12 +2457,33 @@ var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (tree cover + lo
 var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height',              value: false, style: exportChkStyle});
 var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata JSON (config + run snapshot)', value: true,  style: exportChkStyle});
 
+// Select all / none master tickbox -- one-click bulk on/off for every
+// per-layer checkbox below. Default unticked: per-layer defaults are
+// mixed (some on, some off) so the master can't honestly claim either
+// state at startup. Toggling it overwrites all children. Manual
+// per-layer edits afterwards don't auto-resync the master (kept simple).
+var exportChkAllToggle = ui.Checkbox({
+  label: 'Select all / none',
+  value: false,
+  onChange: function (v) {
+    [exportChk_final, exportChk_preConnectivity, exportChk_inputForest,
+     exportChk_naturallyRegenerating, exportChk_roads, exportChk_roadsOsmVector,
+     exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture,
+     exportChk_plantations, exportChk_fraAgriculture, exportChk_dem,
+     exportChk_slope, exportChk_protLegal, exportChk_protVector,
+     exportChk_aoi, exportChk_hansenRaw, exportChk_gladHeight,
+     exportChk_runMetadata].forEach(function (cb) { cb.setValue(v); });
+  },
+  style: {fontSize: '11px', fontWeight: 'bold', margin: '4px 0 2px 0'}
+});
+
 var exportSelectPanel = ui.Panel({
   widgets: [
+    exportChkAllToggle,
     ui.Label('Select layers to export:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_naturallyRegenerating],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_roads, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations, exportChk_fraAgriculture],
+    ui.Panel([exportChk_roads, exportChk_roadsOsmVector, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations, exportChk_fraAgriculture],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
     ui.Panel([exportChk_dem, exportChk_slope, exportChk_protLegal, exportChk_protVector, exportChk_aoi],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
@@ -2480,19 +2628,23 @@ function exportRastersToDrive() {
   }
 
   // Vector export helper. Same caller contract as doExport.
-  function doExportTable(collection, description, folder) {
+  // Optional `geometryTypes` arg lets callers export non-polygon
+  // collections (e.g. OSM roads as LineStrings); defaults to polygons
+  // for backwards compatibility with existing callers (WDPA, AOI, etc.).
+  function doExportTable(collection, description, folder, geometryTypes) {
     var desc = description;
+    geometryTypes = geometryTypes || ['Polygon', 'MultiPolygon'];
     // SHP requires a single geometry type. Some source FCs (WDPA, the
     // simplified/diced GAUL asset used for IDN/THA/DZA/AUS/CHN) carry stray
     // LineString / Point features that trigger GEE Error 3 ("multiple
-    // geometry types"). Filter to polygons only before export.
-    var polyOnly = collection.map(function(f) {
+    // geometry types"). Filter to the requested type(s) before export.
+    var filtered = collection.map(function(f) {
       return f.set('_pff_gt', f.geometry().type());
-    }).filter(ee.Filter.inList('_pff_gt', ['Polygon', 'MultiPolygon']))
+    }).filter(ee.Filter.inList('_pff_gt', geometryTypes))
       .map(function(f) { return f.set('_pff_gt', null); });
     if (useCloud) {
       Export.table.toCloudStorage({
-        collection: polyOnly,
+        collection: filtered,
         description: desc,
         bucket: gcsBucket.trim(),
         fileNamePrefix: folder + '/' + description,
@@ -2500,7 +2652,7 @@ function exportRastersToDrive() {
       });
     } else {
       Export.table.toDrive({
-        collection: polyOnly,
+        collection: filtered,
         description: desc,
         folder: folder,
         fileFormat: 'SHP'
@@ -2628,7 +2780,7 @@ function exportRastersToDrive() {
     }
     if (exportChk_inputForest.getValue()) {
       doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-        mkExportName('02b', 'forest_' + analysisYear + '_' + s), folder);
+        mkExportName('02c', 'forest_' + analysisYear + '_' + s), folder);
     }
 
     // GLAD raw tree height (so user can re-threshold at any height in QGIS)
@@ -2653,6 +2805,27 @@ function exportRastersToDrive() {
     var roadsMosaicStatic = timeseriesAnthroModule.roadsMosaicStatic().updateMask(country_and_buffer_mask);
     if (exportChk_roads.getValue()) {
       doExport(roadsMosaicStatic.unmask(0), mkExportName('03a', 'roads_' + analysisYear + '_' + s), folder);
+    }
+
+    // OSM roads vector (global merge of 33 regional uploads). Clipped
+    // to country + buffer (the SAME polygon used for the raster
+    // country_and_buffer_mask), not just exportRegion which is the
+    // looser bounding box. LineString geometry — pass geometryTypes
+    // to doExportTable so it doesn't filter to polygons by default.
+    // P1.30 batch 24.1: pass the AOI INTO getOsmRoadsAll so it
+    // applies filterBounds per-asset BEFORE the flatten (WDPA-style
+    // fast-path). Was a chained .filterBounds() AFTER flatten which
+    // defeated per-child spatial-index pushdown across 33 children.
+    if (exportChk_roadsOsmVector.getValue()) {
+      var country_and_buffer_geom = country_geom.buffer(
+        country_buffer_threshold + 1000);
+      var roadsOsmAoi = timeseriesAnthroModule.getOsmRoadsAll(
+        country_and_buffer_geom);
+      doExportTable(
+        roadsOsmAoi,
+        mkExportName('03a', 'roads_osm_vector'),
+        folder,
+        ['LineString', 'MultiLineString']);
     }
 
     // Built-up small
@@ -2700,15 +2873,33 @@ function exportRastersToDrive() {
     // oil palm now route through the agriculture aggregation instead,
     // per FRA: those are agricultural land regardless of tree biology.
     // Net 04a_primary_forest pixels unchanged (everything is still in
-    // the disturbance bucket), but 02c_plantations export and the
-    // 02d_naturally_regenerating_forest derivation are now FRA-faithful.
+    // the disturbance bucket), but 02d_planted_forest export and the
+    // 02e_naturally_regenerating_forest derivation are now FRA-faithful.
     var plantedForestSDPT = timeseriesAnthroModule.processingPlantedForestSDPT()
         .updateMask(country_and_buffer_mask);
     var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
         .updateMask(country_and_buffer_mask);
     var allPlantationsSel = plantedForestSDPT;
+
+    // P1.30 batch 25 -- OLWTC bucket per FRA Note 10 = "non-Forest
+    // land with tree cover". Includes: oil palm + SDPT class 2 tree
+    // crops + URBAN TREE COVER (tree-covered pixels inside built-up,
+    // small or large). The urban-tree-cover sub-bucket is the
+    // intersection of built-up with the chosen tree-cover source --
+    // so each pixel claimed as OLWTC genuinely has tree cover (no
+    // bare-rooftop overshoot). Built-up takes precedence over
+    // Forest: a tree inside a city is "urban tree", not Forest.
+    // Used in: 02b_other_land_with_tree_cover export below.
+    var _treeCoverForOlwtc = forest_map.updateMask(country_and_buffer_mask);
+    var urbanTreeCover = builtUpSmall.unmask(0)
+        .or(builtUpLargeImg.unmask(0))
+        .and(_treeCoverForOlwtc.unmask(0));
+    var olwtc = oilPalmDescalsSel.unmask(0)
+        .or(treeCropsSDPT.unmask(0))
+        .or(urbanTreeCover);
+
     if (exportChk_plantations.getValue()) {
-      // 02c_planted_forest export = FRA Planted Forest only (SDPT class 1).
+      // 02d_planted_forest export = FRA Planted Forest only (SDPT class 1).
       // Plugin mirrors this when consumed -- "exclude planted forest" =
       // exclude FRA Planted Forest (timber, pulp, fibre).
       // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 (tree crops), so
@@ -2716,9 +2907,9 @@ function exportRastersToDrive() {
       // plantations ARE forest -- supply national rubber via
       // nationalPlantations override to add it.
       doExport(allPlantationsSel.unmask(0).toByte(),
-        mkExportName('02c', 'planted_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('02d', 'planted_forest_' + analysisYear + '_' + s), folder);
     }
-    // 02d_naturally_regenerating_forest export.
+    // 02e_naturally_regenerating_forest export.
     // P1.23a: respect the panel-level declaration. If the user has
     // declared the input is already at NRF or Primary level, the input
     // IS the NRF -- don't subtract plantations again (would be a no-op
@@ -2736,7 +2927,7 @@ function exportRastersToDrive() {
         .updateMask(country_and_buffer_mask)
         .unmask(0);
       doExport(natRegExport,
-        mkExportName('02d', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('02e', 'naturally_regenerating_forest_' + analysisYear + '_' + s), folder);
     }
     // P1.22 (was P1.18 export): "Plantations" (agricultural tree crops)
     // = Descals oil palm + SDPT class 2. Per FRA Note 10 these are
@@ -2754,13 +2945,14 @@ function exportRastersToDrive() {
     // be aware. National rubber data via nationalPlantations override
     // can correct this in the analysis pipeline.
     if (exportChk_fraAgriculture.getValue()) {
-      var fraAgriExport = oilPalmDescalsSel.unmask()
-        .or(treeCropsSDPT.unmask())
+      // Batch 25: OLWTC export now includes urban tree cover (tree-
+      // covered pixels in built-up small + large) per FRA Note 10.
+      var fraAgriExport = olwtc
         .updateMask(country_and_buffer_mask)
         .unmask(0)
         .toByte();
       doExport(fraAgriExport,
-        mkExportName('03a', 'plantations_tree_crops_' + analysisYear + '_' + s), folder);
+        mkExportName('02b', 'other_land_with_tree_cover_' + analysisYear + '_' + s), folder);
     }
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
     var croplandGladCollectionFF = forwardFillBinaryTimeSeries(croplandGladCollection, years);
@@ -5680,23 +5872,89 @@ map2.add(createDisclaimerPanel());
     // regenerating -> Forest outside buffers -> Primary.
     var tree_cover_clip = forest_map_clip;
 
-    // P1.18: FRA-aligned Forest baseline. When ticked, exclude
-    // tree-cover-meeting agricultural land (Descals oil palm + SDPT
-    // class 2 tree crops) from forest_map_clip BEFORE the natreg
-    // derivation. This narrows the Forest baseline (02b) to the
-    // FRA-strict definition: tree cover meeting biophysical
-    // thresholds AND not primarily agricultural land. Default ON
-    // (FRA-correct); when on, 02b_forest area shrinks but
-    // 04a_primary_forest is essentially unchanged (those pixels
-    // were already removed via disturbance buffering toward primary).
+    // ── Built-up areas (relocated to here in batch 25 so that the
+    //    OLWTC exclusion below can reference urban tree cover. The
+    //    distance buffers further down still use these same vars.) ──
+    var builtUpSmall = ee.Image(0);
+    if (includeGISD) {
+      var gisdCollection = timeseriesAnthroModule.getGISDCollection();
+      builtUpSmall = builtUpSmall.or(gisdCollection.filter(ee.Filter.eq('year', analysisYear)).first().eq(1)).updateMask(country_and_buffer_mask);
+    }
+    if (includeGISA) {
+      var gisaCollection = timeseriesAnthroModule.getGISACollection();
+      builtUpSmall = builtUpSmall.or(gisaCollection.filter(ee.Filter.eq('year', analysisYear)).first().eq(1)).updateMask(country_and_buffer_mask);
+    }
+    if (includeWSF) {
+      var wsfCollection = timeseriesAnthroModule.getWSFCollection();
+      builtUpSmall = builtUpSmall.or(wsfCollection.filter(ee.Filter.eq('year', analysisYear)).first().eq(1)).updateMask(country_and_buffer_mask);
+    }
+    if (includeGHSL) {
+      var ghslCollection = timeseriesAnthroModule.getGhslCollection();
+      var ghslSel = ghslCollection.filter(ee.Filter.eq('year', analysisYear)).first().updateMask(country_and_buffer_mask);
+      builtUpSmall = builtUpSmall.or(ghslSel.eq(1));
+      var builtUpLarge = ghslSel.eq(2);
+    }
+
+    // Merge national small built-up with global
+    if (nationalBuiltupSmall.checkbox.getValue()) {
+      var natBuiltupSmallAsset = nationalBuiltupSmall.getAsset(analysisYear);
+      if (natBuiltupSmallAsset) {
+        var natBuiltupSmallData = preprocessAsset(natBuiltupSmallAsset, nationalBuiltupSmall.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
+        if (nationalBuiltupSmall.modeSelect.getValue() === 'Replace global') {
+          builtUpSmall = natBuiltupSmallData;
+        } else {
+          builtUpSmall = builtUpSmall.unmask(0).or(natBuiltupSmallData).selfMask();
+        }
+      }
+    }
+
+    // Merge national large built-up with global
+    if (nationalBuiltupLarge.checkbox.getValue()) {
+      var natBuiltupLargeAsset = nationalBuiltupLarge.getAsset(analysisYear);
+      if (natBuiltupLargeAsset) {
+        var natBuiltupLargeData = preprocessAsset(natBuiltupLargeAsset, nationalBuiltupLarge.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
+        var nbLargeMode = nationalBuiltupLarge.modeSelect.getValue();
+        if (nbLargeMode === 'Replace global') {
+          builtUpLarge = natBuiltupLargeData;
+        } else if (nbLargeMode === 'Agreement with global') {  // P1.23
+          builtUpLarge = builtUpLarge.unmask(0).and(natBuiltupLargeData.unmask(0)).selfMask();
+        } else { // 'Add to global extent'
+          builtUpLarge = builtUpLarge.unmask(0).or(natBuiltupLargeData).selfMask();
+        }
+      }
+    }
+
+    // Batch 25: OLWTC bucket per FRA Note 10 = "non-Forest land with
+    // tree cover". Includes: oil palm + SDPT class 2 tree crops +
+    // URBAN TREE COVER (tree-covered pixels inside built-up, small
+    // or large). Each urban-tree-cover pixel must genuinely have
+    // tree cover (intersection with the chosen source) -- so no
+    // bare-rooftop overshoot. Used in the FRA-strict Forest-baseline
+    // exclusion below. End-of-pipeline 04a_primary_forest unchanged
+    // (built-up was always in the disturbance buffer); 02c_forest
+    // shrinks slightly in cities -- FRA-correct.
+    var _builtUpLargeOrEmpty = (typeof builtUpLarge !== 'undefined' && builtUpLarge)
+      ? builtUpLarge : ee.Image(0);
+    var urbanTreeCover = builtUpSmall.unmask(0)
+        .or(_builtUpLargeOrEmpty.unmask(0))
+        .and(tree_cover_clip.unmask(0));
+    var olwtc = oilPalmDescalsSel.unmask(0)
+        .or(treeCropsSDPT.unmask(0))
+        .or(urbanTreeCover);
+
+    // P1.18: FRA-aligned Forest baseline. When ticked, exclude OLWTC
+    // (non-Forest tree cover -- oil palm + SDPT class 2 + urban tree
+    // cover) from forest_map_clip BEFORE the natreg derivation. This
+    // narrows the Forest baseline (02c) to the FRA-strict definition:
+    // tree cover meeting biophysical thresholds AND not in OLWTC.
+    // Default ON (FRA-correct); when on, 02c_forest area shrinks but
+    // 04a_primary_forest is essentially unchanged.
     // P1.23: exclusionActive() guards against a hidden checkbox with
     // a stale `true` value being applied -- e.g. user ticked exclude
     // plantations under "All tree cover", then switched declaration
     // to "Naturally regenerating forest" which hides the toggle.
     if (exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel)) {
-      var fraAgriculture = oilPalmDescalsSel.unmask()
-        .or(treeCropsSDPT.unmask());
-      forest_map_clip = forest_map_clip.updateMask(fraAgriculture.not());
+      forest_map_clip = forest_map_clip.updateMask(olwtc.not());
     }
 
     // P1.16: don't overwrite forest_map_clip in-place; compute a
@@ -5715,7 +5973,7 @@ map2.add(createDisclaimerPanel());
       // P1.23a: declaration says input is already at NRF level (or beyond).
       // Treat forest_map_clip directly as NRF for downstream layer/stats/
       // export linkage so the user sees an "NRF" layer/row and the
-      // 02d_naturally_regenerating_forest export reflects the input.
+      // 02e_naturally_regenerating_forest export reflects the input.
       forest_natreg_image = forest_map_clip;
     }
     var forest_baseline = forest_natreg_image !== null
@@ -5830,58 +6088,10 @@ map2.add(createDisclaimerPanel());
     
     // Map.addLayer(nav_wways_usa,{min:0,max:1,palette:["red"]},"nav_wways_usa" )
     
-    // Built-up areas
-    var builtUpSmall = ee.Image(0);
-    if (includeGISD) {
-      var gisdCollection = timeseriesAnthroModule.getGISDCollection();
-      builtUpSmall = builtUpSmall.or(gisdCollection.filter(ee.Filter.eq('year', analysisYear)).first().eq(1)).updateMask(country_and_buffer_mask);
-    }
-    if (includeGISA) {
-      var gisaCollection = timeseriesAnthroModule.getGISACollection();
-      builtUpSmall = builtUpSmall.or(gisaCollection.filter(ee.Filter.eq('year', analysisYear)).first().eq(1)).updateMask(country_and_buffer_mask);
-    }
-    if (includeWSF) {
-      var wsfCollection = timeseriesAnthroModule.getWSFCollection();
-      builtUpSmall = builtUpSmall.or(wsfCollection.filter(ee.Filter.eq('year', analysisYear)).first().eq(1)).updateMask(country_and_buffer_mask);
-    }
-    if (includeGHSL) {
-      var ghslCollection = timeseriesAnthroModule.getGhslCollection();
-      var ghslSel = ghslCollection.filter(ee.Filter.eq('year', analysisYear)).first().updateMask(country_and_buffer_mask);
-      builtUpSmall = builtUpSmall.or(ghslSel.eq(1));
-      var builtUpLarge = ghslSel.eq(2);
-    }
+    // Built-up areas: defined earlier in batch 25 (above the OLWTC
+    // exclusion) so urbanTreeCover could reference them. The vars
+    // builtUpSmall + builtUpLarge are in scope here from that block.
 
-    // Merge national small built-up with global
-    if (nationalBuiltupSmall.checkbox.getValue()) {
-      var natBuiltupSmallAsset = nationalBuiltupSmall.getAsset(analysisYear);
-      if (natBuiltupSmallAsset) {
-        var natBuiltupSmallData = preprocessAsset(natBuiltupSmallAsset, nationalBuiltupSmall.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
-        if (nationalBuiltupSmall.modeSelect.getValue() === 'Replace global') {
-          builtUpSmall = natBuiltupSmallData;
-        } else {
-          builtUpSmall = builtUpSmall.unmask(0).or(natBuiltupSmallData).selfMask();
-        }
-      }
-    }
-
-    // Merge national large built-up with global
-    if (nationalBuiltupLarge.checkbox.getValue()) {
-      var natBuiltupLargeAsset = nationalBuiltupLarge.getAsset(analysisYear);
-      if (natBuiltupLargeAsset) {
-        var natBuiltupLargeData = preprocessAsset(natBuiltupLargeAsset, nationalBuiltupLarge.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
-        var nbLargeMode = nationalBuiltupLarge.modeSelect.getValue();
-        if (nbLargeMode === 'Replace global') {
-          builtUpLarge = natBuiltupLargeData;
-        } else if (nbLargeMode === 'Agreement with global') {  // P1.23
-          builtUpLarge = builtUpLarge.unmask(0).and(natBuiltupLargeData.unmask(0)).selfMask();
-        } else { // 'Add to global extent'
-          builtUpLarge = builtUpLarge.unmask(0).or(natBuiltupLargeData).selfMask();
-        }
-      }
-    }
-    
-    
-     
     // Check cache first before calculating distance transforms
     var dist_road_small, dist_built_up_small, dist_built_up_large, dist_agriculture;
     

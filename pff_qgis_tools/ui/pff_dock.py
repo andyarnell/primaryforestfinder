@@ -1263,9 +1263,14 @@ class PffDockWidget(QgsDockWidget):
         # historical behaviour (Forest + NRF + Primary saved; pre-conn
         # + anthro mask off). The 5 SAVE_* algorithm params route
         # un-saved layers to scratch instead of out_dir.
+        # Note: tuple keys (save_02b_forest, save_02d_nrf) are stable
+        # widget identifiers — they don't change with the Batch 25.1
+        # filename re-letter (SAVE_* algorithm params kept the same
+        # symbolic names for backwards-compat). The display suffix
+        # "(02c)" / "(02e)" reflects the NEW filename letters.
         self._save_layers = [
-            ("save_02b_forest", "Forest", "(02b)", True),
-            ("save_02d_nrf", "Naturally regenerating forest", "(02d)", True),
+            ("save_02b_forest", "Forest", "(02c)", True),
+            ("save_02d_nrf", "Naturally regenerating forest", "(02e)", True),
             ("save_03c_pre_conn", "Pre-connectivity primary forest",
              "(03c, intermediate)", False),
             ("save_04a_primary", "Primary forest", "(04a, final)", True),

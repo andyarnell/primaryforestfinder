@@ -105,13 +105,12 @@ The Full Workflow produces this folder layout (headlines at top, everything else
 
 ```
 OUT/                                     (OUT = your chosen output folder; ISO3 prefix when set)
-  [ISO3_]qgis_02b_forest.tif             ← HEADLINE (≈ FRA Forest baseline -- the
+  [ISO3_]qgis_02c_forest.tif             ← HEADLINE (≈ FRA Forest baseline -- the
                                             harmonised forest layer used downstream;
-                                            FRA-strict when "Exclude agriculture
-                                            from Forest baseline (FRA-aligned)" is
-                                            on with FRA agriculture raster supplied,
-                                            else thresholded tree cover)
-  [ISO3_]qgis_02d_naturally_regenerating_forest.tif
+                                            FRA-strict when "Refine to forest" is
+                                            on with OLWTC raster supplied, else
+                                            thresholded tree cover)
+  [ISO3_]qgis_02e_naturally_regenerating_forest.tif
                                          ← HEADLINE (≈ FRA Naturally Regenerating
                                             Forest, if plantations input supplied)
   [ISO3_]qgis_03c_pre_connectivity_primary_forest.tif
