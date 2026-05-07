@@ -141,12 +141,20 @@ def _html_escape(s: str) -> str:
 
 
 def _form() -> QFormLayout:
-    """Build a QFormLayout with consistent spacing + tight label column."""
+    """Build a QFormLayout with consistent spacing + tight label column.
+
+    P1.30 batch 21: WrapLongRows -- when the dock is narrower than
+    label+field can comfortably fit on one line, the field drops to the
+    next line. Stops a wide field column (e.g. forced wide by a
+    LayerOrFilePicker that needs to show its browse button) from
+    pushing the dock's minimum width unnecessarily wide.
+    """
     f = QFormLayout()
     f.setContentsMargins(0, 0, 0, 0)
     f.setSpacing(6)
     f.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
     f.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+    f.setRowWrapPolicy(QFormLayout.WrapLongRows)
     return f
 
 
@@ -257,6 +265,7 @@ class PffDockWidget(QgsDockWidget):
         self._build_section_5_area_statistics()
         self._build_section_6_vectorise_outputs()
         self._build_section_7_run_options()
+        self._build_section_8_ceo_export()
         self._sections_layout.addStretch(1)
 
         # P1.30 batch 20i: accordion -- only one top-level section
@@ -892,6 +901,17 @@ class PffDockWidget(QgsDockWidget):
         self._input_category = QComboBox()
         for it in INPUT_CATEGORY_ITEMS:
             self._input_category.addItem(it)
+        # P1.30 batch 21: cap combo's reported sizeHint width so the
+        # full GEE-verbatim string ("Tree cover (includes oil palm,
+        # orchards, agroforestry etc)") doesn't force the form field
+        # column to ~450 px — which would clip the LayerOrFilePicker
+        # browse buttons in nearby rows. The combo can still show the
+        # full text at runtime; the dropdown is unaffected.
+        self._input_category.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self._input_category.setMinimumContentsLength(15)
+        self._input_category.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._input_category.currentIndexChanged.connect(
             self._on_input_category_changed)
         form.addRow("My tree cover\nrepresents:", self._input_category)
@@ -1232,6 +1252,298 @@ class PffDockWidget(QgsDockWidget):
 
         sec.set_content_layout(form)
         self._sections_layout.addWidget(sec)
+
+    # ────────────────────────────────────────────────────────────────
+    # P1.30 batch 21: §8 CEO Validation Export (experimental)
+    # Independent flow from full_workflow -- has its own Run button.
+    # ────────────────────────────────────────────────────────────────
+    def _build_section_8_ceo_export(self):
+        from qgis.PyQt.QtWidgets import QSpinBox, QDoubleSpinBox, QStackedWidget
+        sec = CollapsibleSection(
+            "8. Validation: CEO Export (experimental)", expanded=False)
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+
+        banner = QLabel(
+            "<i>Experimental — generates lightweight CEO Plot + Sample "
+            "layers from a forest vector. Tested against Bhutan 06c.</i>")
+        banner.setWordWrap(True)
+        banner.setStyleSheet("color:#666;")
+        # Critical: explicit min width so wordWrap can actually shrink
+        # the label below its natural single-line sizeHint. Without
+        # this, the banner forces the whole §8 section minimum to
+        # ~1000 px on Windows.
+        banner.setMinimumWidth(0)
+        banner.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        body.addWidget(banner)
+
+        form = _form()
+
+        # P1.30 batch 21: helper to wrap a small widget + stretch in an
+        # HBox so the form field column doesn't grow to fit a greedy
+        # spinbox / lineedit. Without this, even one un-stretched
+        # numeric field forces the whole field column wide enough to
+        # clip the LayerOrFilePicker browse button.
+        def _row(*widgets):
+            r = QHBoxLayout()
+            r.setContentsMargins(0, 0, 0, 0)
+            r.setSpacing(6)
+            for w in widgets:
+                if isinstance(w, str):
+                    r.addWidget(QLabel(w))
+                elif isinstance(w, int):
+                    r.addSpacing(w)
+                else:
+                    r.addWidget(w)
+            r.addStretch(1)
+            return r
+
+        self._ceo_input = LayerOrFilePicker(
+            layer_filter=QgsMapLayerProxyModel.PolygonLayer,
+            file_filter="Vector (*.gpkg *.shp *.geojson);;All (*.*)",
+            browse_caption="Pick forest / primary forest vector")
+        form.addRow("Input vector:", self._ceo_input)
+
+        self._ceo_class_field = QgsFieldComboBox()
+        self._ceo_class_field.setAllowEmptyFieldName(False)
+        # Cap natural width so this combo doesn't dominate the field column.
+        self._ceo_class_field.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._ceo_input.pathChanged.connect(self._refresh_ceo_class_field)
+        form.addRow("Class field:", self._ceo_class_field)
+
+        self._ceo_primary_value = QSpinBox()
+        self._ceo_primary_value.setRange(-99, 9999)
+        self._ceo_primary_value.setValue(2)
+        self._ceo_primary_value.setMaximumWidth(70)
+        self._ceo_other_value = QSpinBox()
+        self._ceo_other_value.setRange(-99, 9999)
+        self._ceo_other_value.setValue(1)
+        self._ceo_other_value.setMaximumWidth(70)
+        form.addRow("Class values:", _row(
+            "Primary:", self._ceo_primary_value, 8,
+            "Other:", self._ceo_other_value))
+
+        self._ceo_domain = QComboBox()
+        self._ceo_domain.addItems(
+            ["All forest", "Primary only", "Other forest only"])
+        self._ceo_domain.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        form.addRow("Sampling domain:", self._ceo_domain)
+
+        self._ceo_stratified = QCheckBox("Stratified by class")
+        self._ceo_stratified.setToolTip(
+            "When ticked, sample N_primary + N_other independently per "
+            "class. When unticked, sample N_total uniformly across the "
+            "selected sampling domain.")
+        form.addRow("", self._ceo_stratified)
+
+        self._ceo_n_total = QSpinBox()
+        self._ceo_n_total.setRange(1, 100000)
+        self._ceo_n_total.setValue(50)
+        self._ceo_n_total.setMaximumWidth(110)
+        form.addRow("N samples:", _row(self._ceo_n_total))
+
+        self._ceo_n_primary = QSpinBox()
+        self._ceo_n_primary.setRange(0, 100000)
+        self._ceo_n_primary.setValue(25)
+        self._ceo_n_primary.setMaximumWidth(80)
+        self._ceo_n_other = QSpinBox()
+        self._ceo_n_other.setRange(0, 100000)
+        self._ceo_n_other.setValue(25)
+        self._ceo_n_other.setMaximumWidth(80)
+        form.addRow("N per class:", _row(
+            "Primary:", self._ceo_n_primary, 8,
+            "Other:", self._ceo_n_other))
+
+        self._ceo_min_distance = QDoubleSpinBox()
+        self._ceo_min_distance.setRange(0, 1000000)
+        self._ceo_min_distance.setValue(0)
+        self._ceo_min_distance.setSuffix(" m")
+        self._ceo_min_distance.setDecimals(0)
+        self._ceo_min_distance.setMaximumWidth(110)
+        form.addRow("Min distance:", _row(self._ceo_min_distance))
+
+        self._ceo_seed = QLineEdit()
+        self._ceo_seed.setPlaceholderText("blank = system random")
+        self._ceo_seed.setMaximumWidth(160)
+        form.addRow("Random seed:", _row(self._ceo_seed))
+
+        self._ceo_method = QComboBox()
+        self._ceo_method.addItems(
+            ["Simple point plots",
+             "Custom circular ring boundaries"])
+        self._ceo_method.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._ceo_method.currentIndexChanged.connect(
+            self._on_ceo_method_changed)
+        form.addRow("Export method:", self._ceo_method)
+
+        self._ceo_radius = QDoubleSpinBox()
+        self._ceo_radius.setRange(1, 100000)
+        self._ceo_radius.setValue(2000)
+        self._ceo_radius.setSuffix(" m")
+        self._ceo_radius.setDecimals(0)
+        self._ceo_radius.setMaximumWidth(110)
+        self._ceo_ring_w = QDoubleSpinBox()
+        self._ceo_ring_w.setRange(0.1, 1000)
+        self._ceo_ring_w.setValue(1)
+        self._ceo_ring_w.setSuffix(" m")
+        self._ceo_ring_w.setDecimals(1)
+        self._ceo_ring_w.setMaximumWidth(90)
+        form.addRow("Circular:", _row(
+            "Radius:", self._ceo_radius, 8,
+            "Ring:", self._ceo_ring_w))
+
+        self._ceo_sample_point = QCheckBox("Centre point")
+        self._ceo_sample_point.setChecked(True)
+        self._ceo_sample_square = QCheckBox("1 ha square")
+        form.addRow("Sample geom:", _row(
+            self._ceo_sample_point, self._ceo_sample_square))
+
+        self._ceo_square_size = QDoubleSpinBox()
+        self._ceo_square_size.setRange(1, 10000)
+        self._ceo_square_size.setValue(100)
+        self._ceo_square_size.setSuffix(" m")
+        self._ceo_square_size.setDecimals(0)
+        self._ceo_square_size.setMaximumWidth(110)
+        form.addRow("Square size:", _row(self._ceo_square_size))
+
+        self._ceo_output_folder = QgsFileWidget()
+        self._ceo_output_folder.setStorageMode(QgsFileWidget.GetDirectory)
+        form.addRow("Output folder:", self._ceo_output_folder)
+
+        self._ceo_out_gpkg = QCheckBox("GeoPackage")
+        self._ceo_out_gpkg.setChecked(True)
+        self._ceo_out_zip = QCheckBox("Zipped SHP (CEO upload)")
+        self._ceo_out_zip.setChecked(True)
+        form.addRow("Output format:", _row(
+            self._ceo_out_gpkg, self._ceo_out_zip))
+
+        self._ceo_provenance = QCheckBox("Add provenance fields")
+        self._ceo_provenance.setToolTip(
+            "Off by default. When ON, every output row gets auto-"
+            "generated tracing fields: class_value, class_name, "
+            "radius_m, ring_width_m, sample_type, sampling_method, "
+            "random_seed, source_id. Note: Shapefile DBF truncates "
+            "names > 10 chars (class_value -> class_valu); GeoPackage "
+            "keeps full names.")
+        form.addRow("", self._ceo_provenance)
+
+        body.addLayout(form)
+
+        self._ceo_run_btn = QPushButton("Generate CEO inputs ▶")
+        self._ceo_run_btn.setMinimumHeight(28)
+        self._ceo_run_btn.clicked.connect(self._on_generate_ceo_clicked)
+        body.addWidget(self._ceo_run_btn)
+
+        sec.set_content_layout(body)
+        self._sections_layout.addWidget(sec)
+        # Initial state: hide circular-only widgets (method = simple).
+        self._on_ceo_method_changed(0)
+
+    def _refresh_ceo_class_field(self):
+        layer = self._ceo_input.current_layer()
+        self._ceo_class_field.setLayer(layer)
+        # Auto-pick "level" if present (PFF stage-6 convention).
+        if layer is not None:
+            for f in layer.fields():
+                if f.name().lower() == "level":
+                    self._ceo_class_field.setField(f.name())
+                    break
+
+    def _on_ceo_method_changed(self, idx):
+        circular = (idx == 1)
+        for w in (self._ceo_radius, self._ceo_ring_w):
+            w.setEnabled(circular)
+
+    def _on_generate_ceo_clicked(self):
+        from ..algorithms.ceo_validation_export import (
+            CeoValidationExportAlgorithm as A,
+        )
+        # Validate
+        path = self._ceo_input.path()
+        if not path:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                "§8 requires an input vector layer.")
+            return
+        out_dir = self._ceo_output_folder.filePath()
+        if not out_dir:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                "§8 requires an output folder.")
+            return
+        cf = self._ceo_class_field.currentField() or "level"
+
+        params = {
+            A.INPUT: path,
+            A.CLASS_FIELD: cf,
+            A.PRIMARY_CLASS_VALUE: int(self._ceo_primary_value.value()),
+            A.OTHER_CLASS_VALUE: int(self._ceo_other_value.value()),
+            A.SAMPLING_DOMAIN: self._ceo_domain.currentIndex(),
+            A.STRATIFIED: self._ceo_stratified.isChecked(),
+            A.N_SAMPLES: int(self._ceo_n_total.value()),
+            A.N_PRIMARY: int(self._ceo_n_primary.value()),
+            A.N_OTHER: int(self._ceo_n_other.value()),
+            A.MIN_DISTANCE: float(self._ceo_min_distance.value()),
+            A.RANDOM_SEED: self._ceo_seed.text().strip(),
+            A.EXPORT_METHOD: self._ceo_method.currentIndex(),
+            A.PLOT_RADIUS_M: float(self._ceo_radius.value()),
+            A.RING_WIDTH_M: float(self._ceo_ring_w.value()),
+            A.SAMPLE_GEOM_POINT: self._ceo_sample_point.isChecked(),
+            A.SAMPLE_GEOM_SQUARE: self._ceo_sample_square.isChecked(),
+            A.SQUARE_SIZE_M: float(self._ceo_square_size.value()),
+            A.OUTPUT_FOLDER: out_dir,
+            A.OUTPUT_GEOPACKAGE: self._ceo_out_gpkg.isChecked(),
+            A.OUTPUT_ZIPPED_SHAPEFILE: self._ceo_out_zip.isChecked(),
+            A.ADD_PROVENANCE_FIELDS: self._ceo_provenance.isChecked(),
+            A.ALLOW_EMPTY_STRATUM: False,
+        }
+
+        self._log.append(
+            "<b>=== §8 CEO Validation Export (experimental) ===</b>")
+        feedback = _DockFeedback(self._log, self._progress)
+        ctx = self._make_processing_context(feedback)
+        self._ceo_run_btn.setEnabled(False)
+        try:
+            try:
+                processing.run("pff:ceo_validation_export", params,
+                               context=ctx, feedback=feedback)
+                self._log.append("<span style='color:#080;'>✔ "
+                                 "CEO export complete.</span>")
+                if self._add_main_to_map.isChecked():
+                    self._add_outputs_to_project(ctx)
+            except Exception as e:
+                # Empty-stratum prompt: catch and offer to retry with
+                # ALLOW_EMPTY_STRATUM=True.
+                msg = str(e)
+                if "Allow empty stratum" in msg:
+                    ans = QMessageBox.question(
+                        self, "Primary Forest Finder",
+                        msg + "\n\nProceed without that class?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No)
+                    if ans == QMessageBox.Yes:
+                        params[A.ALLOW_EMPTY_STRATUM] = True
+                        ctx2 = self._make_processing_context(feedback)
+                        processing.run("pff:ceo_validation_export",
+                                       params, context=ctx2,
+                                       feedback=feedback)
+                        if self._add_main_to_map.isChecked():
+                            self._add_outputs_to_project(ctx2)
+                        self._log.append("<span style='color:#080;'>✔ "
+                                         "CEO export complete (with "
+                                         "skipped class).</span>")
+                    else:
+                        self._log.append(
+                            "<span style='color:#a00;'>"
+                            "Aborted by user.</span>")
+                else:
+                    feedback.reportError(f"§8 failed: {e}")
+        finally:
+            self._ceo_run_btn.setEnabled(True)
 
     # ────────────────────────────────────────────────────────────────
     # Run flow

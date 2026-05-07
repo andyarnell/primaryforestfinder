@@ -11,6 +11,7 @@ from .algorithms.connectivity_filter import ConnectivityFilterAlgorithm
 from .algorithms.full_workflow import FullWorkflowAlgorithm
 from .algorithms.zonal_statistics import ZonalStatisticsAlgorithm
 from .algorithms.vectorize_pff_output import VectorizePffOutputAlgorithm
+from .algorithms.ceo_validation_export import CeoValidationExportAlgorithm
 # from .algorithms.generate_ceo_plots import GenerateCeoPlotsAlgorithm  # draft, not shipped yet
 
 
@@ -39,4 +40,5 @@ class PffProvider(QgsProcessingProvider):
         self.addAlgorithm(FullWorkflowAlgorithm())
         self.addAlgorithm(ZonalStatisticsAlgorithm())
         self.addAlgorithm(VectorizePffOutputAlgorithm())
+        self.addAlgorithm(CeoValidationExportAlgorithm())
         # self.addAlgorithm(GenerateCeoPlotsAlgorithm())  # draft, not shipped yet

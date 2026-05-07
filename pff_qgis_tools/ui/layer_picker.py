@@ -62,6 +62,18 @@ class LayerOrFilePicker(QWidget):
         # the source layer stays put in the Layers panel.
         self.setAcceptDrops(True)
 
+        # P1.30 batch 21: ensure the COMPOSITE widget has a defensible
+        # min-width that accommodates the browse button + a sliver of
+        # the combo. Without this, a tight QFormLayout field column can
+        # clip the entire LayerOrFilePicker from the right -- and since
+        # the browse button sits on the right, it's the first thing to
+        # disappear. The 20h Ignored size-policy on the combo only
+        # solves it within the picker's own layout; the ENCLOSING form
+        # column can still squeeze the whole picker. This min-width
+        # guarantees the form column never goes narrower.
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(60)  # ~28 px btn + 4 px gap + 28 px combo
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
