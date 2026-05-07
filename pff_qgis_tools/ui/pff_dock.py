@@ -345,16 +345,6 @@ class PffDockWidget(QgsDockWidget):
         sec = CollapsibleSection("0. Study Area", expanded=False)
         form = _form()
 
-        # P1.30 Batch 27.1: Output folder lives FIRST in §0 (top of
-        # workflow) -- changing folder mid-workflow is annoying, so set
-        # it before AOI/ISO3.
-        self._output_folder = QgsFileWidget()
-        self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
-        self._output_folder.setToolTip(
-            "Folder where all PFF outputs land. Disambiguate runs by "
-            "naming this folder descriptively (e.g. BTN/aberdares_2020).")
-        form.addRow("Output folder:", self._output_folder)
-
         self._aoi_picker = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.VectorLayer,
             file_filter="Vector (*.gpkg *.shp *.geojson *.kml *.gml);;"
@@ -369,6 +359,16 @@ class PffDockWidget(QgsDockWidget):
         self._iso3_edit.editingFinished.connect(self._on_aoi_or_iso3_changed)
         self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
+
+        # Batch 27.2: Output folder lives in §6 Outputs (where it sat
+        # before 27.1 briefly tried moving it here). Tip below points
+        # the user there.
+        _output_tip = QLabel(
+            "<i>Output folder is set in §6 Outputs.</i>")
+        _output_tip.setStyleSheet("color:#888;")
+        _output_tip.setMinimumWidth(0)
+        _output_tip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        form.addRow("", _output_tip)
 
         # P1.30 batch 20j: live preview of the output filename prefix.
         # Built from ISO3 + year only -- AOI layer name no longer
@@ -787,56 +787,49 @@ class PffDockWidget(QgsDockWidget):
         self._year_stack.setSizePolicy(
             QSizePolicy.Maximum, QSizePolicy.Fixed)
 
-        # Index 0: single-year combobox.
+        # Batch 27.2: dropdown shows ONLY FRA reporting years (mirrors
+        # the GEE app's [2000, 2010, 2015, 2020] choice). The previous
+        # "FRA reporting years only" tickbox is gone -- always FRA-only
+        # in the dropdown. Custom years go through the multi-year text
+        # field which now doubles as a custom single-year input (type
+        # "2021" -> single year; type "2010, 2020" -> multi-year).
+
+        # Index 0: single-year combobox (FRA years only).
         self._year_single_combo = QComboBox()
         self._year_single_combo.setEditable(False)
         self._year_single_combo.setToolTip(
-            "Single-year mode. Pick a year from the dropdown. To run "
-            "multiple years, tick 'Run for multiple years' below.")
-        self._populate_year_dropdown(fra_only=False)
+            "Single-year FRA-reporting-year dropdown. To pick a "
+            "non-FRA year (e.g. 2021) or run multiple years, tick "
+            "'Custom / run multiple' below.")
+        self._populate_year_dropdown(fra_only=True)
         self._year_single_combo.setCurrentText("2020")
         self._year_stack.addWidget(self._year_single_combo)
 
-        # Index 1: multi-year text field.
+        # Index 1: multi-year / custom text field. Doubles as custom
+        # single-year input (type one year, no comma) and as the
+        # multi-year list. Wider than 27.1 so the placeholder fits.
         self._year_multi_edit = QLineEdit()
-        self._year_multi_edit.setPlaceholderText("e.g. 2010, 2020")
+        self._year_multi_edit.setPlaceholderText(
+            "single e.g. 2021, or multiple e.g. 2000, 2020")
+        self._year_multi_edit.setMinimumWidth(240)
         self._year_multi_edit.setToolTip(
-            "Multi-year mode. Type a comma-separated list of years. "
-            "The workflow runs once per year; year-varying inputs "
-            "(forest, OLTC, planted, agriculture, built-up, roads) "
-            "are auto-detected by filename year token and globbed "
-            "in the same folder. Static inputs (DEM, slope, "
-            "protected) are reused across all years.")
+            "Custom / multi-year mode. Type one year (e.g. 2021) for "
+            "a single non-FRA year, or a comma-separated list "
+            "(e.g. 2000, 2020) to iterate. For multi-year, "
+            "year-varying inputs (forest, OLTC, planted, agriculture, "
+            "built-up, roads) are auto-detected by filename year "
+            "token and globbed in the same folder; static inputs "
+            "(DEM, slope, protected) are reused across all years.")
         self._year_stack.addWidget(self._year_multi_edit)
 
         form.addRow("Year(s):", self._year_stack)
 
-        # Batch 27.1: greyed FRA-year reference visible when multi-year
-        # mode is on. Helps the user pick from valid years even if not
-        # all of them are available in their data folder.
-        self._fra_year_reference = QLabel(
-            "FRA reporting years: 1990, 2000, 2010, 2015, 2020")
-        self._fra_year_reference.setStyleSheet(
-            "color:#888; font-style:italic;")
-        self._fra_year_reference.setVisible(False)
-        form.addRow("", self._fra_year_reference)
-
-        # Tickboxes: FRA-only filter + multi-year mode + year=all.
-        self._fra_only_chk = QCheckBox(
-            "FRA reporting years only (1990, 2000, 2010, 2015, 2020)")
-        self._fra_only_chk.setToolTip(
-            "When ticked, the single-year dropdown shows only FAO FRA "
-            "reporting years. Combined with 'Run for multiple years', "
-            "pre-fills the multi-year field with the FRA ladder.")
-        self._fra_only_chk.toggled.connect(self._on_fra_only_toggled)
-        form.addRow("", self._fra_only_chk)
-
         self._multi_year_chk = QCheckBox(
-            "Run for multiple years (comma-separated)")
+            "Custom / run multiple (comma-separated)")
         self._multi_year_chk.setToolTip(
-            "When ticked, the Year(s) dropdown is replaced by a free-"
-            "form text field. Type a comma-separated list. The "
-            "workflow then iterates once per year.\n\n"
+            "When ticked, the FRA dropdown is replaced by a free-"
+            "form text field. Type a single year for a non-FRA year, "
+            "or a comma-separated list to iterate.\n\n"
             "Convention: assumes year-varying inputs (forest, OLTC, "
             "planted, agriculture, built-up, roads) for OTHER years "
             "are in the SAME FOLDER as the loaded inputs, with only "
@@ -849,9 +842,15 @@ class PffDockWidget(QgsDockWidget):
         self._year_all_since_2000 = QCheckBox("Year unspecified")
         self._year_all_since_2000.setToolTip(
             "When ticked, no year is recorded for this run. Output "
-            "filenames omit the year segment. No iteration.")
+            "filenames omit the year segment. No iteration. All "
+            "year-related controls above are disabled.")
         self._year_all_since_2000.toggled.connect(
-            lambda on: self._year_stack.setEnabled(not on))
+            self._on_year_unspecified_toggled)
+        # Backwards-compat: keep the FRA-only checkbox attribute as a
+        # no-op stub so any saved-Recent-Run / _apply_params code path
+        # that flips it doesn't AttributeError. Hidden from the form.
+        self._fra_only_chk = QCheckBox()
+        self._fra_only_chk.setVisible(False)
         # 20c: re-render prefix preview whenever year inputs change.
         self._year_single_combo.currentTextChanged.connect(
             self._refresh_prefix_preview)
@@ -890,29 +889,25 @@ class PffDockWidget(QgsDockWidget):
         self._year_single_combo.blockSignals(False)
 
     def _on_fra_only_toggled(self, on: bool):
-        self._populate_year_dropdown(fra_only=on)
-        # If multi-year is also ticked, refresh placeholder + pre-fill.
-        if self._multi_year_chk.isChecked():
-            self._on_multi_year_toggled(True)
+        # Batch 27.2: stub kept for backwards-compat with saved Recent
+        # Runs; the FRA-only filter is now ALWAYS on (the dropdown
+        # only ever shows FRA years). No-op.
+        return
 
     def _on_multi_year_toggled(self, on: bool):
-        if on:
-            # Switch to the multi-year text field.
-            self._year_stack.setCurrentIndex(1)
-            if self._fra_only_chk.isChecked():
-                example = "1990, 2000, 2010, 2015, 2020"
-                if not self._year_multi_edit.text().strip():
-                    self._year_multi_edit.setText(example)
-                self._year_multi_edit.setPlaceholderText(f"e.g. {example}")
-            else:
-                self._year_multi_edit.setPlaceholderText("e.g. 2010, 2020")
-        else:
-            # Switch back to single-year dropdown.
-            self._year_stack.setCurrentIndex(0)
-        # Batch 27.1: show FRA-year reference label only in multi-year
-        # mode (no-op for single-year users; redundant with the dropdown).
-        if hasattr(self, "_fra_year_reference"):
-            self._fra_year_reference.setVisible(on)
+        # Batch 27.2: simplified -- the multi-year text field doubles
+        # as a custom single-year input. No FRA-only branch (dropdown
+        # is always FRA-only). No greyed reference label (dropped).
+        self._year_stack.setCurrentIndex(1 if on else 0)
+
+    def _on_year_unspecified_toggled(self, on: bool):
+        """Batch 27.2: when 'Year unspecified' ticks ON, grey out
+        every year-related control (dropdown + custom edit + the
+        Custom/multi tickbox) so the user can't accidentally set
+        conflicting values."""
+        enabled = not on
+        self._year_stack.setEnabled(enabled)
+        self._multi_year_chk.setEnabled(enabled)
 
     def _build_section_2_tree_cover(self):
         sec = CollapsibleSection("2. Tree Cover", expanded=False)
@@ -1431,14 +1426,15 @@ class PffDockWidget(QgsDockWidget):
 
         form = _form()
 
-        # P1.30 Batch 27.1: Output folder moved BACK to §0 (top of
-        # workflow) so users set it before AOI/ISO3. Reference here:
-        _output_tip = QLabel(
-            "<i>Output folder is set in §0 Study Area.</i>")
-        _output_tip.setStyleSheet("color:#888;")
-        _output_tip.setMinimumWidth(0)
-        _output_tip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        form.addRow("", _output_tip)
+        # Batch 27.2: Output folder lives here in §6 (where it was
+        # before 27.1 briefly relocated it to §0). User feedback:
+        # prefer it grouped with the other output controls.
+        self._output_folder = QgsFileWidget()
+        self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
+        self._output_folder.setToolTip(
+            "Folder where all PFF outputs land. Disambiguate runs by "
+            "naming this folder descriptively (e.g. BTN/aberdares_2020).")
+        form.addRow("Output folder:", self._output_folder)
 
         self._build_save_list_form_rows(form)
 
@@ -1453,13 +1449,37 @@ class PffDockWidget(QgsDockWidget):
         body.addLayout(form)
 
         # Sub-sections (collapsed by default).
-        body.addWidget(self._build_subsection_vectorise())
-        body.addWidget(self._build_subsection_validation_sampling())
-        body.addWidget(self._build_subsection_save_load_config())
-        body.addWidget(self._build_subsection_performance())
+        _vec_sec = self._build_subsection_vectorise()
+        _val_sec = self._build_subsection_validation_sampling()
+        _sav_sec = self._build_subsection_save_load_config()
+        _perf_sec = self._build_subsection_performance()
+        body.addWidget(_vec_sec)
+        body.addWidget(_val_sec)
+        body.addWidget(_sav_sec)
+        body.addWidget(_perf_sec)
+
+        # Batch 27.2: §6 sub-section accordion -- only one open at a
+        # time (Customise outputs / Vectorise / Validation /
+        # Save-Load / Performance). Otherwise the whole §6 panel
+        # gets unwieldy when a user expands several at once.
+        self._outputs_subsections = [
+            self._save_customise_section,
+            _vec_sec, _val_sec, _sav_sec, _perf_sec,
+        ]
+        for _sub in self._outputs_subsections:
+            _sub.toggled.connect(self._on_outputs_subsection_toggled)
 
         sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
+
+    def _on_outputs_subsection_toggled(self, expanded: bool):
+        """Mutual-exclusion accordion for §6 Outputs sub-sections."""
+        if not expanded:
+            return
+        sender = self.sender()
+        for sub in getattr(self, "_outputs_subsections", []):
+            if sub is not sender and sub.is_expanded():
+                sub.set_expanded(False)
 
     # ── Run config save / load handlers ───────────────────────────────
     def _on_save_run_config(self):
@@ -2236,6 +2256,23 @@ class PffDockWidget(QgsDockWidget):
                 "Cannot run yet:\n\n• " + "\n• ".join(issues))
             return
 
+        # Batch 27.2: empty year guard. If "Custom / run multiple"
+        # tickbox is on but the text field is blank, _current_year_text
+        # returns "" and _collect_params used to fall back to "2020"
+        # silently. That caused "empty string seems to run for years"
+        # (and ran 2020 logic on whatever inputs were loaded). Block
+        # explicitly here.
+        if (self._multi_year_chk.isChecked()
+                and not self._year_all_since_2000.isChecked()
+                and not self._year_multi_edit.text().strip()):
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                "Custom / run multiple is ticked but no year(s) are "
+                "typed.\n\nType a single year (e.g. 2021) or a "
+                "comma-separated list (e.g. 2010, 2020), OR untick "
+                "the box to use the FRA dropdown.")
+            return
+
         self._log.clear()
         self._progress.setValue(0)
 
@@ -2256,6 +2293,18 @@ class PffDockWidget(QgsDockWidget):
         # paths between iterations.
         from ..utils_year_iter import parse_year_list
         year_list = parse_year_list(params.get(FW.YEAR, "") or "")
+
+        # Batch 27.2: single-year filename sanity check. When the user
+        # picks one year (e.g. 2020) but the loaded input filenames
+        # carry a DIFFERENT year token (e.g. *_2010_*.tif), warn before
+        # running. Mirrors the multi-year alignment check; non-blocking
+        # (Yes/No prompt) because the user might genuinely want to run
+        # 2020 logic against differently-named inputs.
+        if (len(year_list) == 1 and year_list[0] != "all"
+                and not self._single_year_filenames_aligned(
+                    params, year_list[0], feedback)):
+            self._leave_running_state()
+            return
 
         status = "failed"
         try:
@@ -2298,6 +2347,67 @@ class PffDockWidget(QgsDockWidget):
             if status == "finished":
                 self._record_qgis_history(params)
 
+    def _single_year_filenames_aligned(self, params, declared_year,
+                                        feedback) -> bool:
+        """Batch 27.2: scan input file paths for 4-digit year tokens
+        and warn if any differ from the declared single-year. Returns
+        True to continue, False to abort (user clicked No to the
+        confirm prompt).
+
+        Tokens scanned: substrings matching ``_\\d{4}_`` in the
+        filename basename. Years outside [1990, 2030] are ignored
+        (avoid false positives on EPSG / scale / time-hash substrings).
+        """
+        try:
+            declared = int(declared_year)
+        except (ValueError, TypeError):
+            return True  # malformed -- skip the check
+        token_rx = re.compile(r"_(\d{4})_")
+        path_param_names = [
+            FW.FOREST_RASTER, FW.AOI, FW.FRA_AGRICULTURE_RASTER,
+            FW.PLANTATIONS_RASTER, FW.ROADS, FW.ROADS_RASTER,
+            FW.BUILTUP_SMALL_RASTER, FW.BUILTUP_LARGE_RASTER,
+            FW.AGRICULTURE_RASTER,
+            FW.CUSTOM_1_RASTER, FW.CUSTOM_2_RASTER, FW.CUSTOM_3_RASTER,
+        ]
+        mismatches = []
+        for name in path_param_names:
+            p = params.get(name) or ""
+            if not p:
+                continue
+            base = os.path.basename(str(p))
+            for m in token_rx.finditer(base):
+                tok = int(m.group(1))
+                if 1990 <= tok <= 2030 and tok != declared:
+                    mismatches.append((name, base, tok))
+                    break  # one mismatch per input is enough
+        if not mismatches:
+            return True
+        # Build a readable list (max 6 lines)
+        sample = "\n".join(
+            f"  • {os.path.basename(b)} contains year {t}"
+            for _, b, t in mismatches[:6])
+        more = (f"\n  …and {len(mismatches) - 6} more"
+                if len(mismatches) > 6 else "")
+        feedback.pushWarning(
+            f"⚠ Single-year mismatch: you picked {declared} but "
+            f"{len(mismatches)} input(s) contain a different year "
+            f"in their filename.")
+        ans = QMessageBox.question(
+            self, "Primary Forest Finder",
+            f"You picked year = {declared}, but {len(mismatches)} "
+            f"input(s) appear to be from a different year:\n\n"
+            f"{sample}{more}\n\n"
+            "Run anyway? (Yes proceeds with year=" + str(declared)
+            + "; No aborts so you can change the year or pick "
+              "different inputs.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No)
+        if ans != QMessageBox.Yes:
+            feedback.pushWarning("⚠ Run aborted by user.")
+            return False
+        return True
+
     def _run_multi_year(self, base_params, year_list, feedback):
         """Iterate the workflow once per year in `year_list`, with
         year-varying input paths substituted between runs.
@@ -2327,6 +2437,15 @@ class PffDockWidget(QgsDockWidget):
             f"=== Multi-year run: {len(year_list)} years "
             f"({', '.join(year_list)}) ===")
         feedback.pushInfo(f"Anchor year: {anchor_year}")
+
+        # Batch 27.2: anchor-year sanity check. If the loaded input
+        # filenames don't contain the anchor year token (e.g. user
+        # typed "2020, 2010" but loaded *_2010_*.tif files), the per-
+        # year resolution silently misclassifies the anchor's inputs
+        # as anchor-year data. Warn before iterating.
+        if not self._single_year_filenames_aligned(
+                base_params, anchor_year, feedback):
+            return
 
         # Pre-flight: resolve every (year, input) cell so the user
         # sees what's about to happen BEFORE iterating.
