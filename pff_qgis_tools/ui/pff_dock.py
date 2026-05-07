@@ -1298,8 +1298,10 @@ class PffDockWidget(QgsDockWidget):
         self._save_customise_section.set_content_layout(cust_layout)
         form.addRow("", self._save_customise_section)
 
-        self._save_combined = QCheckBox("Save combined coded raster (debug)")
-        form.addRow("", self._save_combined)
+        # P1.30 batch 22.1: combined coded raster (debug) tickbox
+        # removed from the dock as overkill for normal use. Algorithm
+        # param SAVE_COMBINED_RASTER stays for Processing-toolbox
+        # power users + Recent-run replay. Dock always sends False.
 
         self._reuse_distance = QCheckBox("Reuse cached distance surfaces")
         form.addRow("", self._reuse_distance)
@@ -1965,7 +1967,11 @@ class PffDockWidget(QgsDockWidget):
             self._save_checkboxes["save_04a_primary"].isChecked())
         params[FW.SAVE_04E_ANTHRO_MASK] = (
             self._save_checkboxes["save_04e_anthro_mask"].isChecked())
-        params[FW.SAVE_COMBINED_RASTER] = self._save_combined.isChecked()
+        # P1.30 batch 22.1: SAVE_COMBINED_RASTER tickbox removed from
+        # the dock; default to False here. Param is still registered
+        # on the algorithm so toolbox users / saved Recent runs still
+        # work.
+        params[FW.SAVE_COMBINED_RASTER] = False
         params[FW.REUSE_DISTANCE_SURFACES] = self._reuse_distance.isChecked()
         params[FW.REUSE_PREPARED] = self._reuse_prepared.isChecked()
         params[FW.ADD_MAIN_OUTPUTS_TO_MAP] = (
@@ -2557,7 +2563,9 @@ class PffDockWidget(QgsDockWidget):
         self._save_checkboxes["save_04e_anthro_mask"].setChecked(
             b(FW.SAVE_04E_ANTHRO_MASK, False))
         self._refresh_save_summary()
-        self._save_combined.setChecked(b(FW.SAVE_COMBINED_RASTER))
+        # P1.30 batch 22.1: SAVE_COMBINED_RASTER tickbox removed; nothing
+        # to restore on the dock side. Saved value is still in params
+        # dict (preserved through _record_run_history) for fidelity.
         self._reuse_distance.setChecked(b(FW.REUSE_DISTANCE_SURFACES))
         self._reuse_prepared.setChecked(b(FW.REUSE_PREPARED, True))
         self._add_main_to_map.setChecked(b(FW.ADD_MAIN_OUTPUTS_TO_MAP, True))
