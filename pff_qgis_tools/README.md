@@ -38,7 +38,7 @@ All tools appear under **Processing Toolbox → Primary Forest Finder**.
 
 Or use **Run Full Workflow** to execute everything (Stages 1-7) in one click.
 
-For repeated runs while tuning thresholds, leave **Reuse prepared/*.tif cache**
+For repeated runs while tuning thresholds, leave **Reuse preprocessing/*.tif cache**
 ticked (default) — anthro reprojection is skipped when an aligned cache from
 a prior run exists, saving minutes per re-run on national-scale data.
 
@@ -108,12 +108,12 @@ OUT/                                     (OUT = your chosen output folder; ISO3 
   [ISO3_]qgis_02c_forest.tif             ← HEADLINE (≈ FRA Forest baseline -- the
                                             harmonised forest layer used downstream;
                                             FRA-strict when "Refine to forest" is
-                                            on with OLWTC raster supplied, else
+                                            on with OLTC raster supplied, else
                                             thresholded tree cover)
   [ISO3_]qgis_02e_naturally_regenerating_forest.tif
                                          ← HEADLINE (≈ FRA Naturally Regenerating
                                             Forest, if plantations input supplied)
-  [ISO3_]qgis_03c_pre_connectivity_primary_forest.tif
+  [ISO3_]qgis_03c_pre_refinement_primary_forest.tif
                                          ← HEADLINE (forest after disturbance buffers
                                             + protection rescues; output of Step 03
                                             tier logic, input to Step 04 viability)
@@ -144,7 +144,7 @@ OUT/                                     (OUT = your chosen output folder; ISO3 
     refine_step_a_neighbourhood.tif      ← (only when both refine steps run)
     refine_step_b_sieve_unmasked.tif     ← (only when refine step b runs)
 
-    prepared/                            ← reprojected + aligned inputs (reusable)
+    preprocessing/                       ← reprojected + aligned inputs (reusable)
       forest.tif
       roads.tif, builtup_small.tif, builtup_large.tif, agriculture.tif
       plantations.tif, protected.tif

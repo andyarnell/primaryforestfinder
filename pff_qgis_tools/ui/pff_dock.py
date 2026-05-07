@@ -21,6 +21,7 @@ FRA comparison panel + suggested-CRS dropdown are deferred to 20b.
 
 import json
 import os
+import re
 
 import processing
 from qgis.PyQt.QtCore import Qt
@@ -338,8 +339,21 @@ class PffDockWidget(QgsDockWidget):
     # Section builders
     # ────────────────────────────────────────────────────────────────
     def _build_section_0_study_area(self):
-        sec = CollapsibleSection("0. Study Area", expanded=True)
+        # Batch 27.1: §0 starts COLLAPSED on first install (was True).
+        # Multiple sections opening at first launch was distracting;
+        # accordion-managed expand state takes over on subsequent uses.
+        sec = CollapsibleSection("0. Study Area", expanded=False)
         form = _form()
+
+        # P1.30 Batch 27.1: Output folder lives FIRST in §0 (top of
+        # workflow) -- changing folder mid-workflow is annoying, so set
+        # it before AOI/ISO3.
+        self._output_folder = QgsFileWidget()
+        self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
+        self._output_folder.setToolTip(
+            "Folder where all PFF outputs land. Disambiguate runs by "
+            "naming this folder descriptively (e.g. BTN/aberdares_2020).")
+        form.addRow("Output folder:", self._output_folder)
 
         self._aoi_picker = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.VectorLayer,
@@ -355,15 +369,6 @@ class PffDockWidget(QgsDockWidget):
         self._iso3_edit.editingFinished.connect(self._on_aoi_or_iso3_changed)
         self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
-
-        # P1.30 batch 23: Output folder moved to §6 Outputs (alongside
-        # Save list + Vectorise + Validation sampling). Tip below.
-        _output_tip = QLabel(
-            "<i>Output folder is now in §6 Outputs.</i>")
-        _output_tip.setStyleSheet("color:#888;")
-        _output_tip.setMinimumWidth(0)
-        _output_tip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        form.addRow("", _output_tip)
 
         # P1.30 batch 20j: live preview of the output filename prefix.
         # Built from ISO3 + year only -- AOI layer name no longer
@@ -798,13 +803,23 @@ class PffDockWidget(QgsDockWidget):
         self._year_multi_edit.setToolTip(
             "Multi-year mode. Type a comma-separated list of years. "
             "The workflow runs once per year; year-varying inputs "
-            "(forest, OLWTC, planted, agriculture, built-up, roads) "
+            "(forest, OLTC, planted, agriculture, built-up, roads) "
             "are auto-detected by filename year token and globbed "
             "in the same folder. Static inputs (DEM, slope, "
             "protected) are reused across all years.")
         self._year_stack.addWidget(self._year_multi_edit)
 
         form.addRow("Year(s):", self._year_stack)
+
+        # Batch 27.1: greyed FRA-year reference visible when multi-year
+        # mode is on. Helps the user pick from valid years even if not
+        # all of them are available in their data folder.
+        self._fra_year_reference = QLabel(
+            "FRA reporting years: 1990, 2000, 2010, 2015, 2020")
+        self._fra_year_reference.setStyleSheet(
+            "color:#888; font-style:italic;")
+        self._fra_year_reference.setVisible(False)
+        form.addRow("", self._fra_year_reference)
 
         # Tickboxes: FRA-only filter + multi-year mode + year=all.
         self._fra_only_chk = QCheckBox(
@@ -822,7 +837,7 @@ class PffDockWidget(QgsDockWidget):
             "When ticked, the Year(s) dropdown is replaced by a free-"
             "form text field. Type a comma-separated list. The "
             "workflow then iterates once per year.\n\n"
-            "Convention: assumes year-varying inputs (forest, OLWTC, "
+            "Convention: assumes year-varying inputs (forest, OLTC, "
             "planted, agriculture, built-up, roads) for OTHER years "
             "are in the SAME FOLDER as the loaded inputs, with only "
             "the year token differing in the filename "
@@ -894,9 +909,13 @@ class PffDockWidget(QgsDockWidget):
         else:
             # Switch back to single-year dropdown.
             self._year_stack.setCurrentIndex(0)
+        # Batch 27.1: show FRA-year reference label only in multi-year
+        # mode (no-op for single-year users; redundant with the dropdown).
+        if hasattr(self, "_fra_year_reference"):
+            self._fra_year_reference.setVisible(on)
 
     def _build_section_2_tree_cover(self):
-        sec = CollapsibleSection("2. Tree Cover", expanded=True)
+        sec = CollapsibleSection("2. Tree Cover", expanded=False)
         form = _form()
 
         self._forest_raster = LayerOrFilePicker(
@@ -923,13 +942,14 @@ class PffDockWidget(QgsDockWidget):
             self._on_input_category_changed)
         form.addRow("My tree cover\nrepresents:", self._input_category)
 
-        # OLWTC group
-        self._olwtc_label = QLabel("OLWTC raster:")
+        # OLTC group (variable names keep "olwtc" prefix for backwards-
+        # compat with saved Recent Runs; only display strings change)
+        self._olwtc_label = QLabel("OLTC raster:")
         self._olwtc_raster = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.RasterLayer,
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
-            browse_caption="Pick OLWTC raster")
-        self._olwtc_refine = QCheckBox("Refine to forest (exclude OLWTC)")
+            browse_caption="Pick OLTC raster")
+        self._olwtc_refine = QCheckBox("Refine to forest (exclude OLTC)")
         self._olwtc_refine.setChecked(True)
         form.addRow(self._olwtc_label, self._olwtc_raster)
         form.addRow("", self._olwtc_refine)
@@ -973,9 +993,12 @@ class PffDockWidget(QgsDockWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(6)
 
+        # Batch 27.1: "Add to map" toggle moved to the BOTTOM of this
+        # section. Top placement was distracting; users rarely flip it.
+        # Default OFF (Qt QCheckBox default).
         self._add_human_layers_to_map = QCheckBox(
             "Add human-influence input + buffer layers to map after run")
-        body.addWidget(self._add_human_layers_to_map)
+        # (added to body at the END of this method)
 
         # GEE wording (pff_4.js:1865): "Use single distance for all:"
         self._use_single_buffer = QCheckBox("Use single distance for all:")
@@ -1096,6 +1119,10 @@ class PffDockWidget(QgsDockWidget):
             self._custom_sections.append((cs, label_edit, picker, buf))
 
         self._enable_custom.toggled.connect(self._on_enable_custom_toggled)
+
+        # Batch 27.1: "Add to map" toggle at the BOTTOM of §3. Default
+        # OFF. Less distracting than top placement.
+        body.addWidget(self._add_human_layers_to_map)
 
         sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
@@ -1271,7 +1298,7 @@ class PffDockWidget(QgsDockWidget):
         self._save_layers = [
             ("save_02b_forest", "Forest", "(02c)", True),
             ("save_02d_nrf", "Naturally regenerating forest", "(02e)", True),
-            ("save_03c_pre_conn", "Pre-connectivity primary forest",
+            ("save_03c_pre_conn", "Pre-refinement primary forest",
              "(03c, intermediate)", False),
             ("save_04a_primary", "Primary forest", "(04a, final)", True),
             ("save_04e_anthro_mask", "Anthropogenic mask",
@@ -1294,7 +1321,7 @@ class PffDockWidget(QgsDockWidget):
         form.addRow("Save outputs:", save_summary_row)
 
         self._save_customise_section = CollapsibleSection(
-            "Customise output rasters", expanded=False,
+            "Select outputs to save", expanded=False,
             indent_px=8, header_bold=False)
         cust_layout = QVBoxLayout()
         cust_layout.setContentsMargins(0, 0, 0, 0)
@@ -1321,7 +1348,12 @@ class PffDockWidget(QgsDockWidget):
             self._save_checkboxes[key] = cb
 
         self._save_customise_section.set_content_layout(cust_layout)
-        form.addRow("", self._save_customise_section)
+        # Batch 27.1: spanning row (single arg) so the Customise
+        # sub-section sits flush with the form's left edge instead of
+        # being pushed into the field column. Aligns it with sibling
+        # §6 sub-sections (Vectorise, Validation, Performance/cache)
+        # that are added at body-level outside the form.
+        form.addRow(self._save_customise_section)
         # Initial summary
         self._refresh_save_summary()
 
@@ -1335,7 +1367,7 @@ class PffDockWidget(QgsDockWidget):
         self._reuse_distance = QCheckBox("Reuse cached distance surfaces")
         form.addRow("", self._reuse_distance)
 
-        self._reuse_prepared = QCheckBox("Reuse prepared cache")
+        self._reuse_prepared = QCheckBox("Reuse preprocessing cache")
         self._reuse_prepared.setChecked(True)
         form.addRow("", self._reuse_prepared)
 
@@ -1358,8 +1390,12 @@ class PffDockWidget(QgsDockWidget):
         body.setSpacing(4)
 
         intro = QLabel(
-            "<i>Save the dock's current settings to a JSON file you "
-            "can reload later. Mirrors the GEE app's Save Settings.</i>")
+            "<i>Save the dock's current settings to a portable JSON "
+            "you can share with colleagues or reload later. Distinct "
+            "from <b>qgis_run_metadata.json</b> (auto-emitted alongside "
+            "every run as a per-run snapshot — use that to trace what "
+            "produced a given output file). Mirrors the GEE app's Save "
+            "Settings.</i>")
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#666;")
         intro.setMinimumWidth(0)
@@ -1395,12 +1431,14 @@ class PffDockWidget(QgsDockWidget):
 
         form = _form()
 
-        self._output_folder = QgsFileWidget()
-        self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
-        self._output_folder.setToolTip(
-            "Folder where all PFF outputs land. Disambiguate runs by "
-            "naming this folder descriptively (e.g. BTN/aberdares_2020).")
-        form.addRow("Output folder:", self._output_folder)
+        # P1.30 Batch 27.1: Output folder moved BACK to §0 (top of
+        # workflow) so users set it before AOI/ISO3. Reference here:
+        _output_tip = QLabel(
+            "<i>Output folder is set in §0 Study Area.</i>")
+        _output_tip.setStyleSheet("color:#888;")
+        _output_tip.setMinimumWidth(0)
+        _output_tip.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        form.addRow("", _output_tip)
 
         self._build_save_list_form_rows(form)
 
@@ -1522,8 +1560,11 @@ class PffDockWidget(QgsDockWidget):
         body.setSpacing(6)
 
         banner = QLabel(
-            "<i>Experimental — generates lightweight CEO Plot + Sample "
-            "layers from a forest vector. Tested against Bhutan 06c.</i>")
+            "<i>Experimental — schema and outputs may change between "
+            "plugin versions. Generates lightweight Plot + Sample layers "
+            "from a forest vector, designed for upload to validation "
+            "tools such as Collect Earth Online (CEO), for example. "
+            "Tested against Bhutan 06c.</i>")
         banner.setWordWrap(True)
         banner.setStyleSheet("color:#666;")
         # Critical: explicit min width so wordWrap can actually shrink
@@ -1596,7 +1637,9 @@ class PffDockWidget(QgsDockWidget):
 
         self._ceo_domain = QComboBox()
         self._ceo_domain.addItems(
-            ["All forest", "Primary only", "Other forest only"])
+            ["All forest (primary + other forest)",
+             "Primary only",
+             "Other forest only"])
         self._ceo_domain.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._ceo_domain.setToolTip(
@@ -1731,9 +1774,21 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_output_folder = QgsFileWidget()
         self._ceo_output_folder.setStorageMode(QgsFileWidget.GetDirectory)
         self._ceo_output_folder.setToolTip(
-            "Folder where ceo_*.gpkg / .zip files are written. "
-            "Disambiguate runs via the folder name "
-            "(e.g. BTN/aberdares_2020).")
+            "Folder where validation sampling outputs land. Defaults "
+            "to the main output folder set in §0 Study Area when that "
+            "is set; can be overridden here.")
+        # P1.30 Batch 27.1: auto-fill from §0 Output folder on first
+        # set + on every change while still empty. User-typed value
+        # wins after that (we only auto-fill if the field is blank).
+        if hasattr(self, "_output_folder"):
+            def _autofill_ceo_folder(path):
+                if path and not self._ceo_output_folder.filePath():
+                    self._ceo_output_folder.setFilePath(path)
+            self._output_folder.fileChanged.connect(_autofill_ceo_folder)
+            # Seed initial value if §0 already has a path set.
+            _seed = self._output_folder.filePath()
+            if _seed and not self._ceo_output_folder.filePath():
+                self._ceo_output_folder.setFilePath(_seed)
         form.addRow("Output folder:", self._ceo_output_folder)
 
         # Output format + provenance moved into Advanced sub-section.
@@ -1802,7 +1857,7 @@ class PffDockWidget(QgsDockWidget):
         adv.set_content_layout(adv_form)
         body.addWidget(adv)
 
-        self._ceo_run_btn = QPushButton("Generate CEO inputs ▶")
+        self._ceo_run_btn = QPushButton("Generate validation samples ▶")
         self._ceo_run_btn.setMinimumHeight(28)
         self._ceo_run_btn.clicked.connect(self._on_generate_ceo_clicked)
         body.addWidget(self._ceo_run_btn)
@@ -1938,7 +1993,7 @@ class PffDockWidget(QgsDockWidget):
         }
 
         self._log.append(
-            "<b>=== §8 CEO Validation Export (experimental) ===</b>")
+            "<b>=== Validation sampling (experimental) ===</b>")
         feedback = _DockFeedback(self._log, self._progress)
         ctx = self._make_processing_context(feedback)
         self._ceo_run_btn.setEnabled(False)
@@ -1947,7 +2002,7 @@ class PffDockWidget(QgsDockWidget):
                 processing.run("pff:ceo_validation_export", params,
                                context=ctx, feedback=feedback)
                 self._log.append("<span style='color:#080;'>✔ "
-                                 "CEO export complete.</span>")
+                                 "Validation sampling complete.</span>")
                 if self._add_main_to_map.isChecked():
                     self._add_outputs_to_project(ctx)
             except Exception as e:
@@ -1969,8 +2024,8 @@ class PffDockWidget(QgsDockWidget):
                         if self._add_main_to_map.isChecked():
                             self._add_outputs_to_project(ctx2)
                         self._log.append("<span style='color:#080;'>✔ "
-                                         "CEO export complete (with "
-                                         "skipped class).</span>")
+                                         "Validation sampling complete "
+                                         "(with skipped class).</span>")
                     else:
                         self._log.append(
                             "<span style='color:#a00;'>"
@@ -2414,6 +2469,14 @@ class PffDockWidget(QgsDockWidget):
                     continue
                 name = (getattr(details, "name", None) or "").strip() \
                     or os.path.splitext(os.path.basename(path))[0]
+                # Batch 27.1: append year to display name when present
+                # in the filename (BTN_2010_qgis_*.tif). Disambiguates
+                # multi-year auto-loaded layers in the Layers panel.
+                # Skip if the year is already part of the display name.
+                _ym = re.search(r"_(\d{4})_",
+                                os.path.basename(path or ""))
+                if _ym and _ym.group(1) not in name:
+                    name = f"{name} {_ym.group(1)}"
                 ext = os.path.splitext(path)[1].lower()
                 if ext in (".gpkg", ".shp", ".geojson", ".kml", ".gml"):
                     layer = QgsVectorLayer(path, name, "ogr")

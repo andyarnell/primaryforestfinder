@@ -28,7 +28,8 @@ from qgis.core import (
 _PFF_STEP_COLOURS = (
     ("_02c_forest", "#7fc97f"),                          # light green
     ("_02e_naturally_regenerating_forest", "#41ab5d"),   # mid green
-    ("_03c_pre_connectivity_primary_forest", "#7a9c2f"), # olive
+    ("_03c_pre_refinement_primary_forest", "#7a9c2f"), # olive (new)
+    ("_03c_pre_connectivity_primary_forest", "#7a9c2f"), # olive (legacy name; symbology still applies)
     ("_04a_primary_forest", "#1b6e3a"),                  # dark green
     ("_04e_anthropogenic_mask", "#cf3a4a"),              # red
     ("_anthropogenic_mask", "#cf3a4a"),                  # legacy name

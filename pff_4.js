@@ -1,5 +1,69 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.13.1";
+var PFF_SCRIPT_VERSION = "4.13.3";
+
+// Changes vs v4.13.2 (Batch 27.1 -- UX feedback round, GEE side):
+//  - Right-panel section "Export Layers" renamed to "Outputs" to
+//    mirror the QGIS plugin's §6 Outputs.
+//  - Stats waiting-label bug fix: when "Show Area Statistics" was
+//    clicked, the in-flight calcLabel could read e.g. "Calculating
+//    naturally regenerating forest area..." while the row actually
+//    computing was Primary (or vice versa). Replaced the parallel-
+//    fired evaluate() pattern with a sequential row queue that
+//    advances calcLabel as each item begins. Slightly slower but the
+//    label now always matches the row in flight.
+//  - Legend Forest group reordered: HEADLINE OUTPUT FIRST (Primary
+//    forest), then back DOWN the refinement chain (Pre-refinement
+//    primary, Naturally regenerating, Forest, Tree cover). Reads
+//    top-to-bottom as "what I made" preceding "what it was made from".
+//  - "Forest outside buffers" layer + legend label renamed to
+//    "Pre-refinement primary" -- the old name misled (the layer
+//    INCLUDES forest INSIDE buffers rescued by slope or protected-
+//    area status). New name pairs with "Refine Output" section:
+//    Refine Output produces primary forest from the pre-refinement
+//    primary forest. NAME_TO_KEY + pffLayerNames maps gain the new
+//    name; legacy "Forest outside buffers" string kept so users with
+//    stale projects can still see the old layer get cleaned up.
+//  - Buffer Exceptions OFF by default: enableSlope + enableProtected
+//    Areas ship unticked. Steep-slope and protected-area rescues are
+//    explicit opt-in to avoid surprising "primary forest in cropland"
+//    pixels in countries with sparse PA coverage. Reset Defaults
+//    matches.
+//  - "Add input + buffer layers to map" toggle moved from TOP of the
+//    Human Influence panel to the BOTTOM. Distracting at the top.
+//    Default value (false) unchanged.
+//  - About panel: re-added a small ✕ close button at the top-right
+//    of the content as a redundant-but-helpful close shortcut for
+//    users who've scrolled inside the panel. Toggle button still
+//    works as the primary affordance.
+//  - Settings panel: small grey hint labels under Save/Load Settings
+//    + Download Run Metadata clarify the split (portable config vs
+//    per-run snapshot). Both artifacts stay; the wording explains
+//    when to use each.
+
+// Changes vs v4.13.1 (About panel tidy + relocated to right-side dropdown):
+//  - Removed verbatim FRA 2025 definitions block from the About panel
+//    (FOREST / NRF / PRIMARY FOREST). Definitions live on the FAO site;
+//    the panel now links there instead. Reduces scroll length + avoids
+//    duplicating canonical text we don't own.
+//  - Rewrote the "How PFF outputs map to FRA" section as long-form
+//    paragraphs (one per output: 02b, 02c, 02d, 02e, 04a) instead of
+//    a cramped ≈ table. Reads cleanly without monospace alignment.
+//  - Dropped the "Thresholds vs declaration" paragraph (too detailed
+//    for the About panel; covered by the dropdown's own tooltip and
+//    the workshop guide).
+//  - Kept the rubber caveat (SDPT class 2 vs FRA Note 7) -- workshop-
+//    relevant for rubber-heavy countries.
+//  - Resources section: dropped placeholder Documentation link (no
+//    separate docs site exists); replaced placeholder source-code
+//    link with the canonical GitHub repo
+//    (https://github.com/andyarnell/primaryforestfinder); contact
+//    updated to andrew.arnell@fao.org.
+//  - About is no longer a full-width banner below the top bar. It is
+//    now a right-panel dropdown ('▶ About') matching the existing
+//    Stats / Config / Export pattern -- mutually exclusive with its
+//    peers (opening one closes the others). The top-bar 'About'
+//    button is removed; the in-app FRA-info ⓘ link in the Tree Cover
+//    panel now opens the right-panel About dropdown directly.
 
 // Changes vs v4.13.0 (Batch 25.1 -- 02-step renumber for OLWTC):
 //  - Re-lettered step 02 so OLWTC slots in BEFORE planted forest,
@@ -1632,12 +1696,15 @@ var updateRightPanelWidth = function() {
   var statsShown = statsContent.style().get('shown');
   var configShown = settingsContent.style().get('shown');
   var downloadsShown = downloadsContent && downloadsContent.style().get('shown');
-  
-  if (!statsShown && !configShown && !downloadsShown) {
+  var aboutShown = (typeof aboutContent !== 'undefined') && aboutContent.style().get('shown');
+
+  if (!statsShown && !configShown && !downloadsShown && !aboutShown) {
     rightPanel.style().set({width: '120px'});
   } else if (downloadsShown) {
     rightPanel.style().set({width: '340px'});
   } else if (statsShown) {
+    rightPanel.style().set({width: '320px'});
+  } else if (aboutShown) {
     rightPanel.style().set({width: '320px'});
   } else {
     rightPanel.style().set({width: '280px'});
@@ -1737,25 +1804,32 @@ var appTitle = ui.Label('Primary Forest Finder (Beta)', {
 
 var titleSpacer = ui.Panel({style: {stretch: 'horizontal'}});
 
-// About popup — full-width banner below the top bar, with an X close button
+// About content -- shown via the "▶ About" dropdown in the right panel.
+// Batch 27.1: re-added a small ✕ close button at the top-right of the
+// content panel as a redundant-but-helpful close shortcut for users
+// who've scrolled inside the panel.
 var aboutCloseButton = ui.Button({
   label: '✕',
-  onClick: function() { aboutContent.style().set({shown: false}); },
-  style: {margin: '0', padding: '0 6px', fontSize: '12px', backgroundColor: '#e8e8e8'}
+  onClick: function() {
+    aboutContent.style().set({shown: false});
+    aboutToggle.setLabel('▶ About');
+    updateRightPanelWidth();
+  },
+  style: {margin: '0', padding: '0 6px', fontSize: '11px',
+          backgroundColor: '#e8e8e8'}
 });
-
-var aboutHeaderRow = ui.Panel({
+var aboutCloseRow = ui.Panel({
   widgets: [
-    ui.Label('Primary Forest Finder', {fontWeight: 'bold', fontSize: '14px', margin: '0', stretch: 'horizontal'}),
+    ui.Label('', {stretch: 'horizontal'}),
     aboutCloseButton
   ],
   layout: ui.Panel.Layout.flow('horizontal'),
-  style: {stretch: 'horizontal', margin: '0 0 6px 0'}
+  style: {stretch: 'horizontal', margin: '0 0 4px 0'}
 });
 
 var aboutContent = ui.Panel({
   widgets: [
-    aboutHeaderRow,
+    aboutCloseRow,
     ui.Label(
       'An open tool for delineating primary and intact forests using ' +
       'satellite-derived tree cover, anthropogenic disturbance buffers, ' +
@@ -1764,117 +1838,82 @@ var aboutContent = ui.Panel({
       '(e.g. FAO FRA) with transparent, reproducible methods.',
       {fontSize: '11px', margin: '0 0 8px 0'}),
 
-    // FRA definitions block — supplied verbatim from FAO FRA 2025 so
-    // workshop users know exactly what each output approximates. The
-    // tool's outputs are operational PROXIES (≈) of these categories;
-    // see "How PFF outputs map to FRA" below for caveats.
-    ui.Label('FRA 2025 definitions', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
+    ui.Label('How PFF outputs map to FRA', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
+    ui.Label(
+      'The tool produces five outputs that approximate FRA categories. ' +
+      'Each is an operational proxy derived from satellite signals plus ' +
+      'user-supplied biophysical thresholds, and should be treated as a ' +
+      'starting point for FRA reporting rather than a finished ' +
+      'classification. See the FAO link below for the canonical FRA 2025 ' +
+      'definitions.',
+      {fontSize: '11px', margin: '0 0 6px 0'}),
 
-    ui.Label('FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Label(
-      'Land spanning more than 0.5 hectares with trees higher than ' +
-      '5 meters and a canopy cover of more than 10 percent, or trees ' +
-      'able to reach these thresholds in situ. It does not include ' +
-      'land that is predominantly under agricultural or urban land use.',
-      {fontSize: '10px', margin: '0 0 2px 4px'}),
-    ui.Label(
-      'Note 7 INCLUDES: rubber-wood, cork oak, Christmas tree plantations.',
-      {fontSize: '10px', margin: '0 0 2px 4px', color: '#2a7f2a'}),
-    ui.Label(
-      'Note 10 EXCLUDES: fruit tree plantations, oil palm, olive ' +
-      'orchards, agroforestry systems when crops are grown under ' +
-      'tree cover (Taungya is forest, where crops grow only during ' +
-      'early forest rotation).',
-      {fontSize: '10px', margin: '0 0 4px 4px', color: '#a0522d'}),
+      'Other land with tree cover (02b_other_land_with_tree_cover) ' +
+      'approximates FRA OLTC under Note 10. It bundles oil palm ' +
+      '(Descals), tree crops from SDPT class 2 (fruit orchards, ' +
+      'agroforestry, etc.), and urban tree cover -- defined as ' +
+      'tree-covered pixels falling inside built-up small or large ' +
+      'extents.',
+      {fontSize: '11px', margin: '0 0 6px 0'}),
 
-    ui.Label('NATURALLY REGENERATING FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Label(
-      'Forest predominantly composed of trees established through ' +
-      'natural regeneration. Includes mixed stands where naturally ' +
-      'regenerated trees are the major part at maturity, and includes ' +
-      'naturally regenerated trees of introduced species.',
-      {fontSize: '10px', margin: '0 0 4px 4px'}),
+      'Forest (02c_forest) approximates the FRA Forest baseline when ' +
+      'the "Refine to forest" toggle is on. It is computed as the ' +
+      'thresholded tree cover with 02b_other_land_with_tree_cover ' +
+      'subtracted -- narrowing the layer to land that meets canopy / ' +
+      'height thresholds AND is not predominantly agricultural or urban ' +
+      'under FRA Note 10.',
+      {fontSize: '11px', margin: '0 0 6px 0'}),
 
-    ui.Label('PRIMARY FOREST', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
     ui.Label(
-      'Naturally regenerating forest of native tree species, where ' +
-      'there are no clearly visible indications of human activities ' +
-      'and the ecological processes are not significantly disturbed. ' +
-      'Subset of Naturally regenerating forest. Includes managed ' +
-      'primary forest with minimum intervention, Indigenous and ' +
-      'community stewardship, and natural-disturbance signs (storms, ' +
-      'fire, pests). Excludes forests where hunting/poaching/gathering ' +
-      'has caused significant species loss.',
-      {fontSize: '10px', margin: '0 0 4px 4px'}),
+      'Planted forest (02d_planted_forest) approximates FRA Planted ' +
+      'Forest. It is sourced from SDPT class 1 -- timber, pulp and ' +
+      'fibre plantations such as eucalyptus, pine and teak.',
+      {fontSize: '11px', margin: '0 0 6px 0'}),
 
-    ui.Label({
-      value: 'Full FRA 2025 definitions (FAO)',
-      style: {fontSize: '10px', color: 'blue', textDecoration: 'underline', margin: '0 0 8px 4px'},
-      targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
-    }),
+    ui.Label(
+      'Naturally regenerating forest (02e_naturally_regenerating_forest) ' +
+      'approximates FRA NRF and is derived as 02c_forest minus ' +
+      '02d_planted_forest.',
+      {fontSize: '11px', margin: '0 0 6px 0'}),
 
-    ui.Label('How PFF outputs map to FRA (operational proxies, ≈)', {fontWeight: 'bold', fontSize: '12px', margin: '6px 0 4px 0', color: '#333'}),
     ui.Label(
-      '02b_other_land_with_tree_cover ≈ FRA OLWTC (Note 10: oil palm + ' +
-      'orchards + agroforestry + urban tree cover)',
-      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
-    ui.Label(
-      '02c_forest                   ≈ FRA Forest (when "Refine to forest" ' +
-      'is on; tree cover MINUS 02b_other_land_with_tree_cover)',
-      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
-    ui.Label(
-      '02d_planted_forest           ≈ FRA Planted Forest (SDPT class 1)',
-      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
-    ui.Label(
-      '02e_naturally_regenerating   ≈ FRA NRF (= 02c - 02d)',
-      {fontSize: '10px', margin: '0 0 2px 4px', whiteSpace: 'pre'}),
-    ui.Label(
-      '04a_primary_forest           ≈ FRA Primary Forest -- geographic ' +
-      'proxy filter only. Does NOT directly check FRA criteria for ' +
-      'native species or hunting/poaching/gathering pressure. Treat as ' +
-      'a starting point for FRA Primary Forest reporting.',
-      {fontSize: '10px', margin: '0 0 6px 4px'}),
-    // P1.23: thresholds vs declaration -- orthogonal axes.
-    ui.Label(
-      'Thresholds vs declaration (P1.23): the canopy / height ' +
-      'threshold sliders set BIOPHYSICAL criteria (what counts as a ' +
-      'tree-covered pixel). The "My tree cover represents:" dropdown ' +
-      'sets the FRA SEMANTIC category (does the layer already exclude ' +
-      'oil palm / planted forest / disturbance?). The two are ' +
-      'independent: a Hansen run with 70% canopy is still "All tree ' +
-      'cover" because it can include oil palm. PFF derives lower FRA ' +
-      'categories from higher ones via the exclusion toggles below ' +
-      'the dropdown.',
-      {fontSize: '10px', margin: '0 0 6px 4px', color: '#555'}),
+      'Primary forest (04a_primary_forest) approximates FRA Primary ' +
+      'Forest using a geographic proxy filter -- distance from ' +
+      'disturbance (roads, built-up, agriculture), terrain, and ' +
+      'protected-area status. The tool does NOT directly verify the ' +
+      'FRA Primary Forest criteria for native species or significant ' +
+      'hunting / poaching / gathering pressure. Treat the output as a ' +
+      'starting point for FRA Primary Forest reporting, refined by ' +
+      'national context.',
+      {fontSize: '11px', margin: '0 0 8px 0'}),
+
     ui.Label(
       'Rubber caveat: FRA Note 7 lists rubber-wood as forest, but ' +
       'SDPT v2 (the dataset behind the Planted forest layer) places ' +
       'rubber in tree crops -- so rubber-bearing pixels currently land ' +
-      'in the Plantations layer. Many countries (Indonesia, Malaysia, ' +
-      'Thailand) report rubber as Planted Forest in FRA. Supply ' +
-      'national rubber data via the Custom exclusion data override to ' +
-      'reroute it.',
-      {fontSize: '10px', margin: '0 0 8px 4px', color: '#666'}),
+      'in 02b_other_land_with_tree_cover rather than 02d_planted_forest. ' +
+      'Many countries (Indonesia, Malaysia, Thailand) report rubber as ' +
+      'Planted Forest in FRA. Supply national rubber data via the Custom ' +
+      'exclusion data override to reroute it.',
+      {fontSize: '11px', margin: '0 0 8px 0', color: '#666'}),
 
     ui.Label('Resources', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
-    ui.Label('Documentation — https://example.com/pff-docs', {fontSize: '11px', margin: '0 0 2px 4px'}),
-    ui.Label('Source code — https://example.com/pff-source', {fontSize: '11px', margin: '0 0 2px 4px'}),
-    ui.Label('Contact — primaryforestfinder@example.com', {fontSize: '11px', margin: '0 0 0 4px'})
+    ui.Label({
+      value: 'FAO FRA 2025 definitions',
+      style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
+      targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
+    }),
+    ui.Label({
+      value: 'Source code on GitHub',
+      style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
+      targetUrl: 'https://github.com/andyarnell/primaryforestfinder'
+    }),
+    ui.Label('Contact — andrew.arnell@fao.org', {fontSize: '11px', margin: '0 0 0 4px'})
   ],
-  style: {
-    shown: false, stretch: 'horizontal', padding: '10px',
-    backgroundColor: 'rgba(255, 255, 255, 0.98)',
-    border: '1px solid #ccc'
-  }
-});
-
-var aboutButton = ui.Button({
-  label: 'About',
-  onClick: function() {
-    var isShown = aboutContent.style().get('shown');
-    aboutContent.style().set({shown: !isShown});
-  },
-  style: {margin: '4px 8px', padding: '2px 8px', fontSize: '11px', backgroundColor: '#e8e8e8'}
+  layout: ui.Panel.Layout.flow('vertical'),
+  style: {shown: false, padding: '8px', backgroundColor: 'rgba(255,255,255,0.9)'}
 });
 
 // RUN BUTTON - triggers analysis (instead of auto-update on slider change)
@@ -1943,13 +1982,13 @@ function markUpToDate() {
 }
 
 var topBarRow = ui.Panel({
-  widgets: [appTitle, countrySelector, countryWarningLabel, recenterButton, titleSpacer, aboutButton],
+  widgets: [appTitle, countrySelector, countryWarningLabel, recenterButton, titleSpacer],
   layout: ui.Panel.Layout.flow('horizontal'),
   style: {stretch: 'horizontal', padding: '0'}
 });
 
 var topBar = ui.Panel({
-  widgets: [topBarRow, aboutContent],
+  widgets: [topBarRow],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {
     stretch: 'horizontal',
@@ -2203,47 +2242,54 @@ var showStatsButton = ui.Button({
         yearPanel.add(ui.Label('  (no rows to display)', {fontSize: '11px', color: '#888'}));
         return;
       }
-      var checkDone = function() {
-        pending--;
-        if (pending === 0) {
-          yearPanel.remove(calcLabel);
-        }
-      };
-
-      // Tree cover (thresholded, pre-FRA) is the broadest layer --
-      // shown first to anchor the FRA progression: Tree cover ->
-      // Forest -> Naturally regenerating -> Primary.
+      // P1.30 Batch 27.1: sequential dispatch instead of parallel.
+      // Previous parallel implementation fired all evaluate()'s at
+      // once and updated calcLabel from each callback -- when one
+      // resolved before the next was queued, the label could read
+      // "Calculating naturally regenerating forest area..." while
+      // the row actually computing was Primary (or vice versa).
+      // Building a queue + processing one at a time guarantees the
+      // label always matches the row in flight. Slightly slower
+      // total (rows compute serially), but the panel is correct.
+      var rowQueue = [];
       if (hasTreeCover) {
-        processForestAreaStats(latestMaskedTreeCover[year], 'Tree cover', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
-          calcLabel.setValue('  Calculating forest area...');
-          checkDone();
+        rowQueue.push({
+          layer: latestMaskedTreeCover[year], name: 'Tree cover',
+          waitText: '  Calculating tree cover area...'
         });
       }
-      // P1.16: Forest baseline always reports as "Forest" (≈ FRA).
-      // The conditional "Naturally regenerating forest" relabel was
-      // removed -- when the nat reg derivation runs, it gets its
-      // own row below.
       if (hasForest) {
-        processForestAreaStats(latestMaskedForest[year], 'Forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
-          if (hasNatreg) {
-            calcLabel.setValue('  Calculating naturally regenerating forest area...');
-          } else if (latestMaskedPrimaryForest[year]) {
-            calcLabel.setValue('  Calculating primary forest area...');
-          }
-          checkDone();
+        rowQueue.push({
+          layer: latestMaskedForest[year], name: 'Forest',
+          waitText: '  Calculating forest area...'
         });
       }
       if (hasNatreg) {
-        processForestAreaStats(latestMaskedNaturallyRegenerating[year], 'Naturally regenerating forest', yearInt, statsScale, false, selectedCountry, yearPanel, function() {
-          if (latestMaskedPrimaryForest[year]) {
-            calcLabel.setValue('  Calculating primary forest area...');
-          }
-          checkDone();
+        rowQueue.push({
+          layer: latestMaskedNaturallyRegenerating[year],
+          name: 'Naturally regenerating forest',
+          waitText: '  Calculating naturally regenerating forest area...'
         });
       }
       if (latestMaskedPrimaryForest[year]) {
-        processForestAreaStats(latestMaskedPrimaryForest[year], "Primary Forest", yearInt, statsScale, false, selectedCountry, yearPanel, checkDone);
+        rowQueue.push({
+          layer: latestMaskedPrimaryForest[year], name: 'Primary Forest',
+          waitText: '  Calculating primary forest area...'
+        });
       }
+      var processRow = function(idx) {
+        if (idx >= rowQueue.length) {
+          yearPanel.remove(calcLabel);
+          return;
+        }
+        var item = rowQueue[idx];
+        calcLabel.setValue(item.waitText);
+        processForestAreaStats(
+          item.layer, item.name, yearInt, statsScale, false,
+          selectedCountry, yearPanel,
+          function() { processRow(idx + 1); });
+      };
+      processRow(0);
     });
   }
 });
@@ -3883,7 +3929,17 @@ var inputCategorySelect = ui.Select({
 var inputCategoryFraInfo = ui.Button({
   label: 'ⓘ How does this map to FRA categories?',
   onClick: function() {
+    // About now lives as a right-panel dropdown -- open it (and close
+    // its peers) so the user lands on the FRA mapping section directly.
+    statsContent.style().set({shown: false});
+    statsToggle.setLabel('▶ Area Statistics');
+    settingsContent.style().set({shown: false});
+    settingsToggle.setLabel('▶ Config');
+    downloadsContent.style().set({shown: false});
+    downloadsToggle.setLabel('▶ Outputs');
     aboutContent.style().set({shown: true});
+    aboutToggle.setLabel('▼ About');
+    updateRightPanelWidth();
   },
   style: {fontSize: '10px', padding: '2px 6px', margin: '0 0 0 4px',
           backgroundColor: '#f4f8ff'}
@@ -4110,17 +4166,23 @@ var slopePanel = ui.Panel({
 });
 
 // ANTHROPOGENIC PANEL — slope and protected areas with enable toggles
+// Batch 27.1: shown:false matches the new enableSlope default (false).
 var slopeControls = ui.Panel({
   widgets: [
     slopePanel,
     ui.Panel({widgets: [useCustomSlopeCheckbox, customSlopeInput], layout: ui.Panel.Layout.flow('vertical'), style: {margin: '0 0 4px 0'}})
   ],
   layout: ui.Panel.Layout.flow('vertical'),
-  style: {margin: '0'}
+  style: {margin: '0', shown: false}
 });
+// Batch 27.1: Buffer Exceptions OFF by default. Steep-slope and
+// protected-area rescues are ecologically meaningful but not all
+// users want them on first run; explicit opt-in avoids surprising
+// "primary forest in cropland" pixels in countries with sparse
+// protected-area coverage.
 var enableSlope = ui.Checkbox({
   label: 'Steep slope:',
-  value: true,
+  value: false,
   onChange: function(checked) {
     slopeControls.style().set({shown: checked});
     markNeedsUpdate();
@@ -4138,6 +4200,7 @@ var addInputLayersToMap = ui.Checkbox({
   onChange: markNeedsUpdate
 });
 
+// Batch 27.1: shown:false matches the new enableProtectedAreas default.
 var protectedControls = ui.Panel({
   widgets: [
     createCompactRow('IUCN Categories:', wdpaPresetSelect),
@@ -4146,11 +4209,11 @@ var protectedControls = ui.Panel({
     nationalProtected.panel
   ],
   layout: ui.Panel.Layout.flow('vertical'),
-  style: {margin: '0'}
+  style: {margin: '0', shown: false}
 });
 var enableProtectedAreas = ui.Checkbox({
   label: 'Protected areas:',
-  value: true,
+  value: false,
   onChange: function(checked) {
     protectedControls.style().set({shown: checked});
     markNeedsUpdate();
@@ -4230,10 +4293,12 @@ var enableCustomDataCheckbox = ui.Checkbox({
   style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0'}
 });
 
+// Batch 27.1: addInputLayersToMap moved to the BOTTOM of the panel
+// (was right under the section title). Distracting at the top; rarely
+// used. Default value (false) unchanged.
 var anthropogenicContent = ui.Panel({
   widgets: [
     ui.Label('Define Human Influence (m):', {fontWeight: 'bold', margin: '0 0 4px 0'}),
-    addInputLayersToMap,
     useMasterBufferCheckbox,
     masterBufferRow,
     roadsToggle.row,
@@ -4246,7 +4311,8 @@ var anthropogenicContent = ui.Panel({
     nationalAgri.panel,
     bufferExceptionsToggle,
     bufferExceptionsContent,
-    enableCustomDataCheckbox
+    enableCustomDataCheckbox,
+    addInputLayersToMap
   ],
   style: {shown: false, padding: '8px'}
 });
@@ -4356,7 +4422,7 @@ function createFloatingLayerPanel() {
       ui.Label('Layer Visibility', {fontWeight: 'bold', fontSize: '14px'}),
       ui.Label('─────────────────', {color: 'gray'}),
       ui.Checkbox({label: 'Primary Forest',        value: visibleLayers.primaryForest,       onChange: function(v) { visibleLayers.primaryForest       = v; toggleLayerByName('Primary Forest', v); }}),
-      ui.Checkbox({label: 'Forest Outside Buffers', value: visibleLayers.forestOutsideBuffers, onChange: function(v) { visibleLayers.forestOutsideBuffers = v; toggleLayerByName('Forest outside buffers', v); }}),
+      ui.Checkbox({label: 'Pre-refinement primary', value: visibleLayers.forestOutsideBuffers, onChange: function(v) { visibleLayers.forestOutsideBuffers = v; toggleLayerByName('Pre-refinement primary', v); }}),
       ui.Checkbox({label: 'Input: Tree cover',      value: visibleLayers.treeCover,            onChange: function(v) { visibleLayers.treeCover            = v; toggleLayerByName('Input: Tree cover', v); }}),
       ui.Checkbox({label: 'Naturally regenerating forest', value: visibleLayers.naturallyRegenerating, onChange: function(v) { visibleLayers.naturallyRegenerating = v; toggleLayerByName('Naturally regenerating forest', v); }}),
       ui.Checkbox({label: 'Forest',            value: visibleLayers.forest,               onChange: function(v) { visibleLayers.forest               = v; toggleLayerByName('Forest', v); }}),
@@ -4429,18 +4495,19 @@ function createLegendItem(color, label) {
 }
 
 // Canonical legend definition: visibleLayers key → [colour, label]
+// Batch 27.1: Forest group reordered with HEADLINE OUTPUT FIRST
+// (Primary forest), then walking back DOWN the refinement chain
+// (Pre-refinement primary -> Naturally regenerating -> Forest ->
+// Tree cover) so the user reads top-to-bottom as "what I made"
+// preceding "what it was made from". Planted forest last as a
+// sibling category (gold, not in the green ramp).
 var LEGEND_ENTRIES = [
-  // Forest group ordered to match the FRA forest-derivation workflow:
-  // Input: Forest (tree cover) -> Naturally regenerating forest ->
-  // Forest outside buffers -> Primary forest. Light -> dark green ramp
-  // reinforces "input -> increasingly refined output". Planted forest
-  // last as a sibling category (gold, not in the green ramp).
-  {key: 'treeCover',             color: '#c8e6c9', label: 'Input: Tree cover',     group: 'Forest'},
-  {key: 'forest',                color: '#90EE90', label: 'Forest',          group: 'Forest'},
+  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',           group: 'Forest'},
+  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Pre-refinement primary',   group: 'Forest'},
   {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
-  {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Forest outside buffers', group: 'Forest'},
-  {key: 'primaryForest',         color: '#0b3d1f', label: 'Primary Forest',         group: 'Forest'},
-  {key: 'plantations',           color: '#d4a017', label: 'Planted forest',         group: 'Forest'},
+  {key: 'forest',                color: '#90EE90', label: 'Forest',                   group: 'Forest'},
+  {key: 'treeCover',             color: '#c8e6c9', label: 'Input: Tree cover',        group: 'Forest'},
+  {key: 'plantations',           color: '#d4a017', label: 'Planted forest',           group: 'Forest'},
   {key: 'agriBuffer',          color: '#ffcc00', label: 'Buffer: Agriculture',    group: 'Human Influence'},
   {key: 'roadSmallBuffer',     color: '#ff6600', label: 'Buffer: Roads',          group: 'Human Influence'},
   {key: 'builtSmallBuffer',    color: '#cc00cc', label: 'Buffer: Small Built-up', group: 'Human Influence'},
@@ -4478,7 +4545,8 @@ function createLegendPanel() {
     // Map layer names back to visibleLayers keys
     var NAME_TO_KEY = {
       'Primary Forest': 'primaryForest',
-      'Forest outside buffers': 'forestOutsideBuffers',
+      'Primary forest': 'primaryForest',
+      'Pre-refinement primary': 'forestOutsideBuffers',
       'Input: Tree cover': 'treeCover',
       'Forest': 'forest',
       'Naturally regenerating forest': 'naturallyRegenerating',
@@ -4642,11 +4710,13 @@ var statsToggle = ui.Button({
   onClick: function() {
     var isShown = statsContent.style().get('shown');
     if (!isShown) {
-      // Opening Results - close Config and Export
+      // Opening Results - close Config, Export, About
       settingsContent.style().set({shown: false});
       settingsToggle.setLabel('▶ Config');
       downloadsContent.style().set({shown: false});
-      downloadsToggle.setLabel('▶ Export Layers');
+      downloadsToggle.setLabel('▶ Outputs');
+      aboutContent.style().set({shown: false});
+      aboutToggle.setLabel('▶ About');
     }
     statsContent.style().set({shown: !isShown});
     statsToggle.setLabel(isShown ? '▶ Area Statistics' : '▼ Area Statistics');
@@ -4735,8 +4805,8 @@ function resetToDefaults() {
   agriBufferSlider.setValue(1000);
   
   // Protection
-  enableSlope.setValue(true);
-  enableProtectedAreas.setValue(true);
+  enableSlope.setValue(false);
+  enableProtectedAreas.setValue(false);
   enableRefineOutput.setValue(true);
   slopeToKeepSlider.setValue(45);
   wdpaYearSlider.setValue(current_year - 30);
@@ -4771,8 +4841,30 @@ function resetToDefaults() {
 
 var resetSettingsButton = ui.Button({label: 'Reset Defaults', onClick: resetToDefaults, style: {width: '90px', margin: '2px 0px', fontSize: '10px', color: '#888'}});
 
+// Batch 27.1: tiny grey hint labels clarify that Save/Load Settings
+// and Download Run Metadata serve different purposes:
+//   - Save / Load Settings = portable config (manual, shareable with
+//     colleagues; excludes run-specific fields like timestamp).
+//   - Run Metadata = per-run snapshot (auto-emitted with Drive exports;
+//     records exactly what produced a given output).
+var settingsHintSettings = ui.Label(
+  'Portable config — share with colleagues. Excludes run-specific ' +
+  'fields like timestamp.',
+  {fontSize: '10px', color: '#888', fontStyle: 'italic',
+   margin: '0 0 6px 0'}
+);
+var settingsHintMetadata = ui.Label(
+  'Run snapshot — records exactly what produced this run (auto-emitted ' +
+  'alongside Drive exports). Use to trace what produced an output.',
+  {fontSize: '10px', color: '#888', fontStyle: 'italic',
+   margin: '6px 0 0 0'}
+);
+
 var settingsContent = ui.Panel({
-  widgets: [exportSettingsButton, importSettingsButton, downloadRunBundleButton],
+  widgets: [
+    exportSettingsButton, importSettingsButton, settingsHintSettings,
+    downloadRunBundleButton, settingsHintMetadata
+  ],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {shown: false, padding: '8px', backgroundColor: 'rgba(255,255,255,0.9)'}
 });
@@ -4782,11 +4874,13 @@ var settingsToggle = ui.Button({
   onClick: function() {
     var isShown = settingsContent.style().get('shown');
     if (!isShown) {
-      // Opening Config - close Results and Export
+      // Opening Config - close Results, Export, About
       statsContent.style().set({shown: false});
       statsToggle.setLabel('▶ Area Statistics');
       downloadsContent.style().set({shown: false});
-      downloadsToggle.setLabel('▶ Export Layers');
+      downloadsToggle.setLabel('▶ Outputs');
+      aboutContent.style().set({shown: false});
+      aboutToggle.setLabel('▶ About');
     }
     settingsContent.style().set({shown: !isShown});
     settingsToggle.setLabel(isShown ? '▶ Config' : '▼ Config');
@@ -4831,18 +4925,20 @@ var downloadsContent = ui.Panel({
 });
 
 var downloadsToggle = ui.Button({
-  label: '▶ Export Layers',
+  label: '▶ Outputs',
   onClick: function() {
     var isShown = downloadsContent.style().get('shown');
     if (!isShown) {
-      // Opening Export - close Results and Config
+      // Opening Export - close Results, Config, About
       statsContent.style().set({shown: false});
       statsToggle.setLabel('▶ Area Statistics');
       settingsContent.style().set({shown: false});
       settingsToggle.setLabel('▶ Config');
+      aboutContent.style().set({shown: false});
+      aboutToggle.setLabel('▶ About');
     }
     downloadsContent.style().set({shown: !isShown});
-    downloadsToggle.setLabel(isShown ? '▶ Export Layers' : '▼ Export Layers');
+    downloadsToggle.setLabel(isShown ? '▶ Outputs' : '▼ Outputs');
     updateRightPanelWidth();
   },
   style: {stretch: 'horizontal', textAlign: 'left', padding: '6px', margin: '2px', backgroundColor: '#d4edda'}
@@ -4850,6 +4946,35 @@ var downloadsToggle = ui.Button({
 
 var downloadsPanel = ui.Panel({
   widgets: [downloadsToggle, downloadsContent],
+  layout: ui.Panel.Layout.flow('vertical')
+});
+
+// =============================================================================
+// ABOUT PANEL (collapsible, right side)
+// =============================================================================
+
+var aboutToggle = ui.Button({
+  label: '▶ About',
+  onClick: function() {
+    var isShown = aboutContent.style().get('shown');
+    if (!isShown) {
+      // Opening About - close Results, Config, Export
+      statsContent.style().set({shown: false});
+      statsToggle.setLabel('▶ Area Statistics');
+      settingsContent.style().set({shown: false});
+      settingsToggle.setLabel('▶ Config');
+      downloadsContent.style().set({shown: false});
+      downloadsToggle.setLabel('▶ Outputs');
+    }
+    aboutContent.style().set({shown: !isShown});
+    aboutToggle.setLabel(isShown ? '▶ About' : '▼ About');
+    updateRightPanelWidth();
+  },
+  style: {stretch: 'horizontal', textAlign: 'left', padding: '6px', margin: '2px', backgroundColor: '#f0f0f0'}
+});
+
+var aboutPanel = ui.Panel({
+  widgets: [aboutToggle, aboutContent],
   layout: ui.Panel.Layout.flow('vertical')
 });
 
@@ -4864,9 +4989,9 @@ var leftPanel = ui.Panel({
   style: {width: '150px', backgroundColor: 'rgba(255, 255, 255, 0.95)', padding: '2px', maxHeight: '600px'}
 });
 
-// Right panel with results, config, and export
+// Right panel with results, config, export, and about
 var rightPanel = ui.Panel({
-  widgets: [statsPanel, settingsPanel, downloadsPanel],
+  widgets: [statsPanel, settingsPanel, downloadsPanel, aboutPanel],
   layout: ui.Panel.Layout.flow('vertical'),
   style: {width: '120px', backgroundColor: 'rgba(255, 255, 255, 0.95)', padding: '2px', maxHeight: '600px'}
 });
@@ -5531,11 +5656,16 @@ map2.add(createDisclaimerPanel());
       'Input: Large Built-up', 'Input: Agriculture', 'Planted forest',
       'Input: Tree cover', 'Forest',
       'Naturally regenerating forest',
-      'Forest outside buffers', 'Primary Forest',
+      'Pre-refinement primary',
+      // legacy name kept so users with stale projects can still see
+      // the old layer get cleaned up on update.
+      'Forest outside buffers',
+      'Primary Forest', 'Primary forest',
       'Reference: FLII (high/med)', 'Reference: Forest Persistence (FDaP)'
     ];
     // Also match dynamic names like "Slope > 45°", "WDPA ..."
-    // 'Forest' NOT in prefixes -- would over-match 'Forest outside buffers'.
+    // 'Forest' NOT in prefixes -- would over-match 'Pre-refinement primary'
+    // (no longer relevant) but also other prefix-shaped names.
     // Exact match via pffLayerNames handles it.
     var pffPrefixes = ['Input: Slope', 'Input: Protected', 'Hansen ', 'Input: Tree cover'];
     function isPffLayer(name) {
@@ -5548,7 +5678,8 @@ map2.add(createDisclaimerPanel());
     // Map layer names to visibleLayers keys so we can capture user toggles
     var nameToKey = {
       'Primary Forest': 'primaryForest',
-      'Forest outside buffers': 'forestOutsideBuffers',
+      'Primary forest': 'primaryForest',
+      'Pre-refinement primary': 'forestOutsideBuffers',
       'Input: Tree cover': 'treeCover',
       'Forest': 'forest',
       'Naturally regenerating forest': 'naturallyRegenerating',
@@ -6411,7 +6542,7 @@ map2.add(createDisclaimerPanel());
 
     // Primary forest identification
     var all_forest_1_1_to_1_3 = combined_map.eq(2).or(combined_map.eq(3)).or(combined_map.eq(5));
-      pffAddLayer(all_forest_1_1_to_1_3.selfMask(), binary_green_palette, "Forest outside buffers", visibleLayers.forestOutsideBuffers, 1);
+      pffAddLayer(all_forest_1_1_to_1_3.selfMask(), binary_green_palette, "Pre-refinement primary", visibleLayers.forestOutsideBuffers, 1);
 
     // Large forest patches (connectivity filtering)
     var largeForestPatches;

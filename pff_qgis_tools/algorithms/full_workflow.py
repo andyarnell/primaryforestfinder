@@ -267,9 +267,9 @@ def _run_preflight_checks(output_folder, feedback):
         "intermediates/_vectorize/primary_forest_full.gpkg",
         "intermediates/_vectorize/primary_forest_polys_raw.gpkg",
         "intermediates/_vectorize/forest_polys_raw.gpkg",
-        "intermediates/prepared/forest.tif",
-        "intermediates/prepared/dem.tif",
-        "intermediates/prepared/slope.tif",
+        "intermediates/preprocessing/forest.tif",
+        "intermediates/preprocessing/dem.tif",
+        "intermediates/preprocessing/slope.tif",
     ]
     locked_remaining = []
     for sub in candidate_subpaths:
@@ -602,7 +602,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "§02 TREE COVER\n"
             "═══════════════════════════════════════════════\n"
             "Order matches the workflow sequence: forest input first,\n"
-            "then OLWTC exclusion (narrows tree cover -> FRA Forest), then\n"
+            "then OLTC exclusion (narrows tree cover -> FRA Forest), then\n"
             "planted-forest exclusion (narrows Forest -> Naturally\n"
             "Regenerating).\n\n"
             "Forest raster (REQUIRED)\n"
@@ -618,10 +618,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "    GEE export 02b_other_land_with_tree_cover (Descals oil\n"
             "    palm + SDPT class 2 + urban tree cover).\n\n"
             "Refine to forest (default ON)\n"
-            "    Requires OLWTC raster above. When on: narrows\n"
+            "    Requires OLTC raster above. When on: narrows\n"
             "    02c_forest = tree_cover MINUS other land with tree cover,\n"
             "    BEFORE the planted-forest subtraction. Harmless no-op when\n"
-            "    no OLWTC raster supplied.\n\n"
+            "    no OLTC raster supplied.\n\n"
             "Planted forest raster (optional)\n"
             "    Binary 1/0. FRA Planted Forest (timber/pulp/fibre):\n"
             "    eucalyptus, pine, teak. Paired with 'Refine to naturally\n"
@@ -694,7 +694,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "═══════════════════════════════════════════════\n"
             "§04 REFINE OUTPUT -- ECOLOGICAL VIABILITY\n"
             "═══════════════════════════════════════════════\n"
-            "Produces 04a_primary_forest from 03c_pre_connectivity_primary_forest\n"
+            "Produces 04a_primary_forest from 03c_pre_refinement_primary_forest\n"
             "by removing patches that fail ecological viability criteria.\n"
             "Two optional sub-steps:\n\n"
             "04 Refine Output: Enable refine output (master toggle)\n"
@@ -737,7 +737,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "    (intermediates/distances/dist_*.tif) can be reused across\n"
             "    runs when only tuning thresholds. OFF by default so stale\n"
             "    cache can't silently produce wrong results if inputs change.\n"
-            "Reuse prepared/*.tif cache (default ON)\n"
+            "Reuse preprocessing/*.tif cache (default ON)\n"
             "    Skips reprojection of anthro inputs when cached aligned\n"
             "    raster matches the reference grid. Untick if you swapped a\n"
             "    source raster.\n"
@@ -758,7 +758,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "  buffers may miss segments. Export at 30m or finer if road\n"
             "  buffers matter; 60-100m is fine for built-up / ag / protection.\n\n"
             "Fast re-run workflow (tuning thresholds only):\n"
-            "  1. Point input rasters at [previous-out]/intermediates/prepared/\n"
+            "  1. Point input rasters at [previous-out]/intermediates/preprocessing/\n"
             "     (already aligned to the reference grid).\n"
             "  2. Tick 'Reuse cached distance surfaces'.\n"
             "  3. Use the same output folder so the cache is found.\n"
@@ -772,7 +772,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "      when 02 ticked)\n"
             "  OUT/[ISO3_]qgis_02e_naturally_regenerating_forest.tif\n"
             "      (if plantations refined)\n"
-            "  OUT/[ISO3_]qgis_03c_pre_connectivity_primary_forest.tif\n"
+            "  OUT/[ISO3_]qgis_03c_pre_refinement_primary_forest.tif\n"
             "      (after Step 03 disturbance + protection logic)\n"
             "  OUT/[ISO3_]qgis_03d_combined_coded_raster.tif\n"
             "      (if Save combined ticked; tier-logic debug)\n"
@@ -790,7 +790,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             "  OUT/[ISO3_]qgis_06d_<forest>_with_primary_nested_dissolved.gpkg\n"
             "      (if Vectorise: nest + dissolve_multipart ticked)\n"
             "  OUT/[ISO3_]qgis_run_metadata.json\n"
-            "  OUT/intermediates/ (tier rasters, prepared cache,\n"
+            "  OUT/intermediates/ (tier rasters, preprocessing cache,\n"
             "                     distance cache, scratch workspaces)\n"
         )
 
@@ -1165,7 +1165,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
              "Run: Save 02d naturally regenerating forest output",
              True),
             (self.SAVE_03C_PRE_CONN,
-             "Run: Save 03c pre-connectivity primary forest "
+             "Run: Save 03c pre-refinement primary forest "
              "(intermediate)",
              False),
             (self.SAVE_04A_PRIMARY,
@@ -1191,7 +1191,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             defaultValue=False))
         self.addParameter(QgsProcessingParameterBoolean(
             self.REUSE_PREPARED,
-            "Run: Reuse prepared/*.tif cache (default ON)",
+            "Run: Reuse preprocessing/*.tif cache (default ON)",
             defaultValue=True))
         self.addParameter(QgsProcessingParameterBoolean(
             self.ADD_MAIN_OUTPUTS_TO_MAP,
@@ -1227,7 +1227,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.13.0"
+    PFF_VERSION = "0.13.1"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1695,7 +1695,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # instead of out_dir.
         _intermediates_dir_holder.append(intermediates_dir)
 
-        prepared_dir = ensure_dir(os.path.join(intermediates_dir, "prepared"))
+        # Batch 27.1: folder renamed prepared/ -> preprocessing/.
+        # Variable names (prepared_dir, REUSE_PREPARED, reuse_prepared)
+        # kept for backwards-compat with saved Recent Runs + minimal-
+        # diff churn; only the on-disk folder name + user-visible
+        # strings change.
+        prepared_dir = ensure_dir(os.path.join(intermediates_dir, "preprocessing"))
         dist_dir = ensure_dir(os.path.join(intermediates_dir, "distances"))
         # Scratch dir for per-input _reproj and _clipped intermediates. Keeps
         # prepared/ clean — only the 9 user-reusable final rasters sit there,
@@ -1710,7 +1715,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         # Likely outputs use the Option D filenames computed via _out().
         _likely_outputs = [
             _out("04a", "primary_forest"),
-            _out("03c", "pre_connectivity_primary_forest"),
+            _out("03c", "pre_refinement_primary_forest"),
             _out("04e", "anthropogenic_mask"),
             _out("02c", "forest"),
             _out("02e", "naturally_regenerating_forest"),
@@ -1783,16 +1788,16 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         forest_src = forest_layer.source()
         # Peek at AOI choice early so we can pick the right reproject target:
         # if AOI will be supplied we reproject to scratch/ so the AOI-clip step
-        # can write the final prepared/forest.tif from a different source file
+        # can write the final preprocessing/forest.tif from a different source file
         # (avoids in-place overwrite + Windows file-lock problems with OneDrive).
         _will_clip_aoi = aoi_layer is not None
         prepared_forest_path = os.path.join(prepared_dir, "forest.tif")
 
-        # Re-run short-circuit: if user already points at prepared/forest.tif
+        # Re-run short-circuit: if user already points at preprocessing/forest.tif
         # from this out_dir, it's already reprojected + AOI-clipped. Skip prep.
         if os.path.normpath(forest_src) == os.path.normpath(prepared_forest_path):
             feedback.pushInfo(
-                "Forest input is already prepared/forest.tif — using as-is "
+                "Forest input is already preprocessing/forest.tif — using as-is "
                 "(re-run path; skipping reproject + AOI clip).")
         else:
             # First-run path: reproject forest.
@@ -1844,11 +1849,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             }, context=context, feedback=feedback)
             aoi_mask = aoi_buffered
 
-            # If forest is the re-run input (already prepared/forest.tif),
+            # If forest is the re-run input (already preprocessing/forest.tif),
             # skip the re-clip — file is already AOI-clipped.
             if os.path.normpath(reference) == os.path.normpath(prepared_forest_path):
                 feedback.pushInfo(
-                    "Forest input is already prepared/forest.tif — skipping "
+                    "Forest input is already preprocessing/forest.tif — skipping "
                     "AOI re-clip (it's already clipped).")
                 # Still rasterise the AOI so it's available for stages that need it.
                 aoi_rasterised = os.path.join(aoi_workspace, "aoi_raster.tif")
@@ -1856,7 +1861,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                                  context=context, feedback=feedback)
             else:
                 # Normal first-run path: reprojected forest is in scratch_dir,
-                # mask it to AOI and write the result to prepared/forest.tif.
+                # mask it to AOI and write the result to preprocessing/forest.tif.
                 # Source and destination are DIFFERENT files → no in-place
                 # overwrite, no Windows file-lock issues.
                 aoi_rasterised = os.path.join(aoi_workspace, "aoi_raster.tif")
@@ -1874,7 +1879,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_aoi = None
                 _masked = (_forest_arr * (_aoi_arr > 0)).astype(_forest_arr.dtype)
                 _drv = gdal.GetDriverByName("GTiff")
-                # Write clipped forest to prepared/forest.tif (different path
+                # Write clipped forest to preprocessing/forest.tif (different path
                 # from the scratch reproj source — no in-place overwrite).
                 # P1.28: _safe_remove handles transient locks (OneDrive etc.).
                 _safe_remove(prepared_forest_path, feedback=feedback)
@@ -1933,7 +1938,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # lock issue.
             if os.path.normpath(layer.source()) == os.path.normpath(aligned):
                 feedback.pushInfo(
-                    f"Raster {filename} is already prepared/{filename}.tif "
+                    f"Raster {filename} is already preprocessing/{filename}.tif "
                     "— using as-is (re-run path).")
                 return aligned
             # P0.3 REUSE_PREPARED: when the user toggle is on AND a cached
@@ -1954,18 +1959,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     )
                     if _grid_match:
                         feedback.pushInfo(
-                            f"Reused cached: prepared/{filename}.tif "
+                            f"Reused cached: preprocessing/{filename}.tif "
                             "(matches reference grid; reproject skipped). "
-                            "Untick 'Reuse prepared/*.tif cache' to force "
+                            "Untick 'Reuse preprocessing/*.tif cache' to force "
                             "re-prep if your source raster changed.")
                         return aligned
                     else:
                         feedback.pushInfo(
-                            f"Cached prepared/{filename}.tif has mismatched "
+                            f"Cached preprocessing/{filename}.tif has mismatched "
                             "grid -- recomputing.")
                 except Exception as _e:
                     feedback.pushDebugInfo(
-                        f"Could not verify cached prepared/{filename}.tif: "
+                        f"Could not verify cached preprocessing/{filename}.tif: "
                         f"{_e}; recomputing to be safe.")
             feedback.pushInfo(f"Aligning raster {filename}...")
             reproj = os.path.join(scratch_dir, f"{filename}_reproj.tif")
@@ -2153,13 +2158,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         elif fra_agriculture_layer is not None and not exclude_agriculture_from_forest:
             feedback.pushInfo(
                 "Other land with tree cover raster prepared in "
-                "intermediates/prepared/fra_agriculture_tree_cover.tif "
+                "intermediates/preprocessing/fra_agriculture_tree_cover.tif "
                 "but 'Refine to forest' is off — Forest baseline NOT "
                 "narrowed. Tick the option to derive FRA-strict Forest.")
 
         # ─── Top-level 02c_forest.tif (FRA Forest baseline output) ───
         # Per spec (Batch 25.1), 02c_forest belongs at top level (not
-        # just as the internal cache at intermediates/prepared/forest.
+        # just as the internal cache at intermediates/preprocessing/forest.
         # tif). Writing it as a separate file means QGIS can hold open
         # the top-level 02c_forest.tif (via auto-load) without locking
         # the prepared/ cache file -- which would otherwise fail the
@@ -2242,7 +2247,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 reference = forest_natreg_path
         elif plantations_tif is not None and not exclude_plantations:
             feedback.pushInfo(
-                "Planted forest raster prepared in intermediates/prepared/plantations.tif "
+                "Planted forest raster prepared in intermediates/preprocessing/plantations.tif "
                 "but 'Refine to naturally regenerating forest' is off — planted forest "
                 "is NOT excluded from the forest input in this run.")
         elif plantations_layer is None and exclude_plantations:
@@ -2271,12 +2276,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         )
         if _slope_is_prepared:
             feedback.pushInfo(
-                "Slope input is already prepared/slope.tif — using as-is (re-run path).")
+                "Slope input is already preprocessing/slope.tif — using as-is (re-run path).")
             slope_path = _prepared_slope
         elif _dem_is_prepared and slope_layer is None:
             # DEM supplied as re-run input, slope will be derived from prepared dem.tif
             feedback.pushInfo(
-                "DEM input is already prepared/dem.tif — using as-is (re-run path).")
+                "DEM input is already preprocessing/dem.tif — using as-is (re-run path).")
             dem_path = _prepared_dem
         elif slope_layer is not None:
             # Pre-computed slope -- align it to reference grid
@@ -2577,7 +2582,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             tier3_protected,
         )
         # Aligned naming: pre_connectivity_forest (matches pFF_4)
-        candidate_path = _out("03c", "pre_connectivity_primary_forest")
+        candidate_path = _out("03c", "pre_refinement_primary_forest")
         _write(candidate_path, primary_candidate, gt, proj, x_size, y_size)
         feedback.setProgress(80)
 
@@ -2696,7 +2701,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 feedback.pushInfo(
                     "Skipping Refine Output (master tickbox off) -- "
                     "04a_primary_forest.tif copied from "
-                    "03c_pre_connectivity_primary_forest.tif.")
+                    "03c_pre_refinement_primary_forest.tif.")
             else:
                 feedback.pushInfo(
                     "Skipping Refine Output (both Step (a) radius and "

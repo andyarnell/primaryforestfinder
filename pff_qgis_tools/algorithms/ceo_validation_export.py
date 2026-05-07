@@ -162,7 +162,9 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
     DOMAIN_ALL = 0
     DOMAIN_PRIMARY = 1
     DOMAIN_OTHER = 2
-    DOMAIN_LABELS = ["All forest", "Primary only", "Other forest only"]
+    DOMAIN_LABELS = ["All forest (primary + other forest)",
+                     "Primary only",
+                     "Other forest only"]
 
     # Method enum (for EXPORT_METHOD)
     METHOD_SIMPLE_POINTS = 0
@@ -177,7 +179,7 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
         return "ceo_validation_export"
 
     def displayName(self):
-        return "8 -- CEO Validation Export (experimental)"
+        return "8 -- Validation sampling (experimental)"
 
     def group(self):
         return "Primary Forest Finder"

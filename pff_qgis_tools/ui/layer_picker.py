@@ -81,6 +81,12 @@ class LayerOrFilePicker(QWidget):
         self._combo = QgsMapLayerComboBox(self)
         self._combo.setFilters(layer_filter)
         self._combo.setAllowEmptyLayer(True)
+        # Batch 27.1: default blank rather than auto-picking the first
+        # matching layer in the project. The auto-pick was surprising
+        # (users would scroll back later wondering why X layer was
+        # already populated). Forcing None makes the initial state
+        # match the empty file picker beside it.
+        self._combo.setLayer(None)
         # P1.30 batch 20h: combo uses QSizePolicy.Ignored horizontally
         # so it has NO horizontal min-size requirement. It shrinks to
         # any width Qt gives it (down to a pixel if necessary). This
