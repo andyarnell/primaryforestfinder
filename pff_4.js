@@ -1,5 +1,38 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.13.4";
+var PFF_SCRIPT_VERSION = "4.14.0";
+
+// Changes vs v4.13.4 (Batch 28 -- forest-export naming truthfulness):
+//  - 02c_forest export now honours its FRA-Forest name. When the
+//    existing "Refine to forest" toggle is on (default), the export
+//    contains forest_map MINUS olwtc -- matching FRA-Forest =
+//    Tree cover - OLTC. When the toggle is off, falls back to the
+//    pre-Batch-28 behaviour (raw thresholded tree cover) and surfaces
+//    a Note in the export-status label so the user knows the file
+//    isn't FRA-narrowed in that mode.
+//  - 02e_naturally_regenerating_forest now chains off the
+//    FRA-narrowed Forest baseline (forest_map_fra) instead of raw
+//    forest_map. Matches the FRA hierarchy:
+//      Tree cover -> Forest (-OLTC) -> NRF (-Planted) -> Primary.
+//    When the toggle is off, forest_map_fra == forest_map so 02e
+//    behaviour is identical to pre-Batch-28.
+//  - New 02a_forest_raw export tickbox ("Tree cover -- thresholded,
+//    pre-FRA-filter (02a)"). Default OFF. Exports the pre-OLTC raw
+//    thresholded tree cover. Useful for users who want to apply
+//    FRA-narrowing themselves with a national OLTC dataset different
+//    from the global one, or as a debugging baseline.
+//  - 02c_forest tickbox label updated to make the FRA semantics
+//    explicit: "Forest -- FRA-aligned baseline (02c)".
+//  - Files exported under v4.13.4 with the same toggle-on settings
+//    will differ in v4.14.0: 02c_forest will be smaller (urban tree
+//    cover removed; oil palm + tree-crops removed). 02e likewise.
+//    04a_primary_forest unchanged (was already OLTC-narrowed via
+//    the analysis tier-logic path).
+//  - BREAKING IF YOU HAVE TIGHT EXTERNAL TOOLS that hardcoded
+//    pre-Batch-28 02c content semantics. The legacy-rename script
+//    earlier today mapped pre-Batch-28 _1_forest_* legacy files to
+//    _02a_forest_raw_* on disk -- this batch makes that mapping
+//    retroactively correct. New 02c_forest exports are the
+//    different (FRA-narrowed) version that pre-Batch-28 was missing.
 
 // Changes vs v4.13.3 (OSM vector clip tightening):
 //  - getOsmRoadsAll(aoi) in modules/timeSeriesAnthro.js now applies
@@ -2501,7 +2534,8 @@ var exportRasterStatusLabel = ui.Label('', {margin: '4px 0 0 8px', width: '280px
 var exportChkStyle = {fontSize: '11px', margin: '1px 0'};
 var exportChk_final           = ui.Checkbox({label: 'Primary forest (final)',        value: true,  style: exportChkStyle});
 var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-connectivity forest',       value: true,  style: exportChkStyle});
-var exportChk_inputForest     = ui.Checkbox({label: 'Input forest (02c)',            value: true,  style: exportChkStyle});
+var exportChk_inputForest     = ui.Checkbox({label: 'Forest -- FRA-aligned baseline (02c)', value: true,  style: exportChkStyle});
+var exportChk_forestRaw       = ui.Checkbox({label: 'Tree cover -- thresholded, pre-FRA-filter (02a)', value: false, style: exportChkStyle});
 var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02e)', value: true,  style: exportChkStyle});
 var exportChk_roads           = ui.Checkbox({label: 'Roads (binary image, OSM+)',   value: true,  style: exportChkStyle});
 var exportChk_roadsOsmVector  = ui.Checkbox({label: 'Roads (vector, OSM)',           value: false, style: exportChkStyle});
@@ -2529,6 +2563,7 @@ var exportChkAllToggle = ui.Checkbox({
   value: false,
   onChange: function (v) {
     [exportChk_final, exportChk_preConnectivity, exportChk_inputForest,
+     exportChk_forestRaw,
      exportChk_naturallyRegenerating, exportChk_roads, exportChk_roadsOsmVector,
      exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture,
      exportChk_plantations, exportChk_fraAgriculture, exportChk_dem,
@@ -2543,7 +2578,7 @@ var exportSelectPanel = ui.Panel({
   widgets: [
     exportChkAllToggle,
     ui.Label('Select layers to export:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
-    ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_naturallyRegenerating],
+    ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_forestRaw, exportChk_naturallyRegenerating],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
     ui.Panel([exportChk_roads, exportChk_roadsOsmVector, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations, exportChk_fraAgriculture],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
@@ -2840,10 +2875,13 @@ function exportRastersToDrive() {
       exportRasterStatusLabel.setValue('No forest data selected.');
       return;
     }
-    if (exportChk_inputForest.getValue()) {
-      doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-        mkExportName('02c', 'forest_' + analysisYear + '_' + s), folder);
-    }
+    // 02a / 02c forest exports moved BELOW the OLTC computation so the
+    // FRA-narrowed Forest baseline (02c) can subtract OLTC -- matches
+    // the FRA-Forest definition (Tree cover - OLTC). The pre-OLTC raw
+    // thresholded version is exposed separately as 02a_forest_raw for
+    // users who want the broader tree cover layer (or want to apply
+    // their own national OLTC narrowing locally). See the export block
+    // after `var olwtc = ...` below.
 
     // GLAD raw tree height (so user can re-threshold at any height in QGIS)
     if (exportChk_gladHeight.getValue()) {
@@ -2960,6 +2998,38 @@ function exportRastersToDrive() {
         .or(treeCropsSDPT.unmask(0))
         .or(urbanTreeCover);
 
+    // ── Forest-baseline exports (02a raw / 02c FRA-aligned) ──
+    // 02c_forest = FRA-Forest = Tree cover MINUS OLTC. Honours the
+    // existing "Refine to forest" toggle (excludeAgricultureFromForest
+    // Checkbox) so the export semantics match the analysis pipeline.
+    // When the toggle is off, 02c falls back to raw thresholded tree
+    // cover (same as 02a_forest_raw) and the export-status label
+    // surfaces the fallback so the user knows the file isn't
+    // FRA-narrowed in this mode.
+    var _refineToForestActive = exclusionActive(
+      excludeAgricultureFromForestCheckbox, excludeAgriPanel);
+    var forest_map_fra = _refineToForestActive
+      ? forest_map.updateMask(olwtc.not())
+      : forest_map;
+    if (exportChk_inputForest.getValue()) {
+      doExport(forest_map_fra.updateMask(country_and_buffer_mask).unmask(0),
+        mkExportName('02c', 'forest_' + analysisYear + '_' + s), folder);
+      if (!_refineToForestActive) {
+        exportRasterStatusLabel.setValue(
+          'Note: 02c_forest exported WITHOUT OLTC narrowing because ' +
+          '"Refine to forest" toggle is off. Content equals raw ' +
+          'thresholded tree cover (same as 02a_forest_raw).');
+      }
+    }
+    if (exportChk_forestRaw.getValue()) {
+      // 02a_forest_raw = thresholded tree cover BEFORE OLTC narrowing.
+      // Always available; useful when user wants to apply their own
+      // OLTC narrowing locally with a national OLTC dataset different
+      // from the global one.
+      doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
+        mkExportName('02a', 'forest_raw_' + analysisYear + '_' + s), folder);
+    }
+
     if (exportChk_plantations.getValue()) {
       // 02d_planted_forest export = FRA Planted Forest only (SDPT class 1).
       // Plugin mirrors this when consumed -- "exclude planted forest" =
@@ -2979,12 +3049,17 @@ function exportRastersToDrive() {
     // Tree cover or Forest), derive NRF as Forest minus Planted Forest,
     // matching the analysis-side forest_natreg_image construction.
     if (exportChk_naturallyRegenerating.getValue()) {
+      // Batch 28: chain NRF off the FRA-narrowed Forest baseline
+      // (forest_map_fra) instead of raw forest_map. Matches the FRA
+      // hierarchy: Tree cover -> Forest (-OLTC) -> NRF (-Planted).
+      // When "Refine to forest" toggle is off, forest_map_fra ==
+      // forest_map so behaviour is identical to pre-Batch-28.
       var declCat = inputCategorySelect.getValue();
       var inputIsAtOrPastNRF = (declCat === INPUT_CATEGORY_NATREG ||
                                 declCat === INPUT_CATEGORY_PRIMARY);
       var natRegBase = inputIsAtOrPastNRF
-        ? forest_map  // input already excludes planted forest per declaration
-        : forest_map.updateMask(allPlantationsSel.unmask().not());
+        ? forest_map_fra  // input already excludes planted forest per declaration
+        : forest_map_fra.updateMask(allPlantationsSel.unmask().not());
       var natRegExport = natRegBase
         .updateMask(country_and_buffer_mask)
         .unmask(0);
