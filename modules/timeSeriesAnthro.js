@@ -989,7 +989,20 @@ function getOsmRoadsAll(aoi) {
   ];
   var fcs = assetIds.map(function (id) {
     var fc = ee.FeatureCollection(id);
-    return aoi ? fc.filterBounds(aoi) : fc;
+    if (!aoi) return fc;
+    // Two-stage clip:
+    //   1. filterBounds(aoi)           -- spatial-index fast path
+    //      (effective bounding-box pre-filter, very cheap).
+    //   2. filter(ee.Filter.intersects) -- polygon-precise intersect
+    //      (drops features that pass the bbox filter but don't
+    //      actually touch the AOI polygon -- e.g. roads in the bbox
+    //      corner outside a narrow north-south country like Bhutan).
+    // The bbox filter does the heavy lifting (per-child spatial-
+    // index pushdown across 33 assets); the intersects filter only
+    // sees the small bbox-pre-filtered subset, so the cost is
+    // bounded by the AOI's road density, not the global dataset.
+    return fc.filterBounds(aoi).filter(
+      ee.Filter.intersects({leftField: '.geo', rightValue: aoi}));
   });
   return ee.FeatureCollection(fcs).flatten()
     .filter(ee.Filter.neq('highway', 'proposed'))

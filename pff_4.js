@@ -1,5 +1,21 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.13.3";
+var PFF_SCRIPT_VERSION = "4.13.4";
+
+// Changes vs v4.13.3 (OSM vector clip tightening):
+//  - getOsmRoadsAll(aoi) in modules/timeSeriesAnthro.js now applies
+//    a TWO-STAGE clip per child FC: filterBounds(aoi) for the cheap
+//    spatial-index fast-path, plus ee.Filter.intersects for polygon-
+//    precise filtering that drops features which pass the bbox but
+//    don't actually touch the AOI polygon. For narrow / irregular
+//    countries (Bhutan, Indonesia archipelago) the bbox includes a
+//    lot of empty corner area that the index filter alone can't
+//    reject; the second-stage intersects fixes that without
+//    sacrificing the per-asset spatial-index pushdown across 33
+//    children. Per-feature cost is bounded by the AOI's road density,
+//    not the global dataset, so this remains cheap on small AOIs.
+//  - User-side test recommended on Indonesia / Russia / Brazil to
+//    quantify the runtime + file-size improvement on bbox-loose
+//    AOIs.
 
 // Changes vs v4.13.2 (Batch 27.1 -- UX feedback round, GEE side):
 //  - Right-panel section "Export Layers" renamed to "Outputs" to
