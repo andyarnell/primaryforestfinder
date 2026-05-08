@@ -1,5 +1,27 @@
 // Primary Forest Finder App
-var PFF_SCRIPT_VERSION = "4.14.0";
+var PFF_SCRIPT_VERSION = "4.14.1";
+
+// Changes vs v4.14.0 (Export panel labels + ordering):
+//  - Every Export-Layers tickbox label now shows the step prefix
+//    in parentheses (e.g. "(02c)", "(03a)") so users see which
+//    file-name segment the export will produce.
+//  - Tickbox declaration order, the select-all-toggle list, and
+//    the panel widget order all rewritten to follow the schema:
+//    00 -> 02 -> 03 (a then b) -> 03c -> 04 -> sidecar. Matches
+//    the production-step order used in mkExportName().
+//  - "Pre-connectivity forest" tickbox renamed to "Pre-refinement
+//    primary forest (03c)". The exported filename also changes
+//    from 03c_pre_connectivity_primary_forest_*.tif to
+//    03c_pre_refinement_primary_forest_*.tif -- matching the
+//    Batch 27.1 layer/legend rename. Files exported under v4.14.0
+//    or earlier with the legacy name are still valid as standalone
+//    files; just won't auto-fit pipelines that hardcode the new
+//    name.
+//  - "Primary forest (final)" -> "Primary forest -- final (04a)".
+//  - "Built-up (small)" / "Built-up (large)" -> "Built-up small
+//    (03a)" / "Built-up large (03a)".
+//  - "DEM" / "Slope" -> "DEM (03b)" / "Slope (03b)".
+//  - Other labels reorganised similarly for consistency.
 
 // Changes vs v4.13.4 (Batch 28 -- forest-export naming truthfulness):
 //  - 02c_forest export now honours its FRA-Forest name. When the
@@ -2531,26 +2553,35 @@ exportToCloudCheckbox.onChange(function(checked) {
 var exportRasterStatusLabel = ui.Label('', {margin: '4px 0 0 8px', width: '280px'});
 
 // ── Selective export controls ──
+// Labels include the step prefix for the EXPORT FILENAME so the
+// dropdown reads top-to-bottom in schema order (00 -> 01 -> 02 ->
+// 03 -> 04 -> sidecar). Step prefixes shown in parentheses match
+// the file-name segment used by mkExportName(step, ...).
 var exportChkStyle = {fontSize: '11px', margin: '1px 0'};
-var exportChk_final           = ui.Checkbox({label: 'Primary forest (final)',        value: true,  style: exportChkStyle});
-var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-connectivity forest',       value: true,  style: exportChkStyle});
-var exportChk_inputForest     = ui.Checkbox({label: 'Forest -- FRA-aligned baseline (02c)', value: true,  style: exportChkStyle});
+// Step 00 -- AOI / context
+var exportChk_aoi             = ui.Checkbox({label: 'AOI boundary -- vector (00a)', value: true,  style: exportChkStyle});
+// Step 02 -- raw forest source bands + derived forest layers
+var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw -- tree cover + loss (02a)', value: false, style: exportChkStyle});
+var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height (02a)', value: false, style: exportChkStyle});
 var exportChk_forestRaw       = ui.Checkbox({label: 'Tree cover -- thresholded, pre-FRA-filter (02a)', value: false, style: exportChkStyle});
-var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02e)', value: true,  style: exportChkStyle});
-var exportChk_roads           = ui.Checkbox({label: 'Roads (binary image, OSM+)',   value: true,  style: exportChkStyle});
-var exportChk_roadsOsmVector  = ui.Checkbox({label: 'Roads (vector, OSM)',           value: false, style: exportChkStyle});
-var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up (small)',              value: true,  style: exportChkStyle});
-var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up (large)',              value: true,  style: exportChkStyle});
-var exportChk_agriculture     = ui.Checkbox({label: 'Agriculture',                   value: true,  style: exportChkStyle});
-var exportChk_plantations     = ui.Checkbox({label: 'Planted forest (timber/pulp/fibre, 02d)', value: true,  style: exportChkStyle});
 var exportChk_fraAgriculture  = ui.Checkbox({label: 'Other land with tree cover (02b)', value: false, style: exportChkStyle});
-var exportChk_dem             = ui.Checkbox({label: 'DEM',                           value: true,  style: exportChkStyle});
-var exportChk_slope           = ui.Checkbox({label: 'Slope',                         value: false, style: exportChkStyle});
-var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas (binary image)', value: true,  style: exportChkStyle});
-var exportChk_protVector      = ui.Checkbox({label: 'Protected areas (vector)',      value: false, style: exportChkStyle});
-var exportChk_aoi             = ui.Checkbox({label: 'AOI boundary (vector)',         value: true,  style: exportChkStyle});
-var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (tree cover + loss)', value: false, style: exportChkStyle});
-var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height',              value: false, style: exportChkStyle});
+var exportChk_inputForest     = ui.Checkbox({label: 'Forest -- FRA-aligned baseline (02c)', value: true,  style: exportChkStyle});
+var exportChk_plantations     = ui.Checkbox({label: 'Planted forest -- timber/pulp/fibre (02d)', value: true,  style: exportChkStyle});
+var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest (02e)', value: true,  style: exportChkStyle});
+// Step 03 -- human-influence inputs (anthro + protection)
+var exportChk_roads           = ui.Checkbox({label: 'Roads -- binary image, OSM+ (03a)', value: true,  style: exportChkStyle});
+var exportChk_roadsOsmVector  = ui.Checkbox({label: 'Roads -- vector, OSM (03a)', value: false, style: exportChkStyle});
+var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up small (03a)', value: true,  style: exportChkStyle});
+var exportChk_builtupLarge    = ui.Checkbox({label: 'Built-up large (03a)', value: true,  style: exportChkStyle});
+var exportChk_agriculture     = ui.Checkbox({label: 'Agriculture (03a)', value: true,  style: exportChkStyle});
+var exportChk_dem             = ui.Checkbox({label: 'DEM (03b)', value: true,  style: exportChkStyle});
+var exportChk_slope           = ui.Checkbox({label: 'Slope (03b)', value: false, style: exportChkStyle});
+var exportChk_protLegal       = ui.Checkbox({label: 'Protected areas -- binary image (03b)', value: true,  style: exportChkStyle});
+var exportChk_protVector      = ui.Checkbox({label: 'Protected areas -- vector (03b)', value: false, style: exportChkStyle});
+// Step 03c / 04 -- analysis outputs
+var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-refinement primary forest (03c)', value: true,  style: exportChkStyle});
+var exportChk_final           = ui.Checkbox({label: 'Primary forest -- final (04a)', value: true,  style: exportChkStyle});
+// Sidecar -- per-run config + run snapshot
 var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata JSON (config + run snapshot)', value: true,  style: exportChkStyle});
 
 // Select all / none master tickbox -- one-click bulk on/off for every
@@ -2562,13 +2593,17 @@ var exportChkAllToggle = ui.Checkbox({
   label: 'Select all / none',
   value: false,
   onChange: function (v) {
-    [exportChk_final, exportChk_preConnectivity, exportChk_inputForest,
-     exportChk_forestRaw,
-     exportChk_naturallyRegenerating, exportChk_roads, exportChk_roadsOsmVector,
+    // Schema order (00 -> 02 -> 03 -> 04 -> sidecar) so the bulk-toggle
+    // list mirrors the panel display order below.
+    [exportChk_aoi,
+     exportChk_hansenRaw, exportChk_gladHeight, exportChk_forestRaw,
+     exportChk_fraAgriculture, exportChk_inputForest,
+     exportChk_plantations, exportChk_naturallyRegenerating,
+     exportChk_roads, exportChk_roadsOsmVector,
      exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture,
-     exportChk_plantations, exportChk_fraAgriculture, exportChk_dem,
-     exportChk_slope, exportChk_protLegal, exportChk_protVector,
-     exportChk_aoi, exportChk_hansenRaw, exportChk_gladHeight,
+     exportChk_dem, exportChk_slope,
+     exportChk_protLegal, exportChk_protVector,
+     exportChk_preConnectivity, exportChk_final,
      exportChk_runMetadata].forEach(function (cb) { cb.setValue(v); });
   },
   style: {fontSize: '11px', fontWeight: 'bold', margin: '4px 0 2px 0'}
@@ -2578,13 +2613,28 @@ var exportSelectPanel = ui.Panel({
   widgets: [
     exportChkAllToggle,
     ui.Label('Select layers to export:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
-    ui.Panel([exportChk_final, exportChk_preConnectivity, exportChk_inputForest, exportChk_forestRaw, exportChk_naturallyRegenerating],
+    // Step 00 -- AOI / context
+    ui.Panel([exportChk_aoi],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_roads, exportChk_roadsOsmVector, exportChk_builtupSmall, exportChk_builtupLarge, exportChk_agriculture, exportChk_plantations, exportChk_fraAgriculture],
+    // Step 02 -- raw + derived forest layers
+    ui.Panel([exportChk_hansenRaw, exportChk_gladHeight, exportChk_forestRaw,
+              exportChk_fraAgriculture, exportChk_inputForest,
+              exportChk_plantations, exportChk_naturallyRegenerating],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_dem, exportChk_slope, exportChk_protLegal, exportChk_protVector, exportChk_aoi],
+    // Step 03a -- anthropogenic inputs
+    ui.Panel([exportChk_roads, exportChk_roadsOsmVector,
+              exportChk_builtupSmall, exportChk_builtupLarge,
+              exportChk_agriculture],
       ui.Panel.Layout.flow('vertical'), {margin: '0'}),
-    ui.Panel([exportChk_hansenRaw, exportChk_gladHeight, exportChk_runMetadata],
+    // Step 03b -- protection / terrain inputs
+    ui.Panel([exportChk_dem, exportChk_slope,
+              exportChk_protLegal, exportChk_protVector],
+      ui.Panel.Layout.flow('vertical'), {margin: '0'}),
+    // Step 03c / 04 -- analysis outputs
+    ui.Panel([exportChk_preConnectivity, exportChk_final],
+      ui.Panel.Layout.flow('vertical'), {margin: '0'}),
+    // Sidecar
+    ui.Panel([exportChk_runMetadata],
       ui.Panel.Layout.flow('vertical'), {margin: '0'})
   ],
   layout: ui.Panel.Layout.flow('vertical'),
@@ -3113,7 +3163,7 @@ function exportRastersToDrive() {
     // ── 4 — Pre-connectivity Forest & Primary Forest (from analysis cache) ──
     if (exportChk_preConnectivity.getValue() && latestPreConnectivityForest[analysisYear]) {
       doExport(latestPreConnectivityForest[analysisYear].unmask(0),
-        mkExportName('03c', 'pre_connectivity_primary_forest_' + analysisYear + '_' + s), folder);
+        mkExportName('03c', 'pre_refinement_primary_forest_' + analysisYear + '_' + s), folder);
     }
     if (exportChk_final.getValue() && latestMaskedPrimaryForest[analysisYear]) {
       doExport(latestMaskedPrimaryForest[analysisYear].unmask(0),
