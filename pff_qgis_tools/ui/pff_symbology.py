@@ -83,14 +83,20 @@ def _apply_raster_symbology(layer, path: str) -> bool:
 def _apply_ceo_vector_symbology(layer, path: str) -> bool:
     """Style CEO export vectors so plot/sample geometry stays
     legible over imagery in CEO QC reviews. Recognises the four
-    canonical CEO output basenames; everything else returns False.
+    canonical CEO output role-tokens; everything else returns False.
+
+    Batch 28.8 item 8: matches both the new filename schema
+    (`<ISO3>_<year>_qgis_07X_ceo_validation_<role>...`) via substring
+    check AND the legacy v0.14.5 form (`ceo_<role>...`) via startswith
+    fallback so v0.14.5 outputs still render when reloaded.
     """
     base = os.path.basename(path or "")
     stem, _ext = os.path.splitext(base)
 
     # Plot ring boundaries — bright orange outline, transparent fill,
     # 1.2 mm line so it shows over imagery without hiding it.
-    if stem.startswith("ceo_plot_boundaries"):
+    if ("ceo_validation_plot_boundaries" in stem
+            or stem.startswith("ceo_plot_boundaries")):
         sym = QgsFillSymbol.createSimple({
             "color": "0,0,0,0",
             "outline_color": "#ff7f00",
@@ -102,8 +108,10 @@ def _apply_ceo_vector_symbology(layer, path: str) -> bool:
         return True
 
     # Centre-point samples — yellow circle with white stroke.
-    if stem.startswith("ceo_samples_points") or stem.startswith(
-            "ceo_point_plots"):
+    if ("ceo_validation_samples_points" in stem
+            or "ceo_validation_point_plots" in stem
+            or stem.startswith("ceo_samples_points")
+            or stem.startswith("ceo_point_plots")):
         sym = QgsMarkerSymbol.createSimple({
             "name": "circle",
             "color": "#ffd400",
@@ -115,8 +123,9 @@ def _apply_ceo_vector_symbology(layer, path: str) -> bool:
         layer.triggerRepaint()
         return True
 
-    # 1 ha square samples — yellow outline, transparent fill, dashed.
-    if stem.startswith("ceo_samples_squares"):
+    # Square samples — yellow outline, transparent fill, dashed.
+    if ("ceo_validation_samples_squares" in stem
+            or stem.startswith("ceo_samples_squares")):
         sym = QgsFillSymbol.createSimple({
             "color": "0,0,0,0",
             "outline_color": "#ffd400",

@@ -428,6 +428,134 @@ def _check_input_naming_consistency(declared_iso3, declared_year,
                           "declared ISO3 / year.")
 
 
+# ---------------------------------------------------------------------------
+# Batch 28.3: slot-vs-filename hint check
+# ---------------------------------------------------------------------------
+# Per-input heuristic. For each named input slot, if the loaded file's
+# basename contains a substring associated with a SIBLING slot (e.g.
+# 'small' loaded into the 'large' slot), warn. Non-blocking. Catches
+# the most common dock-side picker mistake -- user picks a same-family
+# raster but for the wrong sub-slot.
+#
+# Each rule entry: slot label -> (expected_substrings, alarm_substrings).
+# - expected: at least one of these SHOULD be in the basename.
+# - alarm:   if any of these is in the basename, that's a likely
+#            wrong-sub-slot pick.
+# Substring matching is case-insensitive.
+_SLOT_FILENAME_HINTS = {
+    "forest_raster": (
+        ("forest", "treecover", "tree_cover", "tree_height", "hansen", "glad"),
+        ("plantation", "planted_forest", "agriculture", "roads", "builtup",
+         "dem", "slope", "protect"),
+    ),
+    "olwtc": (
+        ("plantation", "tree_crops", "other_land_with_tree_cover",
+         "agri_tree_cover", "agriculture_tree_cover", "fra_agri", "olwtc",
+         "oltc"),
+        ("roads", "builtup", "dem", "slope", "protect"),
+    ),
+    "planted_forest": (
+        ("plantation", "planted_forest", "planted"),
+        ("roads", "builtup", "dem", "slope", "protect", "agriculture",
+         "tree_crops"),
+    ),
+    "roads_vector": (
+        ("road",),
+        ("forest", "plantation", "builtup", "dem", "slope", "protect",
+         "agriculture"),
+    ),
+    "roads_raster": (
+        ("road",),
+        ("forest", "plantation", "builtup", "dem", "slope", "protect",
+         "agriculture"),
+    ),
+    "builtup_small": (
+        ("small",),
+        ("_large_", "_large.", "large_"),
+    ),
+    "builtup_large": (
+        ("large",),
+        ("_small_", "_small.", "small_"),
+    ),
+    "agriculture": (
+        ("agriculture",),
+        ("forest", "roads", "builtup", "dem", "slope", "protect",
+         "plantation", "tree_crops", "other_land_with_tree_cover"),
+    ),
+    "dem": (
+        ("dem", "elevation", "alos", "srtm"),
+        ("slope",),
+    ),
+    "slope": (
+        ("slope",),
+        ("dem", "elevation"),
+    ),
+    "protected_vector": (
+        ("protect", "wdpa"),
+        ("forest", "plantation", "agriculture", "roads", "builtup", "dem",
+         "slope"),
+    ),
+    "protected_raster": (
+        ("protect", "wdpa"),
+        ("forest", "plantation", "agriculture", "roads", "builtup", "dem",
+         "slope"),
+    ),
+    "aoi": (
+        ("aoi", "boundary", "vector"),
+        ("forest", "plantation", "agriculture", "roads", "builtup", "dem",
+         "slope", "protect"),
+    ),
+}
+
+
+def _check_input_slot_filename_hints(input_paths, feedback):
+    """Heuristic slot-vs-filename consistency check.
+
+    For each (label, path) pair in ``input_paths``, look at the filename
+    against the slot's expected/alarm substring rules in
+    ``_SLOT_FILENAME_HINTS``. Emit non-blocking warnings on suspected
+    wrong-slot picks. Catches the BUILTUP_LARGE-with-a-small-file class
+    of dock-side mistake.
+
+    Custom slots (custom_1/2/3) are skipped -- user-defined, no rule.
+    Slots not in the rules dict are skipped silently.
+    """
+    feedback.pushInfo("=== Input slot vs filename heuristic ===")
+    n_warned = 0
+    for label, path in input_paths:
+        if not path:
+            continue
+        rule = _SLOT_FILENAME_HINTS.get(label)
+        if rule is None:
+            continue
+        expected, alarm = rule
+        base = os.path.basename(path).lower()
+        # Alarm substrings are the strongest signal of a wrong-slot pick
+        for alarm_str in alarm:
+            if alarm_str in base:
+                feedback.pushWarning(
+                    f"Slot '{label}' got file with '{alarm_str}' in its "
+                    f"name: {os.path.basename(path)}. "
+                    f"Likely wrong sub-slot -- expected hint: "
+                    f"{', '.join(expected)}.")
+                n_warned += 1
+                break  # one alarm per slot is enough
+        else:
+            # No alarm match; check that at least one expected hint is
+            # present. A file lacking ALL expected hints is a softer
+            # signal (could be a user-renamed file or a national variant
+            # we haven't seen) -- emit a quieter Info note rather than
+            # a Warning, only when something else looked off.
+            has_expected = any(e in base for e in expected)
+            if not has_expected:
+                # Skip the soft Info -- many user-renamed files won't
+                # contain canonical hints and that's fine. Only the
+                # alarm cases (above) are worth surfacing.
+                pass
+    if n_warned == 0:
+        feedback.pushInfo("Input slot/filename hints look consistent.")
+
+
 class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     # -- Inputs --
     FOREST_RASTER = "FOREST_RASTER"
@@ -1227,7 +1355,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.13.2"
+    PFF_VERSION = "0.15.0"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1333,6 +1461,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     pass
             _check_input_naming_consistency(
                 _iso3, _year_tag, _input_paths_for_sanity, feedback)
+            # Batch 28.3: slot-vs-filename heuristic. Catches the
+            # BUILTUP_LARGE-with-small-file class of mistake (and any
+            # other sibling-slot mix-up) -- non-blocking warning.
+            _check_input_slot_filename_hints(
+                _input_paths_for_sanity, feedback)
         except Exception as _e:
             feedback.pushDebugInfo(
                 f"(input naming sanity check skipped: {_e})")
@@ -1746,8 +1879,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _likely_outputs.append(_out("06c", "forest_vector", ext=vec_ext))
                 _likely_outputs.append(_out("06c", "naturally_regenerating_forest_vector", ext=vec_ext))
             if vectorize_nest:
-                _likely_outputs.append(_out("06c", "forest_with_primary_nested_vector", ext=vec_ext))
-                _likely_outputs.append(_out("06c", "naturally_regenerating_forest_with_primary_nested_vector", ext=vec_ext))
+                # Batch 28.8 item 5: nest+dissolve are exclusive --
+                # 06c is dropped from the likely-outputs lock-check
+                # when dissolve is on (only 06d emerges in out_dir).
+                if not vectorize_dissolve_multipart:
+                    _likely_outputs.append(_out("06c", "forest_with_primary_nested_vector", ext=vec_ext))
+                    _likely_outputs.append(_out("06c", "naturally_regenerating_forest_with_primary_nested_vector", ext=vec_ext))
                 if vectorize_dissolve_multipart:
                     _likely_outputs.append(_out("06d", "forest_with_primary_nested_dissolved", ext=vec_ext))
                     _likely_outputs.append(_out("06d", "naturally_regenerating_forest_with_primary_nested_dissolved", ext=vec_ext))
@@ -2742,74 +2879,87 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 compute_zonal_stats, write_zonal_csv,
                 join_stats_to_vector)
 
-            # Three-tier FRA cascade when plantations exclusion is active:
-            #   Forest (raw input, includes plantations)
-            #   Naturally regenerating forest (= forest AND NOT plantations)
-            #   Primary forest (final tier output)
-            # Otherwise just Forest + Primary forest (two-tier).
-            zonal_rasters = {"forest": forest_raw_path}
-            if forest_natreg_path is not None:
-                zonal_rasters["naturally_regenerating_forest"] = forest_natreg_path
-            zonal_rasters["primary_forest"] = final_path
+            # Stage 6 fail-soft wrapper: primary forest output is
+            # already on disk by this point (stage 5 produced 04a).
+            # If stats fail -- for example on QGIS < 3.16 where the
+            # modern field-calculator algorithm IDs differ -- log a
+            # warning + skip stats but DON'T fail the whole run.
+            try:
+                # Three-tier FRA cascade when plantations exclusion is active:
+                #   Forest (raw input, includes plantations)
+                #   Naturally regenerating forest (= forest AND NOT plantations)
+                #   Primary forest (final tier output)
+                # Otherwise just Forest + Primary forest (two-tier).
+                zonal_rasters = {"forest": forest_raw_path}
+                if forest_natreg_path is not None:
+                    zonal_rasters["naturally_regenerating_forest"] = forest_natreg_path
+                zonal_rasters["primary_forest"] = final_path
 
-            zone_layer = self.parameterAsVectorLayer(
-                parameters, self.ZONE_LAYER, context)
-            zone_path = zone_layer.source() if zone_layer else None
-            zone_field = None
-            if zone_path:
-                zone_field = (self.parameterAsString(
-                    parameters, self.ZONE_FIELD, context).strip() or None)
+                zone_layer = self.parameterAsVectorLayer(
+                    parameters, self.ZONE_LAYER, context)
+                zone_path = zone_layer.source() if zone_layer else None
+                zone_field = None
+                if zone_path:
+                    zone_field = (self.parameterAsString(
+                        parameters, self.ZONE_FIELD, context).strip() or None)
 
-            zonal_work = ensure_dir(os.path.join(intermediates_dir, "zonal_work"))
+                zonal_work = ensure_dir(os.path.join(intermediates_dir, "zonal_work"))
 
-            results, totals = compute_zonal_stats(
-                ref_raster_path=final_path,
-                raster_paths=zonal_rasters,
-                zone_layer_path=zone_path,
-                zone_field=zone_field,
-                target_crs_str=target_crs_str,
-                work_dir=zonal_work,
-                context=context,
-                feedback=feedback,
-            )
+                results, totals = compute_zonal_stats(
+                    ref_raster_path=final_path,
+                    raster_paths=zonal_rasters,
+                    zone_layer_path=zone_path,
+                    zone_field=zone_field,
+                    target_crs_str=target_crs_str,
+                    work_dir=zonal_work,
+                    context=context,
+                    feedback=feedback,
+                )
 
-            # Print headline totals
-            if totals:
-                feedback.pushInfo("")
-                feedback.pushInfo("========================================")
-                for label, kha in totals.items():
-                    feedback.pushInfo(f"  {label}: {kha} kha")
-                feedback.pushInfo("========================================")
-            elif results:
-                feedback.pushInfo("")
-                feedback.pushInfo("========================================")
-                for label in zonal_rasters:
-                    key = f"{label}_kha"
-                    if key in results[0]:
-                        feedback.pushInfo(
-                            f"  {label}: {results[0][key]} kha")
-                feedback.pushInfo("========================================")
+                # Print headline totals
+                if totals:
+                    feedback.pushInfo("")
+                    feedback.pushInfo("========================================")
+                    for label, kha in totals.items():
+                        feedback.pushInfo(f"  {label}: {kha} kha")
+                    feedback.pushInfo("========================================")
+                elif results:
+                    feedback.pushInfo("")
+                    feedback.pushInfo("========================================")
+                    for label in zonal_rasters:
+                        key = f"{label}_kha"
+                        if key in results[0]:
+                            feedback.pushInfo(
+                                f"  {label}: {results[0][key]} kha")
+                    feedback.pushInfo("========================================")
 
-            # CSV
-            if results:
-                zonal_csv = _out("05a", "area_statistics", ext="csv")
-                write_zonal_csv(results, totals, zonal_csv, feedback)
+                # CSV
+                if results:
+                    zonal_csv = _out("05a", "area_statistics", ext="csv")
+                    write_zonal_csv(results, totals, zonal_csv, feedback)
 
-            # Join to vector (if zones provided). Final OUTPUT 05b is
-            # .gpkg (avoids shapefile field-name truncation + 2GB cap),
-            # but the zone_with_id intermediate stays .shp because
-            # zonal_statistics.py creates it upstream as .shp on
-            # purpose (avoids gpkg FID uniqueness issues with GEE-
-            # exported country boundaries that have duplicate FIDs).
-            # native:reprojectlayer in join_stats_to_vector will convert
-            # the .shp intermediate to .gpkg by extension on output.
-            if results and zone_path:
-                zone_with_id = os.path.join(
-                    zonal_work, "zones_with_id.shp")
-                zonal_vec = _out("05b", "area_statistics_by_zone", ext="gpkg")
-                join_stats_to_vector(
-                    results, zone_with_id, zonal_vec,
-                    target_crs_str, context, feedback)
+                # Join to vector (if zones provided). Final OUTPUT 05b is
+                # .gpkg (avoids shapefile field-name truncation + 2GB cap),
+                # but the zone_with_id intermediate stays .shp because
+                # zonal_statistics.py creates it upstream as .shp on
+                # purpose (avoids gpkg FID uniqueness issues with GEE-
+                # exported country boundaries that have duplicate FIDs).
+                # native:reprojectlayer in join_stats_to_vector will convert
+                # the .shp intermediate to .gpkg by extension on output.
+                if results and zone_path:
+                    zone_with_id = os.path.join(
+                        zonal_work, "zones_with_id.shp")
+                    zonal_vec = _out("05b", "area_statistics_by_zone", ext="gpkg")
+                    join_stats_to_vector(
+                        results, zone_with_id, zonal_vec,
+                        target_crs_str, context, feedback)
+            except Exception as _e_stage6:
+                feedback.pushWarning(
+                    f"⚠ STAGE 6 (Zonal Statistics) failed: {_e_stage6}")
+                feedback.pushWarning(
+                    "  -> Primary forest + forest + NRF rasters are "
+                    "already on disk; only the area-statistics CSV / "
+                    "per-zone GPKG were skipped.")
 
         # ================================================================
         #  STAGE 7 -- Vectorise (optional, advanced)
@@ -3097,10 +3247,21 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # is why ticking nest no longer auto-enables forest/primary.
             nested_polys_path = None
             if vectorize_nest:
-                _canonical_forest_polys = _out(
-                    "06c",
-                    f"{forest_name_base}_with_primary_nested_vector",
-                    ext=vec_ext)
+                # Batch 28.8 item 5: nest+dissolve are exclusive.
+                # When dissolve is on, the canonical 06c becomes an
+                # intermediate (in scratch) -- only 06d emerges in
+                # out_dir. When dissolve is off, the canonical 06c IS
+                # the user-facing nest output.
+                if vectorize_dissolve_multipart:
+                    _canonical_forest_polys = os.path.join(
+                        vector_scratch,
+                        f"{forest_name_base}_with_primary_"
+                        f"nested_vector_intermediate.{vec_ext}")
+                else:
+                    _canonical_forest_polys = _out(
+                        "06c",
+                        f"{forest_name_base}_with_primary_nested_vector",
+                        ext=vec_ext)
                 feedback.pushInfo(
                     f"  Nesting (coded-raster path): building "
                     f"2-level coded raster (1={forest_name_base} "

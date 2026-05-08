@@ -51,10 +51,24 @@ class LayerOrFilePicker(QWidget):
     pathChanged = pyqtSignal()
 
     def __init__(self, *, layer_filter, file_filter,
-                 browse_caption="Open file", parent=None):
+                 browse_caption="Open file",
+                 auto_load_to_project=True,
+                 parent=None):
+        """Pick a layer or browse a file.
+
+        auto_load_to_project (default True): when the user picks a
+        file via Browse OR drops a file onto the picker, the file is
+        registered in the QGIS project so it shows up in the combo
+        dropdown. Set to False for inputs where the user is supplying
+        a heavy / global file they don't want in the Layers panel
+        (e.g. a global FRA RSS shapefile in §8 existing-points mode).
+        With False: the file is treated as an explicit path; combo
+        stays empty; `path()` still returns the chosen path.
+        """
         super().__init__(parent)
         self._file_filter = file_filter
         self._browse_caption = browse_caption
+        self._auto_load_to_project = auto_load_to_project
         self._explicit_path = ""
 
         # Accept drops of layers from the Layers panel + files from the OS.
@@ -169,11 +183,16 @@ class LayerOrFilePicker(QWidget):
             self, self._browse_caption, "", self._file_filter)
         if not path:
             return
-        # Try to load into the project so it shows up in the combo too.
-        loaded = self._load_into_project(path)
-        if loaded is not None:
-            self._combo.setLayer(loaded)
-            self._explicit_path = ""
+        # Try to load into the project so it shows up in the combo too,
+        # unless auto_load_to_project=False (used for heavy / global
+        # files we don't want cluttering the Layers panel).
+        if self._auto_load_to_project:
+            loaded = self._load_into_project(path)
+            if loaded is not None:
+                self._combo.setLayer(loaded)
+                self._explicit_path = ""
+            else:
+                self._explicit_path = path
         else:
             self._explicit_path = path
         self.pathChanged.emit()
@@ -228,10 +247,18 @@ class LayerOrFilePicker(QWidget):
                     self._explicit_path = ""
                     applied = True
                     break
-                # Not in project yet — try to load the URI's path.
-                if u.uri and self._load_into_project(u.uri):
-                    applied = True
-                    break
+                # Not in project yet — try to load the URI's path
+                # (unless auto-load is disabled for this picker).
+                if u.uri:
+                    if self._auto_load_to_project:
+                        if self._load_into_project(u.uri):
+                            applied = True
+                            break
+                    else:
+                        # Just record the path; don't pollute project.
+                        self._explicit_path = u.uri
+                        applied = True
+                        break
 
         # 2. OS file drops (file://...).
         if not applied and md.hasUrls():
@@ -239,10 +266,15 @@ class LayerOrFilePicker(QWidget):
                 if not url.isLocalFile():
                     continue
                 path = url.toLocalFile()
-                loaded = self._load_into_project(path)
-                if loaded is not None:
-                    self._combo.setLayer(loaded)
-                    self._explicit_path = ""
+                if self._auto_load_to_project:
+                    loaded = self._load_into_project(path)
+                    if loaded is not None:
+                        self._combo.setLayer(loaded)
+                        self._explicit_path = ""
+                        applied = True
+                        break
+                else:
+                    self._explicit_path = path
                     applied = True
                     break
 

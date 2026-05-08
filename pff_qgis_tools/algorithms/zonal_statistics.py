@@ -110,14 +110,35 @@ def compute_zonal_stats(ref_raster_path, raster_paths=None,
                      zone_reproj, context=context, feedback=feedback)
 
     zone_with_id = os.path.join(work_dir, "zones_with_id.shp")
-    run_processing("native:fieldcalculator", {
+    # Field calculator: native:fieldcalculator was added in QGIS 3.16.
+    # Older QGIS (3.10-3.15) only has qgis:fieldcalculator (legacy ID,
+    # plus the NEW_FIELD=True parameter). Try modern first, fall back.
+    _fcalc_params = {
         "INPUT": zone_reproj,
         "FIELD_NAME": "_pff_zid",
         "FIELD_TYPE": 1,
         "FIELD_LENGTH": 10,
         "FORMULA": "@row_number + 1",
         "OUTPUT": zone_with_id,
-    }, context=context, feedback=feedback)
+    }
+    try:
+        run_processing("native:fieldcalculator", _fcalc_params,
+                       context=context, feedback=feedback)
+    except Exception as _e_native:
+        if feedback:
+            feedback.pushWarning(
+                "native:fieldcalculator unavailable "
+                f"({_e_native}); falling back to "
+                "qgis:fieldcalculator (legacy ID for QGIS < 3.16).")
+        legacy_params = dict(_fcalc_params)
+        legacy_params["NEW_FIELD"] = True
+        run_processing("qgis:fieldcalculator", legacy_params,
+                       context=context, feedback=feedback)
+        if feedback:
+            feedback.pushInfo(
+                "✔ Fallback OK: qgis:fieldcalculator (legacy ID) "
+                "successfully added the zone-id field. The earlier "
+                "warning is informational; no action needed.")
 
     # Build name lookup and verify _pff_zid values
     from qgis.core import QgsVectorLayer

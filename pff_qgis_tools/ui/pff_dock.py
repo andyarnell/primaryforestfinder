@@ -97,13 +97,23 @@ INPUT_CATEGORY_ITEMS = [
 
 
 class _DockFeedback(QgsProcessingFeedback):
-    """Pipes algorithm log lines into the dock's log QTextEdit."""
+    """Pipes algorithm log lines into the dock's log QTextEdit.
+
+    Batch 28.6: also accumulates warnings/errors into a categorised
+    ledger so the dock can print an end-of-run summary (resolved
+    auto-recoveries / skipped steps / quality concerns / other).
+    Long algorithm logs scroll past the user; the summary surfaces
+    what's worth attention.
+    """
 
     def __init__(self, log_widget: QTextEdit, progress_bar: QProgressBar):
         super().__init__()
         self._log = log_widget
         self._pb = progress_bar
         self.progressChanged.connect(self._on_progress)
+        # Ledger entries: (severity, message). Severity is one of
+        # "resolved" / "skipped" / "concern" / "warning" / "error".
+        self._ledger = []
 
     def _append(self, html: str):
         self._log.moveCursor(QTextCursor.End)
@@ -115,7 +125,96 @@ class _DockFeedback(QgsProcessingFeedback):
         # so users see progress in real time.
         QApplication.processEvents()
 
+    @staticmethod
+    def _categorize(msg: str) -> str:
+        """Bucket a warning/error message into a summary severity."""
+        m = msg.lower()
+        # Special-case messages that come through reportError but are
+        # actually pre-emptive notices the workflow auto-handles.
+        # E.g. "Layer X uses geographic CRS" -- the next line is
+        # always "Reprojecting X..." in our pipeline, so this isn't
+        # fatal even though it has the red ✖ icon inline.
+        for kw in (
+                "uses geographic crs",
+                "requires a projected crs",
+                "distance calculations require a projected crs"):
+            if kw in m:
+                return "resolved"
+        # Resolved: auto-handled by the plugin (fallback / reproj /
+        # auto-tick). Worth noting but not actionable.
+        for kw in (
+                "falling back", "fall back to ", "fallback ok", "fallback",
+                "reprojecting ", "reprojected ",
+                "auto-ticked", "auto-tick", "auto-fill",
+                "✔ fallback"):
+            if kw in m:
+                return "resolved"
+        # Skipped: a step did not run, output missing.
+        for kw in (
+                "skipping ", "skipped",
+                "could not find", "did not produce",
+                "missing for year", "missing roads", "missing forest",
+                "no 06c", "stage 6", "auto-validation"):
+            if kw in m:
+                return "skipped"
+        # Output-quality concern: something is potentially wrong with
+        # what's being computed.
+        for kw in (
+                "wrong sub-slot", "likely wrong sub-slot",
+                "outlier ", "mismatch",
+                "different year", "different iso3",
+                "single-year mismatch"):
+            if kw in m:
+                return "concern"
+        return "warning"
+
+    def _consolidate_ledger(self):
+        """Retroactive downgrade pass: an "Algorithm X not found"
+        error that is followed by a "Fallback OK" / "falling back"
+        entry should be re-categorised as resolved -- the run handled
+        it. Same for any "Error:" line that has a matching resolution
+        downstream. Returns a new ledger list; doesn't mutate.
+        """
+        out = []
+        for i, (sev, msg) in enumerate(self._ledger):
+            if sev == "error":
+                m_low = msg.lower()
+                # Algorithm-not-found / missing-method patterns --
+                # check for any later "fallback" entry that resolved it.
+                if (("algorithm" in m_low and "not found" in m_low)
+                        or "no attribute" in m_low
+                        or "writeasvectorformat" in m_low):
+                    for sev2, msg2 in self._ledger[i + 1:]:
+                        m2 = msg2.lower()
+                        if ("fallback ok" in m2
+                                or "falling back" in m2
+                                or "fall back to " in m2):
+                            sev = "resolved"
+                            msg = (msg.rstrip() +
+                                   " [resolved by fallback below]")
+                            break
+                # Geographic-CRS pattern -- workflow always reprojects
+                # right after, so look for a "Reprojecting" / "Aligning"
+                # info line as the resolution marker.
+                elif ("geographic crs" in m_low
+                        or "projected crs" in m_low):
+                    for sev2, msg2 in self._ledger[i + 1:]:
+                        m2 = msg2.lower()
+                        if (m2.startswith("reprojecting ")
+                                or m2.startswith("aligning ")
+                                or "reprojected " in m2):
+                            sev = "resolved"
+                            msg = (msg.rstrip() +
+                                   " [resolved by reprojection below]")
+                            break
+            out.append((sev, msg))
+        return out
+
     def pushInfo(self, info: str):
+        # "✔ Fallback OK" style lines come through pushInfo; track them
+        # too so the summary acknowledges resolved cases.
+        if info.startswith("✔ Fallback") or "fallback ok" in info.lower():
+            self._ledger.append(("resolved", info))
         self._append(f"<span>{_html_escape(info)}</span>")
 
     def pushDebugInfo(self, info: str):
@@ -123,16 +222,71 @@ class _DockFeedback(QgsProcessingFeedback):
             f"<span style='color:#888;'>{_html_escape(info)}</span>")
 
     def pushWarning(self, info: str):
+        self._ledger.append((self._categorize(info), info))
         self._append(
             f"<span style='color:#b8860b;'>⚠ {_html_escape(info)}</span>")
 
     def reportError(self, error: str, fatalError: bool = False):
+        # Run the categorizer first so known-handled patterns
+        # (geographic CRS / projected CRS reminder, fallback markers)
+        # don't get hard-tagged as fatal errors. Anything the
+        # categorizer doesn't recognise stays as "error".
+        sev = self._categorize(error)
+        if sev == "warning":
+            sev = "error"
+        self._ledger.append((sev, error))
+        # The visual ✖ icon stays even for downgraded entries -- the
+        # log line was already printed before this categorisation
+        # happened, and we want the user to see "the workflow logged
+        # this as an error originally". The end-of-run summary
+        # bucketing is the reliable signal of resolution.
         self._append(
             f"<span style='color:#a00;'>✖ {_html_escape(error)}</span>")
 
     def _on_progress(self, value: float):
         self._pb.setValue(int(value))
         QApplication.processEvents()
+
+    def print_summary(self):
+        """Emit a categorised end-of-run summary of accumulated
+        warnings/errors. Called by the dock after processing.run()
+        returns. No-op when the ledger is empty."""
+        if not self._ledger:
+            return
+        # Run the retroactive consolidation pass first so known-handled
+        # cases (algorithm-not-found + matching fallback) get
+        # downgraded out of the Errors bucket.
+        consolidated = self._consolidate_ledger()
+        bucket = {}
+        for sev, msg in consolidated:
+            bucket.setdefault(sev, []).append(msg)
+        sections = (
+            ("error",    "Errors (fatal -- run did not finish cleanly)", "✖"),
+            ("concern",  "Output-quality concerns (worth checking)",     "⚠"),
+            ("skipped",  "Steps skipped or outputs missing",             "⚠"),
+            ("resolved", "Resolved automatically (informational)",       "✔"),
+            ("warning",  "Other warnings",                                "⚠"),
+        )
+        self._append("<br><b>=== Run summary ===</b>")
+        empty = True
+        for sev, label, icon in sections:
+            items = bucket.get(sev, [])
+            if not items:
+                continue
+            empty = False
+            self._append(
+                f"<b>{icon} {_html_escape(label)} ({len(items)})</b>")
+            # Cap each entry for log readability
+            for m in items:
+                clipped = m if len(m) <= 220 else m[:217] + "…"
+                self._append(
+                    f"<span style='margin-left:1em;'>"
+                    f"&nbsp;&nbsp;&bull; {_html_escape(clipped)}</span>")
+        if empty:
+            self._append(
+                "<span style='color:#888;'>"
+                "(no warnings, errors, or auto-recoveries to report)"
+                "</span>")
 
 
 def _html_escape(s: str) -> str:
@@ -304,27 +458,56 @@ class PffDockWidget(QgsDockWidget):
         self._splitter.setSizes([800, 100])
         outer_layout.addWidget(self._splitter, 1)
 
-        # Run controls: button + progress + recent runs dropdown.
-        # Single state-machine button: idle => "Run Workflow ▶";
+        # Run controls. Two rows so the dock stays narrow-friendly:
+        #   row 1: Run Workflow ▶ (stretch) + ↺ (icon-only reset)
+        #   row 2: Recent runs combo (stretch)
+        # Single state-machine button on row 1: idle => "Run Workflow ▶";
         # running => "Cancel ✖". Click during run prompts confirmation.
         self._is_running = False
         self._active_feedback = None
         self._active_history_index = None  # index into the history file
+
         run_row = QHBoxLayout()
         run_row.setContentsMargins(0, 0, 0, 0)
+        run_row.setSpacing(4)
         self._run_btn = QPushButton("Run Workflow ▶")
         self._run_btn.setMinimumHeight(32)
+        self._run_btn.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._run_btn.clicked.connect(self._on_run_or_cancel_clicked)
         run_row.addWidget(self._run_btn, 1)
 
+        # Batch 28.8: dock-wide "Reset all" button. Confirmation prompt
+        # before action; Recent runs / saved settings files are NOT
+        # touched. Icon-only (↺) with full label in the tooltip so the
+        # button stays narrow.
+        self._reset_all_btn = QToolButton()
+        self._reset_all_btn.setText("↺")
+        self._reset_all_btn.setToolTip(
+            "Reset all inputs to defaults.\n\n"
+            "Resets every input on the dock back to its default value. "
+            "Recent runs and saved settings files are NOT affected; "
+            "you can still restore from those.")
+        self._reset_all_btn.setAutoRaise(True)
+        self._reset_all_btn.setMinimumHeight(32)
+        self._reset_all_btn.clicked.connect(self._on_reset_all_clicked)
+        run_row.addWidget(self._reset_all_btn, 0)
+        outer_layout.addLayout(run_row)
+
+        # Row 2: Recent runs on its own row so the combo can shrink to
+        # any width without forcing the dock wider than the section
+        # forms above.
+        recent_row = QHBoxLayout()
+        recent_row.setContentsMargins(0, 0, 0, 0)
         self._recent_combo = QComboBox()
-        self._recent_combo.setMinimumWidth(160)
+        self._recent_combo.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._recent_combo.setToolTip(
             "Recent runs — pick one to repopulate the dock with its "
             "saved parameters")
         self._recent_combo.activated.connect(self._on_recent_picked)
-        run_row.addWidget(self._recent_combo, 0)
-        outer_layout.addLayout(run_row)
+        recent_row.addWidget(self._recent_combo, 1)
+        outer_layout.addLayout(recent_row)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
@@ -332,6 +515,19 @@ class PffDockWidget(QgsDockWidget):
         outer_layout.addWidget(self._progress)
 
         self._refresh_recent_combo()
+
+        # Batch 28.8: capture the dock's freshly-built widget state as
+        # the canonical "defaults" for the Reset all button. Round-trips
+        # via the same _collect_params / _apply_params pair that Recent
+        # runs uses, so anything restorable from a Recent run is also
+        # resettable. Done LAST in __init__ so every section builder
+        # has finished setting its widgets to their default values.
+        try:
+            self._initial_defaults = self._collect_params()
+        except Exception:
+            # If anything goes wrong, fall back to an empty dict --
+            # Reset all will become a no-op rather than crash the dock.
+            self._initial_defaults = {}
 
         self.setWidget(outer)
 
@@ -356,6 +552,11 @@ class PffDockWidget(QgsDockWidget):
         self._iso3_edit = QLineEdit()
         self._iso3_edit.setMaxLength(8)
         self._iso3_edit.setPlaceholderText("e.g. KEN, BTN, BRA")
+        # Batch 28.8: shrink to whatever the form column gives us so the
+        # dock can be dragged narrow without ISO3 forcing it wider.
+        self._iso3_edit.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._iso3_edit.setMinimumWidth(0)
         self._iso3_edit.editingFinished.connect(self._on_aoi_or_iso3_changed)
         self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
@@ -398,6 +599,14 @@ class PffDockWidget(QgsDockWidget):
             "pyproj. 'Recent' lists CRSes used in past runs. 'Other' "
             "has actions for typing an EPSG code or browsing the "
             "full QGIS CRS list. No silent default -- you must pick.")
+        # Batch 28.8: shrink to whatever the form column gives us so
+        # the … browse button never gets clipped.
+        self._crs_combo.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._crs_combo.setMinimumWidth(0)
+        from qgis.PyQt.QtWidgets import QComboBox as _QCB
+        self._crs_combo.setSizeAdjustPolicy(
+            _QCB.AdjustToMinimumContentsLengthWithIcon)
         self._crs_combo.activated.connect(self._on_crs_combo_picked)
         crs_row.addWidget(self._crs_combo, 1)
         # Quick-browse button: shorthand for the "Browse all CRSes" action.
@@ -1227,17 +1436,29 @@ class PffDockWidget(QgsDockWidget):
         self._vec_forest = QCheckBox("Forest (or nat-reg if refined)")
         form.addRow("", self._vec_forest)
 
+        # Batch 28.8 item 5: nest + dissolve as exclusive options on
+        # one row. nest=on + dissolve=off -> 06c only (un-dissolved).
+        # nest+dissolve=on -> 06d only (dissolved). Dissolve sits to
+        # the right of nest in the same row.
         self._vec_nest = QCheckBox("Nested (cut primary out of forest)")
-        form.addRow("", self._vec_nest)
-
-        self._vec_dissolve = QCheckBox(
-            "Also dissolve nested to multipart by level")
-        self._vec_dissolve.setChecked(True)
+        self._vec_dissolve = QCheckBox("Dissolve to multipart by level")
+        self._vec_dissolve.setChecked(False)
+        self._vec_dissolve.setToolTip(
+            "When ticked alongside Nested, write ONLY the dissolved "
+            "06d output (one multipart feature per level). When unticked, "
+            "write ONLY the un-dissolved 06c nested vector. Dissolve "
+            "requires Nested.")
         # Dissolve only applies to the nested output, so it follows the
         # nest tick: enabled iff nest is ticked, otherwise greyed out.
         self._vec_dissolve.setEnabled(False)
         self._vec_nest.toggled.connect(self._vec_dissolve.setEnabled)
-        form.addRow("", self._vec_dissolve)
+        _nest_row = QHBoxLayout()
+        _nest_row.setContentsMargins(0, 0, 0, 0)
+        _nest_row.setSpacing(12)
+        _nest_row.addWidget(self._vec_nest)
+        _nest_row.addWidget(self._vec_dissolve)
+        _nest_row.addStretch(1)
+        form.addRow("", _nest_row)
 
         self._vec_min_patch_ha = _spin(
             default=0.0, mn=0.0, mx=100000.0, suffix=" ha")
@@ -1265,6 +1486,20 @@ class PffDockWidget(QgsDockWidget):
 
         self._vec_as_shp = QCheckBox("Output as .shp instead of .gpkg")
         form.addRow("", self._vec_as_shp)
+
+        # Batch 28.8 item 7: per-section "Add to map" toggle for
+        # vectorised outputs. Default OFF -- user often wants only the
+        # rasters auto-added; vectors can be heavy and clutter the
+        # Layers panel. Mirrors the §8 _ceo_add_to_map pattern.
+        self._vec_add_to_map = QCheckBox(
+            "Add vectorised outputs to map after run")
+        self._vec_add_to_map.setChecked(False)
+        self._vec_add_to_map.setToolTip(
+            "When ticked, vector outputs (06a/06c/06d) are loaded into "
+            "the QGIS project after the run completes. Default OFF -- "
+            "vectors can be large and the user often wants only the "
+            "rasters auto-added.")
+        form.addRow("", self._vec_add_to_map)
 
         sec.set_content_layout(form)
         return sec
@@ -1434,6 +1669,11 @@ class PffDockWidget(QgsDockWidget):
         self._output_folder.setToolTip(
             "Folder where all PFF outputs land. Disambiguate runs by "
             "naming this folder descriptively (e.g. BTN/aberdares_2020).")
+        # Batch 28.8: shrink to whatever the form column gives us so the
+        # browse button never gets clipped + dock can drag narrow.
+        self._output_folder.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._output_folder.setMinimumWidth(0)
         form.addRow("Output folder:", self._output_folder)
 
         self._build_save_list_form_rows(form)
@@ -1616,6 +1856,27 @@ class PffDockWidget(QgsDockWidget):
             r.addStretch(1)
             return r
 
+        # Batch 28.4: Source dropdown -- lets the user choose between
+        # picking a vector file/layer manually OR auto-chaining off
+        # the Vectorise stage's 06c nested output for this run. When
+        # "auto" is selected, validation fires automatically AFTER
+        # Run Workflow completes -- one click runs the whole pipeline.
+        self._ceo_source = QComboBox()
+        self._ceo_source.addItems([
+            "Pick a file/layer (manual)",
+            "Auto: use this run's nested vector (06c)",
+        ])
+        self._ceo_source.setToolTip(
+            "Where the validation input vector comes from.\n\n"
+            "• Manual: you pick a file or layer below.\n"
+            "• Auto: validation fires automatically after Run Workflow\n"
+            "  completes, using the 06c nested vector that the\n"
+            "  Vectorise stage produces this run. Requires Vectorise\n"
+            "  outputs > Vectorise nested outputs to be on.")
+        self._ceo_source.currentIndexChanged.connect(
+            self._on_ceo_source_changed)
+        form.addRow("Source:", self._ceo_source)
+
         self._ceo_input = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.PolygonLayer,
             file_filter="Vector (*.gpkg *.shp *.geojson);;All (*.*)",
@@ -1626,6 +1887,18 @@ class PffDockWidget(QgsDockWidget):
             "units.")
         form.addRow("Input vector:", self._ceo_input)
 
+        self._ceo_auto_hint = QLabel(
+            "<i>Auto mode: validation will fire after Run Workflow "
+            "completes, using the 06c nested vector this run "
+            "produces. The picker above is ignored in this mode.</i>")
+        self._ceo_auto_hint.setStyleSheet("color:#666;")
+        self._ceo_auto_hint.setWordWrap(True)
+        self._ceo_auto_hint.setMinimumWidth(0)
+        self._ceo_auto_hint.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._ceo_auto_hint.setVisible(False)
+        form.addRow("", self._ceo_auto_hint)
+
         self._ceo_class_field = QgsFieldComboBox()
         self._ceo_class_field.setAllowEmptyFieldName(False)
         self._ceo_class_field.setToolTip(
@@ -1635,7 +1908,14 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_class_field.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._ceo_input.pathChanged.connect(self._refresh_ceo_class_field)
-        form.addRow("Class field:", self._ceo_class_field)
+        # Batch 28.8 item 6: hint shown when Source = Auto so the user
+        # sees the field is auto-detected from the workflow's 06c output.
+        self._ceo_class_field_hint = QLabel(
+            "<i>= 'level' (auto from 06c)</i>")
+        self._ceo_class_field_hint.setStyleSheet("color:#666;")
+        self._ceo_class_field_hint.setVisible(False)
+        form.addRow("Class field:",
+                    _row(self._ceo_class_field, self._ceo_class_field_hint))
 
         self._ceo_primary_value = QSpinBox()
         self._ceo_primary_value.setRange(-99, 9999)
@@ -1663,45 +1943,138 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_domain.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._ceo_domain.setToolTip(
-            "Which class(es) to sample from. Ignored when 'Stratified "
-            "by class' is ticked (stratified always samples both).")
-        form.addRow("Sampling domain:", self._ceo_domain)
+            "Which class(es) plots are drawn from. Ignored when 'Set "
+            "counts per class (stratified)' is ticked — that mode "
+            "always samples both classes.")
+        form.addRow("Plots from:", self._ceo_domain)
 
-        self._ceo_stratified = QCheckBox("Stratified by class")
+        self._ceo_stratified = QCheckBox("Set counts per class (stratified)")
         self._ceo_stratified.setToolTip(
-            "When ticked, sample N_primary + N_other independently per "
-            "class. When unticked, sample N_total uniformly across the "
-            "selected sampling domain.")
+            "When ticked, you set the primary count + the other-forest "
+            "count independently — they don't have to be equal "
+            "(CEO/stats term: stratified). When unticked, draw a "
+            "single 'Number of plots' total uniformly from the "
+            "selected 'Plots from' domain.")
         self._ceo_stratified.toggled.connect(
             self._on_ceo_stratified_toggled)
-        form.addRow("", self._ceo_stratified)
+        # Batch 28.8 item 10: row label "Sampling:" (was "Mode:") so
+        # the row reads as a single sentence:
+        #   Sampling: Equal counts per class (stratified)
+        form.addRow("Sampling:", self._ceo_stratified)
 
+        # Batch 29: existing-points mode (e.g. FRA RSS plots). Three
+        # rows: tickbox, file-picker + count button, grey readout.
+        # Hidden when tickbox unticked. Counts cached in
+        # `self._ceo_existing_counts` and used to clamp spinbox maxes.
+        self._ceo_use_existing = QCheckBox(
+            "Use existing points (e.g. FRA RSS plots)")
+        self._ceo_use_existing.setToolTip(
+            "Tick to draw plot centres from a pre-randomised points "
+            "shapefile (e.g. FAO Remote Sensing Survey points) "
+            "instead of generating new random points within the "
+            "forest polygons. Points are reprojected + spatially "
+            "joined against the input vector; only points that fall "
+            "in forest are eligible. The N spinboxes are clamped to "
+            "the available counts after you click 'Count available'.")
+        self._ceo_use_existing.toggled.connect(
+            self._on_ceo_existing_toggled)
+        form.addRow("Existing points:", self._ceo_use_existing)
+
+        # Batch 29 fix: use a plain QgsFileWidget here instead of
+        # LayerOrFilePicker. QgsMapLayerComboBox only shows project
+        # layers, so a Browse'd file (which we don't auto-load to
+        # avoid Layers-panel pollution) was invisible — the user
+        # couldn't see what they picked. QgsFileWidget shows the path
+        # in a line edit, has a built-in browse button, and accepts
+        # drag-and-drop from the OS. Path-only is the right model for
+        # heavy global files (RSS).
+        self._ceo_existing_picker = QgsFileWidget()
+        self._ceo_existing_picker.setStorageMode(QgsFileWidget.GetFile)
+        self._ceo_existing_picker.setFilter(
+            "Vector (*.gpkg *.shp *.geojson *.gml *.kml "
+            "*.fgb *.geoparquet);;"
+            "GeoPackage (*.gpkg);;Shapefile (*.shp);;"
+            "GeoJSON (*.geojson);;All (*.*)")
+        self._ceo_existing_picker.setDialogTitle(
+            "Pick existing points (e.g. FRA RSS plots)")
+        self._ceo_existing_picker.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._ceo_existing_picker.setMinimumWidth(0)
+        self._ceo_existing_picker.setToolTip(
+            "Points file in any vector format (GeoPackage, Shapefile, "
+            "GeoJSON, etc.) and any CRS (auto-reprojected). Typical: "
+            "FAO RSS global points layer covering many countries. The "
+            "spatial join filters to points falling in the input "
+            "forest polygons, so multi-country files are OK.")
+        # QgsFileWidget signal is fileChanged(str). Adapt to our
+        # invalidator (which accepts *args).
+        self._ceo_existing_picker.fileChanged.connect(
+            self._on_ceo_existing_invalidated)
+        self._ceo_count_btn = QToolButton()
+        self._ceo_count_btn.setText("Count available")
+        self._ceo_count_btn.setToolTip(
+            "Reproject the points to the input vector's CRS, spatial-"
+            "join them against the input forest polygons, and count "
+            "how many fall in primary vs other forest. The N spinbox "
+            "max values get clamped to these counts after.")
+        self._ceo_count_btn.clicked.connect(self._on_ceo_count_clicked)
+        _existing_row = QHBoxLayout()
+        _existing_row.setContentsMargins(0, 0, 0, 0)
+        _existing_row.setSpacing(4)
+        _existing_row.addWidget(self._ceo_existing_picker, 1)
+        _existing_row.addWidget(self._ceo_count_btn, 0)
+        form.addRow("Points file:", _existing_row)
+
+        self._ceo_existing_readout = QLabel(
+            "<i>Available: — (click 'Count available')</i>")
+        self._ceo_existing_readout.setStyleSheet("color:#666;")
+        form.addRow("", self._ceo_existing_readout)
+
+        # Cached counts (filled by _on_ceo_count_clicked). None when
+        # invalidated / not yet counted.
+        self._ceo_existing_counts = None
+
+        # Batch 29 UX: per-spinbox max suffix replaced with row-end
+        # grey labels. Cleaner; per-class row shows the combined
+        # readout (a + b = total) so the user sees the budget as one.
         self._ceo_n_total = QSpinBox()
         self._ceo_n_total.setRange(1, 100000)
         self._ceo_n_total.setValue(50)
         self._ceo_n_total.setMaximumWidth(110)
         self._ceo_n_total.setToolTip(
-            "Total number of random samples to generate. Used in "
-            "non-stratified mode only.")
-        form.addRow("N samples:", _row(self._ceo_n_total))
+            "Total number of plots to generate. Used in non-stratified "
+            "mode only. Each plot becomes one row in the CEO upload.")
+        self._ceo_n_total_max_label = QLabel("")
+        self._ceo_n_total_max_label.setStyleSheet(
+            "color:#666; font-style:italic;")
+        form.addRow("Number of plots:", _row(
+            self._ceo_n_total, self._ceo_n_total_max_label))
 
         self._ceo_n_primary = QSpinBox()
         self._ceo_n_primary.setRange(0, 100000)
         self._ceo_n_primary.setValue(25)
         self._ceo_n_primary.setMaximumWidth(80)
         self._ceo_n_primary.setToolTip(
-            "Random samples to generate inside primary-forest polygons. "
-            "Used in stratified mode only.")
+            "Plots to draw inside primary-forest polygons. Used when "
+            "'Set counts per class (stratified)' is ticked. After "
+            "'Count available' fires, this is hard-capped at the "
+            "primary candidate count.")
         self._ceo_n_other = QSpinBox()
         self._ceo_n_other.setRange(0, 100000)
         self._ceo_n_other.setValue(25)
         self._ceo_n_other.setMaximumWidth(80)
         self._ceo_n_other.setToolTip(
-            "Random samples to generate inside other-forest polygons. "
-            "Used in stratified mode only.")
-        form.addRow("N per class:", _row(
+            "Plots to draw inside other-forest polygons. Used when "
+            "'Set counts per class (stratified)' is ticked. After "
+            "'Count available' fires, this is hard-capped at the "
+            "other-forest candidate count.")
+        self._ceo_n_per_class_max_label = QLabel("")
+        self._ceo_n_per_class_max_label.setStyleSheet(
+            "color:#666; font-style:italic;")
+        form.addRow("Plots per class:", _row(
             "Primary:", self._ceo_n_primary, 8,
-            "Other:", self._ceo_n_other))
+            "Other:", self._ceo_n_other,
+            8, self._ceo_n_per_class_max_label))
 
         # Min spacing + Random seed moved into the Advanced sub-section
         # below to keep §8 default uncluttered. Widgets stay top-level
@@ -1713,7 +2086,7 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_min_distance.setDecimals(0)
         self._ceo_min_distance.setMaximumWidth(110)
         self._ceo_min_distance.setToolTip(
-            "Minimum distance between any two sample centres. 0 = no "
+            "Minimum distance between any two plot centres. 0 = no "
             "constraint. Useful to reduce overlap of interpretation "
             "areas — but it is NOT the fix for the ring-bite issue "
             "(rings are built per-point regardless).")
@@ -1728,18 +2101,20 @@ class PffDockWidget(QgsDockWidget):
 
         self._ceo_method = QComboBox()
         self._ceo_method.addItems(
-            ["Simple point plots",
-             "Custom circular ring boundaries"])
+            ["Simple (CEO draws default)",
+             "Custom ring boundary"])
         self._ceo_method.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._ceo_method.setToolTip(
-            "Simple = point centres only (CEO renders a default ~500 m "
-            "visualisation buffer). Custom circular = thin ring "
-            "polygons + your choice of sample geometry; gives you "
-            "control over the interpretation radius.")
+            "What plot boundary the upload includes.\n\n"
+            "• Simple: upload only the centre points; CEO renders its "
+            "default boundary (~500 m by default; configurable in CEO).\n"
+            "• Custom ring boundary: upload a thin annulus polygon per "
+            "plot so the interpretation radius is fixed by you "
+            "regardless of CEO's default.")
         self._ceo_method.currentIndexChanged.connect(
             self._on_ceo_method_changed)
-        form.addRow("Export method:", self._ceo_method)
+        form.addRow("Plot boundary:", self._ceo_method)
 
         self._ceo_radius = QDoubleSpinBox()
         self._ceo_radius.setRange(1, 100000)
@@ -1761,7 +2136,7 @@ class PffDockWidget(QgsDockWidget):
             "Thickness of the ring polygon (outer_radius − inner_"
             "radius). 1 m keeps the ring visible at typical CEO zoom "
             "levels without obscuring the imagery.")
-        form.addRow("Circular:", _row(
+        form.addRow("Plot dimensions:", _row(
             "Radius:", self._ceo_radius, 8,
             "Ring:", self._ceo_ring_w))
 
@@ -1770,14 +2145,16 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_sample_point.setToolTip(
             "Emit a centre-point sample layer. Each row's "
             "PLOTID == SAMPLEID.")
-        self._ceo_sample_square = QCheckBox("1 ha square")
+        self._ceo_sample_square = QCheckBox("Square")
         self._ceo_sample_square.setToolTip(
-            "Emit a 1 ha square sample layer (separate file). Centred "
-            "on the random point. PLOTID and SAMPLEID also match per "
-            "row.")
+            "Emit a square sample layer (separate file). Centred on "
+            "the random point. PLOTID and SAMPLEID match per row. "
+            "Square size set below; the area is shown live next to "
+            "the size spinbox so you can pick a non-1ha size if "
+            "wanted (e.g. 70.7 m -> 0.5 ha; 200 m -> 4 ha).")
         self._ceo_sample_square.toggled.connect(
             self._on_ceo_sample_square_toggled)
-        form.addRow("Sample geom:", _row(
+        form.addRow("Sample within plot:", _row(
             self._ceo_sample_point, self._ceo_sample_square))
 
         self._ceo_square_size = QDoubleSpinBox()
@@ -1787,9 +2164,27 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_square_size.setDecimals(0)
         self._ceo_square_size.setMaximumWidth(110)
         self._ceo_square_size.setToolTip(
-            "Side length of the 1 ha square sample. Default 100 m → "
-            "1 hectare.")
-        form.addRow("Square size:", _row(self._ceo_square_size))
+            "Side length of the square sample. 100 m -> 1 ha (default); "
+            "70.7 m -> 0.5 ha; 200 m -> 4 ha. Live calculation shown "
+            "next to this field.")
+        # Batch 28.7: live hectares label that updates as the size
+        # spinbox changes -- so the user can pick a non-1ha size and
+        # see the area immediately.
+        self._ceo_square_ha_label = QLabel("(= 1.00 ha)")
+        self._ceo_square_ha_label.setStyleSheet(
+            "color:#666; font-style:italic;")
+
+        def _update_ceo_square_ha(_v=None):
+            try:
+                size_m = float(self._ceo_square_size.value())
+            except Exception:
+                size_m = 0.0
+            ha = (size_m * size_m) / 10000.0
+            self._ceo_square_ha_label.setText(f"(= {ha:.2f} ha)")
+        self._ceo_square_size.valueChanged.connect(_update_ceo_square_ha)
+        _update_ceo_square_ha()
+        form.addRow("Sample square size:", _row(
+            self._ceo_square_size, self._ceo_square_ha_label))
 
         self._ceo_output_folder = QgsFileWidget()
         self._ceo_output_folder.setStorageMode(QgsFileWidget.GetDirectory)
@@ -1797,6 +2192,11 @@ class PffDockWidget(QgsDockWidget):
             "Folder where validation sampling outputs land. Defaults "
             "to the main output folder set in §0 Study Area when that "
             "is set; can be overridden here.")
+        # Batch 28.8: shrink with the form column so the browse button
+        # stays visible at narrow dock widths.
+        self._ceo_output_folder.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._ceo_output_folder.setMinimumWidth(0)
         # P1.30 Batch 27.1: auto-fill from §0 Output folder on first
         # set + on every change while still empty. User-typed value
         # wins after that (we only auto-fill if the field is blank).
@@ -1810,6 +2210,21 @@ class PffDockWidget(QgsDockWidget):
             if _seed and not self._ceo_output_folder.filePath():
                 self._ceo_output_folder.setFilePath(_seed)
         form.addRow("Output folder:", self._ceo_output_folder)
+
+        # Batch 28.6: per-section "add to map" tickbox for validation
+        # outputs. Independent from the §6 "Add saved outputs to map"
+        # toggle which controls the main raster outputs. Default ON --
+        # matches what was happening implicitly (via the §6 toggle)
+        # before this batch.
+        self._ceo_add_to_map = QCheckBox(
+            "Add validation outputs to map after run")
+        self._ceo_add_to_map.setChecked(True)
+        self._ceo_add_to_map.setToolTip(
+            "After validation sampling, load the produced ceo_*.gpkg / "
+            ".zip layers into the QGIS Layers panel with PFF symbology. "
+            "Independent from the main §6 'Add saved outputs to map' "
+            "toggle.")
+        form.addRow("", self._ceo_add_to_map)
 
         # Output format + provenance moved into Advanced sub-section.
         self._ceo_out_gpkg = QCheckBox("GeoPackage")
@@ -1845,22 +2260,39 @@ class PffDockWidget(QgsDockWidget):
             "keeps full names.")
 
         # Stash form ref + row indices so the toggle handlers can hide
-        # rows. PyQt5 in QGIS 3.38 doesn't expose QFormLayout's Qt 5.15
-        # `setRowVisible`; we walk row items by index instead.
+        # / enable rows. PyQt5 in QGIS 3.38 doesn't expose QFormLayout's
+        # Qt 5.15 `setRowVisible`; we walk row items by index instead.
+        # NOTE: indices must match the actual form.addRow() call order.
+        # Adding / reordering rows above this dict means updating these
+        # numbers too -- there is no symbolic anchor.
+        # Batch 28.8 fix: indices were off by 2 (didn't count the new
+        # Source row at the top, nor the always-present-but-hidden
+        # auto_hint row), which made handlers grey the wrong rows in
+        # the screenshot user reported.
         self._ceo_form = form
+        # Batch 29: three new rows for existing-points mode inserted
+        # after `stratified` (row 6) -> `use_existing` (7),
+        # `existing_picker` (8), `existing_readout` (9). Subsequent
+        # rows shift by +3.
         self._ceo_rows = {
-            "input": 0,
-            "class_field": 1,
-            "class_values": 2,
-            "domain": 3,
-            "stratified": 4,
-            "n_total": 5,
-            "n_per_class": 6,
-            "method": 7,
-            "circular": 8,
-            "sample_geom": 9,
-            "square_size": 10,
-            "output_folder": 11,
+            "source": 0,
+            "input": 1,
+            "auto_hint": 2,
+            "class_field": 3,
+            "class_values": 4,
+            "domain": 5,
+            "stratified": 6,
+            "use_existing": 7,
+            "existing_picker": 8,
+            "existing_readout": 9,
+            "n_total": 10,
+            "n_per_class": 11,
+            "method": 12,
+            "circular": 13,
+            "sample_geom": 14,
+            "square_size": 15,
+            "output_folder": 16,
+            "add_to_map": 17,
         }
         body.addLayout(form)
 
@@ -1891,10 +2323,48 @@ class PffDockWidget(QgsDockWidget):
         self._on_ceo_stratified_toggled(self._ceo_stratified.isChecked())
         self._on_ceo_sample_square_toggled(
             self._ceo_sample_square.isChecked())
+        # Batch 29: initial visibility for existing-points rows + wire
+        # stale-count invalidation so a change to anything that affects
+        # counts resets the cache + spinbox maxes.
+        self._on_ceo_existing_toggled(self._ceo_use_existing.isChecked())
+        self._ceo_input.pathChanged.connect(
+            self._on_ceo_existing_invalidated)
+        self._ceo_class_field.fieldChanged.connect(
+            self._on_ceo_existing_invalidated)
+        self._ceo_primary_value.valueChanged.connect(
+            self._on_ceo_existing_invalidated)
+        self._ceo_other_value.valueChanged.connect(
+            self._on_ceo_existing_invalidated)
+        # Batch 29.1: cross-clamp + live running-sum on the per-class
+        # spinboxes. Reentrancy flag prevents one setValue from
+        # triggering the partner's handler in a loop.
+        self._ceo_pair_updating = False
+        self._ceo_n_primary.valueChanged.connect(
+            self._on_ceo_n_primary_changed)
+        self._ceo_n_other.valueChanged.connect(
+            self._on_ceo_n_other_changed)
         return sec
 
     def _refresh_ceo_class_field(self):
+        # Batch 28.8 item 11: when the picker holds an explicit FILE
+        # path (not a project layer), `current_layer()` returns None
+        # and the QgsFieldComboBox stays blank even though the file
+        # has perfectly readable fields. Probe the path with a temp
+        # QgsVectorLayer (NOT added to the project) just to populate
+        # the field combo. This restores the auto-pick of `level`
+        # for users who Browse to a 06c/06d file rather than dragging
+        # it onto QGIS first.
         layer = self._ceo_input.current_layer()
+        if layer is None:
+            try:
+                path = self._ceo_input.path()
+            except Exception:
+                path = ""
+            if path:
+                from qgis.core import QgsVectorLayer as _QVL
+                tmp = _QVL(path, "__pff_ceo_field_probe__", "ogr")
+                if tmp.isValid():
+                    layer = tmp
         self._ceo_class_field.setLayer(layer)
         # Auto-pick "level" if present (PFF stage-6 convention).
         if layer is not None:
@@ -1927,6 +2397,42 @@ class PffDockWidget(QgsDockWidget):
             if sublayout is not None:
                 self._set_layout_widgets_visible(sublayout, visible)
 
+    def _set_ceo_row_enabled(self, row_key, enabled):
+        """Batch 28.8: enable/grey one row of the §8 form. Same DIY
+        walk as `_set_ceo_row_visible` but flips `setEnabled` instead
+        of `setVisible`. Used for method-dependent + stratified-
+        dependent rows so the user always sees them but can only edit
+        the relevant ones.
+        """
+        from qgis.PyQt.QtWidgets import QFormLayout
+        idx = self._ceo_rows.get(row_key)
+        if idx is None:
+            return
+        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+            item = self._ceo_form.itemAt(idx, role)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None:
+                w.setEnabled(enabled)
+                continue
+            sublayout = item.layout()
+            if sublayout is not None:
+                self._set_layout_widgets_enabled(sublayout, enabled)
+
+    def _set_layout_widgets_enabled(self, layout, enabled):
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None:
+                w.setEnabled(enabled)
+                continue
+            sub = item.layout()
+            if sub is not None:
+                self._set_layout_widgets_enabled(sub, enabled)
+
     def _set_layout_widgets_visible(self, layout, visible):
         for i in range(layout.count()):
             item = layout.itemAt(i)
@@ -1939,33 +2445,684 @@ class PffDockWidget(QgsDockWidget):
                 self._set_layout_widgets_visible(sub, visible)
 
     def _on_ceo_method_changed(self, idx):
-        """Hide circular-only rows when method = Simple.
+        """Grey circular-only rows when method = Simple (Batch 28.8).
 
         Custom circular: Radius/Ring + Sample geom + (conditionally)
-        Square size are visible. Simple point plots: all of those rows
-        disappear from the form -- cleaner than greying.
+        Square size are enabled. Simple point plots: those rows go
+        grey but stay visible so the user knows they exist.
         """
         circular = (idx == 1)
-        self._set_ceo_row_visible("circular", circular)
-        self._set_ceo_row_visible("sample_geom", circular)
-        # square_size visibility delegated to the dedicated handler.
+        self._set_ceo_row_enabled("circular", circular)
+        self._set_ceo_row_enabled("sample_geom", circular)
+        # square_size enabled state delegated to the dedicated handler.
         self._on_ceo_sample_square_toggled(
             self._ceo_sample_square.isChecked())
 
     def _on_ceo_stratified_toggled(self, on):
-        """Stratified ON  -> per-class row visible, single-N + domain
-        rows hidden. Stratified OFF -> single-N + domain visible,
-        per-class hidden.
+        """Stratified ON  -> per-class row enabled, single-N + domain
+        rows greyed. Stratified OFF -> single-N + domain enabled,
+        per-class greyed (Batch 28.8: grey-out instead of hide).
         """
-        self._set_ceo_row_visible("n_total", not on)
-        self._set_ceo_row_visible("domain", not on)
-        self._set_ceo_row_visible("n_per_class", on)
+        self._set_ceo_row_enabled("n_total", not on)
+        self._set_ceo_row_enabled("domain", not on)
+        self._set_ceo_row_enabled("n_per_class", on)
 
     def _on_ceo_sample_square_toggled(self, on):
-        """Square size row is shown only when method = circular AND
-        the 1-ha-square sample geometry is ticked."""
+        """Square size row is enabled only when method = circular AND
+        the Square sample geometry is ticked (Batch 28.8: grey-out)."""
         circular = (self._ceo_method.currentIndex() == 1)
-        self._set_ceo_row_visible("square_size", circular and on)
+        self._set_ceo_row_enabled("square_size", circular and on)
+
+    # ── Batch 29: existing-points mode handlers ─────────────────────
+    def _on_ceo_existing_toggled(self, on: bool):
+        """Show / hide the points-file picker + readout rows. When
+        unticked, also clear any cached counts and reset spinbox
+        maxes back to the original 100000 / suffixes back to empty.
+        """
+        for key in ("existing_picker", "existing_readout"):
+            self._set_ceo_row_visible(key, on)
+        if not on:
+            self._on_ceo_existing_invalidated()
+
+    def _on_ceo_existing_invalidated(self, *_):
+        """Reset cached counts + spinbox maxes whenever an input that
+        affects the count changes (input vector, class field/values,
+        existing-points file, or the use-existing tickbox itself)."""
+        self._ceo_existing_counts = None
+        for sb, default_max in (
+                (self._ceo_n_total, 100000),
+                (self._ceo_n_primary, 100000),
+                (self._ceo_n_other, 100000)):
+            sb.setMaximum(default_max)
+            sb.setSuffix("")
+        if hasattr(self, "_ceo_n_total_max_label"):
+            self._ceo_n_total_max_label.setText("")
+        if hasattr(self, "_ceo_n_per_class_max_label"):
+            self._ceo_n_per_class_max_label.setText("")
+        if hasattr(self, "_ceo_existing_readout"):
+            self._ceo_existing_readout.setText(
+                "<i>Available: — (click 'Count available')</i>")
+
+    def _ceo_count_existing_vs_input(self, pts_path: str,
+                                     in_path: str,
+                                     class_field: str,
+                                     primary_val: int,
+                                     other_val: int):
+        """Spatial-join existing points against an input forest vector
+        on disk. Returns (primary_count, other_count, unmatched). Used
+        by both the dock button (count vs §8 input) and the auto-chain
+        path (count vs the workflow's 06c). Returns (0, 0, 0) if
+        either file cannot be loaded.
+        """
+        from qgis.core import (
+            QgsVectorLayer as _QVL,
+            QgsCoordinateTransform as _QCT,
+            QgsProject as _QP,
+            QgsSpatialIndex as _QSI,
+            QgsGeometry as _QG)
+        pts = _QVL(pts_path, "__pff_pts_count__", "ogr")
+        if not pts.isValid():
+            return (0, 0, 0)
+        src = _QVL(in_path, "__pff_in_count__", "ogr")
+        if not src.isValid():
+            return (0, 0, 0)
+        pts_crs = pts.crs()
+        src_crs = src.crs()
+        same_crs = (pts_crs.authid()
+                    and pts_crs.authid() == src_crs.authid())
+        transform = (None if same_crs
+                     else _QCT(pts_crs, src_crs, _QP.instance()))
+        sp_index = _QSI()
+        polys_by_id = {}
+        for f in src.getFeatures():
+            sp_index.addFeature(f)
+            polys_by_id[f.id()] = f
+        primary_count = 0
+        other_count = 0
+        unmatched = 0
+        for pf in pts.getFeatures():
+            geom = pf.geometry()
+            if geom is None or geom.isEmpty():
+                continue
+            if transform is not None:
+                geom = _QG(geom)
+                try:
+                    geom.transform(transform)
+                except Exception:
+                    continue
+            cand_ids = sp_index.intersects(geom.boundingBox())
+            matched = False
+            for fid in cand_ids:
+                poly = polys_by_id.get(fid)
+                if poly is None:
+                    continue
+                if poly.geometry().intersects(geom):
+                    cv = poly.attribute(class_field)
+                    try:
+                        cv = int(cv)
+                    except (TypeError, ValueError):
+                        continue
+                    if cv == primary_val:
+                        primary_count += 1
+                        matched = True
+                        break
+                    if cv == other_val:
+                        other_count += 1
+                        matched = True
+                        break
+            if not matched:
+                unmatched += 1
+        return (primary_count, other_count, unmatched)
+
+    def _on_ceo_count_clicked(self):
+        """Spatial-join existing points against the input vector,
+        report counts by class, clamp spinbox maxes."""
+        if not self._ceo_use_existing.isChecked():
+            return
+        pts_path = self._ceo_existing_picker.filePath()
+        in_path = self._ceo_input.path()
+        if not pts_path:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                "Pick a points file first.")
+            return
+        if not in_path:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                "Pick an input vector (the forest polygons) first.")
+            return
+
+        cf = self._ceo_class_field.currentField() or "level"
+        primary_val = int(self._ceo_primary_value.value())
+        other_val = int(self._ceo_other_value.value())
+        primary_count, other_count, unmatched = (
+            self._ceo_count_existing_vs_input(
+                pts_path, in_path, cf, primary_val, other_val))
+        total = primary_count + other_count
+        self._ceo_existing_counts = {
+            "primary": primary_count,
+            "other": other_count,
+            "total": total,
+        }
+        self._ceo_existing_readout.setText(
+            f"<span style='color:#444;'>Available: <b>{total}</b> "
+            f"total ({primary_count} primary, {other_count} other "
+            f"forest; {unmatched} fall outside any forest "
+            f"polygon)</span>")
+
+        # Per-class hard caps stay (typing can't exceed availability).
+        # Suffixes cleared; max info now shown via row-end grey labels.
+        self._ceo_n_total.setMaximum(max(1, total))
+        self._ceo_n_total.setSuffix("")
+        self._ceo_n_total_max_label.setText(f"(max {total})")
+        if total > 0 and self._ceo_n_total.value() > total:
+            self._ceo_n_total.setValue(total)
+
+        self._ceo_n_primary.setMaximum(max(0, primary_count))
+        self._ceo_n_primary.setSuffix("")
+        self._ceo_n_other.setMaximum(max(0, other_count))
+        self._ceo_n_other.setSuffix("")
+        # Refresh the per-class label (live sum updates on edit too).
+        self._refresh_ceo_per_class_label()
+
+        # Auto-equal-split heuristic: when stratified mode is on,
+        # redistribute Primary + Other to the equal-as-possible split,
+        # capped per-class. Triggered on every count completion --
+        # the user can still manually adjust afterwards. Mirrors how
+        # most validation campaigns start: 50/50 unless one stratum
+        # is genuinely tiny (then fill primary, give the rest to other).
+        if total > 0:
+            half = total // 2
+            new_p = min(half, primary_count)
+            # Whatever the primary stratum can't take, push to other
+            # (still capped at other_count).
+            new_o = min(total - new_p, other_count)
+            # If other is also short, primary picks up the slack.
+            if new_p + new_o < total:
+                new_p = min(total - new_o, primary_count)
+            # Block cross-clamp recursion during the paired write --
+            # otherwise the first setValue triggers the partner's
+            # cross-clamp handler before the second has even fired.
+            self._ceo_pair_updating = True
+            try:
+                self._ceo_n_primary.setValue(new_p)
+                self._ceo_n_other.setValue(new_o)
+            finally:
+                self._ceo_pair_updating = False
+            # Also clamp non-stratified value to total (don't auto-
+            # set, just clamp downwards).
+            if self._ceo_n_total.value() > total:
+                self._ceo_n_total.setValue(total)
+        # Refresh the live label with the freshly-set values.
+        self._refresh_ceo_per_class_label()
+
+    def _refresh_ceo_per_class_label(self):
+        """Batch 29.1: live running-sum readout next to the per-class
+        row. Shows `(current P + O = sum / max P_max + O_max = total)`
+        in soft green when sum == total else grey. Also handles the
+        empty-state when counts aren't cached or existing-mode is off.
+        """
+        counts = self._ceo_existing_counts
+        if (not counts
+                or not self._ceo_use_existing.isChecked()):
+            self._ceo_n_per_class_max_label.setText("")
+            return
+        p_count = int(counts.get("primary", 0))
+        o_count = int(counts.get("other", 0))
+        total = p_count + o_count
+        p_used = int(self._ceo_n_primary.value())
+        o_used = int(self._ceo_n_other.value())
+        s = p_used + o_used
+        colour = "#4a8a4a" if (total > 0 and s == total) else "#666"
+        self._ceo_n_per_class_max_label.setStyleSheet(
+            f"color:{colour}; font-style:italic;")
+        self._ceo_n_per_class_max_label.setText(
+            f"(current {p_used} + {o_used} = {s} / "
+            f"max {p_count} + {o_count} = {total})")
+
+    def _on_ceo_n_primary_changed(self, value):
+        """Cross-clamp: when Primary changes, recalculate Other so the
+        pair tries to sum to `total` (capped per-class). Reentrancy
+        flag prevents the chained signal from looping. Updates the
+        live label after both values settle.
+        """
+        if getattr(self, "_ceo_pair_updating", False):
+            return
+        counts = self._ceo_existing_counts
+        if counts and self._ceo_use_existing.isChecked():
+            total = int(counts.get("total", 0))
+            other_max = int(counts.get("other", 0))
+            desired_other = max(0, total - int(value))
+            new_other = min(desired_other, other_max)
+            if new_other != self._ceo_n_other.value():
+                self._ceo_pair_updating = True
+                try:
+                    self._ceo_n_other.setValue(new_other)
+                finally:
+                    self._ceo_pair_updating = False
+        self._refresh_ceo_per_class_label()
+
+    def _on_ceo_n_other_changed(self, value):
+        """Mirror of _on_ceo_n_primary_changed (Other -> Primary)."""
+        if getattr(self, "_ceo_pair_updating", False):
+            return
+        counts = self._ceo_existing_counts
+        if counts and self._ceo_use_existing.isChecked():
+            total = int(counts.get("total", 0))
+            primary_max = int(counts.get("primary", 0))
+            desired_primary = max(0, total - int(value))
+            new_primary = min(desired_primary, primary_max)
+            if new_primary != self._ceo_n_primary.value():
+                self._ceo_pair_updating = True
+                try:
+                    self._ceo_n_primary.setValue(new_primary)
+                finally:
+                    self._ceo_pair_updating = False
+        self._refresh_ceo_per_class_label()
+
+    def _on_ceo_source_changed(self, idx: int):
+        """Toggle the §8 Input vector picker grey-out + auto hint
+        based on the Source dropdown. Batch 28.8 item 6: also grey
+        the Class field combo + show its hint when Auto is selected
+        (the workflow's 06c output always uses field='level').
+        """
+        is_auto = (idx == 1)  # 0 = manual, 1 = auto
+        self._ceo_input.setEnabled(not is_auto)
+        if hasattr(self, "_ceo_auto_hint"):
+            self._ceo_auto_hint.setVisible(is_auto)
+        if hasattr(self, "_ceo_class_field"):
+            self._ceo_class_field.setEnabled(not is_auto)
+        if hasattr(self, "_ceo_class_field_hint"):
+            self._ceo_class_field_hint.setVisible(is_auto)
+
+    def _ceo_use_auto_source(self) -> bool:
+        """Return True iff the §8 Source dropdown is set to auto-chain."""
+        try:
+            return self._ceo_source.currentIndex() == 1
+        except Exception:
+            return False
+
+    def _find_06c_nested_vector(self, year: str = None) -> str:
+        """Locate the 06c nested-vector file the workflow just produced
+        in the output folder. Returns the path or '' if not found.
+
+        Checks both .gpkg AND .shp extensions (user may have
+        Vectorise outputs > 'Output as Shapefile' ticked) and both
+        forest-name variants (naturally_regenerating_forest /
+        forest)."""
+        from ..utils import generate_layer_name, PLATFORM_QGIS
+        out_dir = (self._output_folder.filePath() or "").strip()
+        if not out_dir or not os.path.isdir(out_dir):
+            return ""
+        iso3 = (self._iso3_edit.text() or "").upper().strip()
+        year_str = (year or "").strip()
+        candidates = []
+        for forest_name in (
+                "naturally_regenerating_forest", "forest"):
+            for ext in ("gpkg", "shp"):
+                try:
+                    cand = generate_layer_name(
+                        iso3, PLATFORM_QGIS, "06c",
+                        f"{forest_name}_with_primary_nested_vector",
+                        ext=ext, year=year_str)
+                except Exception:
+                    cand = ""
+                if cand:
+                    candidates.append(cand)
+        for cand in candidates:
+            full = os.path.join(out_dir, cand)
+            if os.path.exists(full):
+                return full
+        # Glob fallback: handles unexpected forest-name suffixes.
+        # Try both .gpkg and .shp; year-filter when known.
+        import glob as _glob
+        for ext in ("gpkg", "shp"):
+            if year_str:
+                pat = os.path.join(
+                    out_dir,
+                    f"*{year_str}*_06c_*_with_primary_nested_vector.{ext}")
+            else:
+                pat = os.path.join(
+                    out_dir,
+                    f"*_06c_*_with_primary_nested_vector.{ext}")
+            hits = _glob.glob(pat)
+            if hits:
+                return hits[0]
+        return ""
+
+    def _add_ceo_outputs_to_project(self, out_dir: str, feedback) -> int:
+        """Scan the CEO output folder for ceo_*.gpkg files and add
+        them to the QGIS project with PFF symbology. Returns the count
+        loaded.
+
+        The validation algorithm writes files directly (doesn't use
+        layersToLoadOnCompletion), so the dock's main
+        _add_outputs_to_project(ctx) walks an empty list. This
+        helper plugs that gap by enumerating the on-disk outputs
+        directly. Zip-shapefile outputs are skipped (not directly
+        loadable in QGIS without vsizip:// VFS); the .gpkg companion
+        carries the same data and IS loadable.
+        """
+        if not out_dir or not os.path.isdir(out_dir):
+            return 0
+        import glob as _glob
+        from qgis.core import (
+            QgsRasterLayer as _QRL, QgsVectorLayer as _QVL,
+            QgsProject as _QP)
+        # Match the canonical schema (`*qgis_07*_ceo_validation_*.gpkg`,
+        # with or without an ISO3/year prefix) AND the legacy `ceo_*.gpkg`
+        # form so v0.14.5 outputs still get auto-loaded. Batch 28.8 fix:
+        # the previous pattern required a leading underscore (`*_qgis_...`)
+        # which silently missed files emitted with empty ISO3/year prefix
+        # (e.g. `qgis_07a_ceo_validation_*.gpkg`).
+        gpkg_hits = sorted(set(
+            _glob.glob(os.path.join(
+                out_dir, "*qgis_07*_ceo_validation_*.gpkg"))
+            + _glob.glob(os.path.join(out_dir, "ceo_*.gpkg"))))
+        # Track which output role-tokens we've already loaded as GPKG so
+        # we don't double-add the zip's shapefile of the same role.
+        loaded_roles = set()
+        for p in gpkg_hits:
+            stem = os.path.splitext(os.path.basename(p))[0]
+            for role in ("plot_boundaries", "samples_points",
+                         "samples_squares", "point_plots"):
+                if role in stem:
+                    loaded_roles.add(role)
+                    break
+
+        loaded = 0
+        for path in gpkg_hits:
+            try:
+                name = os.path.splitext(os.path.basename(path))[0]
+                lyr = _QVL(path, name, "ogr")
+                if not lyr.isValid():
+                    continue
+                apply_pff_symbology(lyr, path)
+                _QP.instance().addMapLayer(lyr)
+                loaded += 1
+            except Exception as e:
+                if feedback:
+                    feedback.pushDebugInfo(
+                        f"(ceo add-to-map skip {os.path.basename(path)}: {e})")
+
+        # Batch 28.8 option A: when the user unticked GPKG output, only
+        # the zipped-shapefile is on disk. Load the .shp inside the zip
+        # via GDAL's /vsizip/ VFS -- supported in QGIS 3.10+ since GDAL
+        # 1.8. Path syntax: /vsizip/<full-zip-path>/<basename>.shp.
+        zip_hits = sorted(set(
+            _glob.glob(os.path.join(
+                out_dir, "*qgis_07*_ceo_validation_*.zip"))
+            + _glob.glob(os.path.join(out_dir, "ceo_*.zip"))))
+        for zpath in zip_hits:
+            stem = os.path.splitext(os.path.basename(zpath))[0]
+            # Skip the zip if we already loaded the same role from GPKG.
+            role_match = next(
+                (r for r in ("plot_boundaries", "samples_points",
+                             "samples_squares", "point_plots")
+                 if r in stem),
+                None)
+            if role_match and role_match in loaded_roles:
+                continue
+            try:
+                # Inside the zip, the .shp uses the role-only stem
+                # (`ceo_validation_<role>`) per `_zip_shapefile_outputs`,
+                # not the full ISO3/year file stem. Probe both forms;
+                # the role-only form is canonical for v0.14.6+, and we
+                # also try the file stem as a fallback for legacy zips.
+                vsi_paths = []
+                if role_match:
+                    vsi_paths.append(
+                        f"/vsizip/{zpath}/ceo_validation_{role_match}.shp")
+                vsi_paths.append(f"/vsizip/{zpath}/{stem}.shp")
+                lyr = None
+                for vsi in vsi_paths:
+                    cand = _QVL(vsi, stem, "ogr")
+                    if cand.isValid():
+                        lyr = cand
+                        break
+                if lyr is None:
+                    continue
+                apply_pff_symbology(lyr, zpath)
+                _QP.instance().addMapLayer(lyr)
+                loaded += 1
+                if role_match:
+                    loaded_roles.add(role_match)
+            except Exception as e:
+                if feedback:
+                    feedback.pushDebugInfo(
+                        f"(ceo add-to-map zip skip "
+                        f"{os.path.basename(zpath)}: {e})")
+
+        if loaded and feedback:
+            feedback.pushInfo(
+                f"Added {loaded} CEO output(s) to the map "
+                "with PFF symbology.")
+        return loaded
+
+    def _add_ceo_outputs_from_result(self, result, feedback) -> int:
+        """Batch 28.8 fix: load CEO outputs from THIS run's result dict
+        instead of globbing the output folder. Result keys are role
+        tokens like ``point_plots`` or ``samples_squares_zip``; values
+        are the freshly-written file paths. Loads .gpkg directly,
+        .zip via the GDAL ``/vsizip/`` VFS so option-A's "ZIP-only"
+        mode still gets layers on the map. Skips a zip whose role was
+        already loaded as a .gpkg in the SAME run (avoids double-add
+        when both formats are emitted).
+
+        Used by the standalone Generate button; the auto-chain code
+        path still uses ``_add_ceo_outputs_to_project`` (folder glob)
+        because it doesn't have direct access to this run's result.
+        """
+        if not result:
+            return 0
+        from qgis.core import (
+            QgsVectorLayer as _QVL, QgsProject as _QP)
+        role_tokens = ("plot_boundaries", "samples_points",
+                       "samples_squares", "point_plots")
+        loaded_roles = set()
+        loaded = 0
+
+        # Pass 1: GPKG.
+        for _key, path in result.items():
+            if not isinstance(path, str) or not path.endswith(".gpkg"):
+                continue
+            if not os.path.exists(path):
+                continue
+            stem = os.path.splitext(os.path.basename(path))[0]
+            role = next((r for r in role_tokens if r in stem), None)
+            try:
+                lyr = _QVL(path, stem, "ogr")
+                if not lyr.isValid():
+                    continue
+                apply_pff_symbology(lyr, path)
+                _QP.instance().addMapLayer(lyr)
+                if role:
+                    loaded_roles.add(role)
+                loaded += 1
+            except Exception as e:
+                if feedback:
+                    feedback.pushDebugInfo(
+                        f"(ceo add-to-map skip {os.path.basename(path)}: "
+                        f"{e})")
+
+        # Pass 2: ZIP via /vsizip/ for any role not already loaded.
+        for _key, path in result.items():
+            if not isinstance(path, str) or not path.endswith(".zip"):
+                continue
+            if not os.path.exists(path):
+                continue
+            stem = os.path.splitext(os.path.basename(path))[0]
+            role = next((r for r in role_tokens if r in stem), None)
+            if role is None or role in loaded_roles:
+                continue
+            shp_inside = f"ceo_validation_{role}.shp"
+            vsi = f"/vsizip/{path}/{shp_inside}"
+            try:
+                lyr = _QVL(vsi, stem, "ogr")
+                if not lyr.isValid():
+                    continue
+                apply_pff_symbology(lyr, path)
+                _QP.instance().addMapLayer(lyr)
+                loaded_roles.add(role)
+                loaded += 1
+            except Exception as e:
+                if feedback:
+                    feedback.pushDebugInfo(
+                        f"(ceo add-to-map zip skip "
+                        f"{os.path.basename(path)}: {e})")
+
+        if loaded and feedback:
+            feedback.pushInfo(
+                f"Added {loaded} CEO output(s) to the map "
+                "with PFF symbology.")
+        return loaded
+
+    def _build_ceo_params_from_path(self, input_path: str):
+        """Construct the §8 algorithm-params dict from the dock state,
+        substituting the given input_path for the manual picker. Used
+        by both manual and auto-chain code paths."""
+        from ..algorithms.ceo_validation_export import (
+            CeoValidationExportAlgorithm as A,
+        )
+        out_dir = self._ceo_output_folder.filePath()
+        cf = self._ceo_class_field.currentField() or "level"
+        # Batch 28.8 item 8: pass ISO3 + YEAR through so CEO outputs
+        # follow the canonical PFF filename schema. Both safely default
+        # empty when the §0/§1 widgets aren't filled.
+        try:
+            iso3 = (self._iso3_edit.text() or "").strip().upper()
+        except Exception:
+            iso3 = ""
+        try:
+            year = (self._year_combo.currentText() or "").strip()
+        except Exception:
+            year = ""
+        return {
+            A.INPUT: input_path,
+            A.CLASS_FIELD: cf,
+            A.PRIMARY_CLASS_VALUE: int(self._ceo_primary_value.value()),
+            A.OTHER_CLASS_VALUE: int(self._ceo_other_value.value()),
+            A.SAMPLING_DOMAIN: self._ceo_domain.currentIndex(),
+            A.STRATIFIED: self._ceo_stratified.isChecked(),
+            A.N_SAMPLES: int(self._ceo_n_total.value()),
+            A.N_PRIMARY: int(self._ceo_n_primary.value()),
+            A.N_OTHER: int(self._ceo_n_other.value()),
+            A.MIN_DISTANCE: float(self._ceo_min_distance.value()),
+            A.RANDOM_SEED: self._ceo_seed.text().strip(),
+            A.EXPORT_METHOD: self._ceo_method.currentIndex(),
+            A.PLOT_RADIUS_M: float(self._ceo_radius.value()),
+            A.RING_WIDTH_M: float(self._ceo_ring_w.value()),
+            A.SAMPLE_GEOM_POINT: self._ceo_sample_point.isChecked(),
+            A.SAMPLE_GEOM_SQUARE: self._ceo_sample_square.isChecked(),
+            A.SQUARE_SIZE_M: float(self._ceo_square_size.value()),
+            A.OUTPUT_FOLDER: out_dir,
+            A.OUTPUT_GEOPACKAGE: self._ceo_out_gpkg.isChecked(),
+            A.OUTPUT_ZIPPED_SHAPEFILE: self._ceo_out_zip.isChecked(),
+            A.REPROJECT_TO_WGS84: self._ceo_reproject_wgs84.isChecked(),
+            A.ADD_PROVENANCE_FIELDS: self._ceo_provenance.isChecked(),
+            A.ALLOW_EMPTY_STRATUM: False,
+            A.ISO3: iso3,
+            A.YEAR: year,
+            # Batch 29: pass through existing-points file path when
+            # the dock has it ticked (auto-chain path also gets it).
+            A.EXISTING_POINTS: (
+                self._ceo_existing_picker.filePath()
+                if (hasattr(self, "_ceo_use_existing")
+                    and self._ceo_use_existing.isChecked())
+                else None),
+        }
+
+    def _run_ceo_chain_after_workflow(self, year: str, feedback):
+        """Auto-chain helper: called from Run Workflow handler after a
+        successful single-year (or per-year multi-year iteration). If
+        the §8 Source dropdown is set to auto, locate the 06c nested
+        vector that the just-completed workflow produced and fire the
+        validation algorithm against it. Non-blocking: surfaces a
+        warning + returns silently if anything is missing."""
+        if not self._ceo_use_auto_source():
+            return
+        nested_path = self._find_06c_nested_vector(year=year)
+        if not nested_path:
+            feedback.pushWarning(
+                f"⚠ Auto-validation: could not find a 06c nested "
+                f"vector for year={year} in the output folder. "
+                "Skipping validation. (Make sure 'Vectorise nested "
+                "outputs' is ticked in §6.)")
+            return
+        if not self._ceo_output_folder.filePath():
+            feedback.pushWarning(
+                "⚠ Auto-validation: §8 output folder is empty. "
+                "Set it (or auto-fills from §0).")
+            return
+        feedback.pushInfo(
+            f"=== Auto-validation: sampling from {os.path.basename(nested_path)} ===")
+        ctx = self._make_processing_context(feedback)
+        try:
+            params = self._build_ceo_params_from_path(nested_path)
+            # Batch 29: when existing-points is also ticked, run the
+            # spatial-join count NOW (against the workflow-produced
+            # 06c) and clamp the requested N values to availability.
+            if self._ceo_use_existing.isChecked():
+                pts_path = self._ceo_existing_picker.filePath()
+                if pts_path:
+                    cf = (self._ceo_class_field.currentField()
+                          or "level")
+                    pv = int(self._ceo_primary_value.value())
+                    ov = int(self._ceo_other_value.value())
+                    feedback.pushInfo(
+                        "  Counting existing points against this "
+                        "run's 06c...")
+                    p_cnt, o_cnt, _u = (
+                        self._ceo_count_existing_vs_input(
+                            pts_path, nested_path, cf, pv, ov))
+                    total = p_cnt + o_cnt
+                    feedback.pushInfo(
+                        f"  Available in 06c: {total} total "
+                        f"({p_cnt} primary, {o_cnt} other forest).")
+                    from ..algorithms.ceo_validation_export import (
+                        CeoValidationExportAlgorithm as A)
+                    # Clamp; log when a clamp actually occurred.
+                    n_total_req = int(params.get(A.N_SAMPLES, 0))
+                    n_p_req = int(params.get(A.N_PRIMARY, 0))
+                    n_o_req = int(params.get(A.N_OTHER, 0))
+                    n_total_new = min(n_total_req, total) if total > 0 else 0
+                    n_p_new = min(n_p_req, p_cnt) if p_cnt > 0 else 0
+                    n_o_new = min(n_o_req, o_cnt) if o_cnt > 0 else 0
+                    if n_total_new != n_total_req:
+                        feedback.pushInfo(
+                            f"  Clamped Number of plots: "
+                            f"{n_total_req} -> {n_total_new}")
+                    if n_p_new != n_p_req:
+                        feedback.pushInfo(
+                            f"  Clamped N per class (primary): "
+                            f"{n_p_req} -> {n_p_new}")
+                    if n_o_new != n_o_req:
+                        feedback.pushInfo(
+                            f"  Clamped N per class (other): "
+                            f"{n_o_req} -> {n_o_new}")
+                    params[A.N_SAMPLES] = n_total_new
+                    params[A.N_PRIMARY] = n_p_new
+                    params[A.N_OTHER] = n_o_new
+                    if total == 0:
+                        feedback.pushWarning(
+                            "⚠ Auto-validation: 0 existing points "
+                            "fall in this run's forest. Skipping.")
+                        return
+            processing.run("pff:ceo_validation_export", params,
+                           context=ctx, feedback=feedback)
+            feedback.pushInfo(
+                "✔ Auto-validation complete (year=" + str(year) + ").")
+            if self._ceo_add_to_map.isChecked():
+                # Walk the context first (in case the CEO algo ever
+                # registers outputs) AND scan the output folder
+                # directly (current behaviour: it doesn't register).
+                self._add_outputs_to_project(ctx)
+                self._add_ceo_outputs_to_project(
+                    self._ceo_output_folder.filePath(), feedback)
+        except Exception as e:
+            feedback.pushWarning(
+                f"⚠ Auto-validation failed for year={year}: {e}. "
+                "Primary forest + other rasters are unaffected.")
 
     def _on_generate_ceo_clicked(self):
         from ..algorithms.ceo_validation_export import (
@@ -1973,6 +3130,15 @@ class PffDockWidget(QgsDockWidget):
         )
         # Validate
         path = self._ceo_input.path()
+        if self._ceo_use_auto_source():
+            QMessageBox.information(
+                self, "Primary Forest Finder",
+                "§8 Source is set to 'Auto: use this run's nested "
+                "vector'. Validation will fire automatically after "
+                "you click Run Workflow -- no need to click this "
+                "button. Switch Source to 'Pick a file/layer' to use "
+                "the picker manually.")
+            return
         if not path:
             QMessageBox.warning(
                 self, "Primary Forest Finder",
@@ -1985,6 +3151,17 @@ class PffDockWidget(QgsDockWidget):
                 "§8 requires an output folder.")
             return
         cf = self._ceo_class_field.currentField() or "level"
+        # Batch 28.8 fix: read ISO3 + YEAR from §0/§1 widgets so the
+        # standalone Generate button produces canonically-named files
+        # (matching the auto-chain path's output names).
+        try:
+            iso3 = (self._iso3_edit.text() or "").strip().upper()
+        except Exception:
+            iso3 = ""
+        try:
+            year = (self._year_combo.currentText() or "").strip()
+        except Exception:
+            year = ""
 
         params = {
             A.INPUT: path,
@@ -2010,7 +3187,28 @@ class PffDockWidget(QgsDockWidget):
             A.REPROJECT_TO_WGS84: self._ceo_reproject_wgs84.isChecked(),
             A.ADD_PROVENANCE_FIELDS: self._ceo_provenance.isChecked(),
             A.ALLOW_EMPTY_STRATUM: False,
+            A.ISO3: iso3,
+            A.YEAR: year,
+            # Batch 29: existing-points file (None when unticked).
+            A.EXISTING_POINTS: (
+                self._ceo_existing_picker.filePath()
+                if self._ceo_use_existing.isChecked() else None),
         }
+
+        # Batch 29: auto-count if user hasn't clicked Count yet.
+        # Aborts cleanly when no eligible points after the join.
+        if self._ceo_use_existing.isChecked():
+            if self._ceo_existing_counts is None:
+                self._on_ceo_count_clicked()
+            counts = self._ceo_existing_counts or {}
+            if not counts.get("total"):
+                QMessageBox.warning(
+                    self, "Primary Forest Finder",
+                    "Existing-points spatial join produced 0 "
+                    "candidates. None of the points fall inside "
+                    "your input forest polygons. Pick a different "
+                    "points file or check the input vector.")
+                return
 
         self._log.append(
             "<b>=== Validation sampling (experimental) ===</b>")
@@ -2019,12 +3217,20 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_run_btn.setEnabled(False)
         try:
             try:
-                processing.run("pff:ceo_validation_export", params,
-                               context=ctx, feedback=feedback)
+                # Batch 28.8 fix: capture the result dict so add-to-map
+                # loads ONLY this run's outputs (the dict's values are
+                # the freshly-written paths). The earlier folder-glob
+                # implementation re-loaded every prior run's CEO files
+                # too, which then blocked future workflow writes via
+                # file locks.
+                result = processing.run("pff:ceo_validation_export",
+                                        params,
+                                        context=ctx, feedback=feedback)
                 self._log.append("<span style='color:#080;'>✔ "
                                  "Validation sampling complete.</span>")
-                if self._add_main_to_map.isChecked():
+                if self._ceo_add_to_map.isChecked():
                     self._add_outputs_to_project(ctx)
+                    self._add_ceo_outputs_from_result(result, feedback)
             except Exception as e:
                 # Empty-stratum prompt: catch and offer to retry with
                 # ALLOW_EMPTY_STRATUM=True.
@@ -2038,11 +3244,14 @@ class PffDockWidget(QgsDockWidget):
                     if ans == QMessageBox.Yes:
                         params[A.ALLOW_EMPTY_STRATUM] = True
                         ctx2 = self._make_processing_context(feedback)
-                        processing.run("pff:ceo_validation_export",
-                                       params, context=ctx2,
-                                       feedback=feedback)
-                        if self._add_main_to_map.isChecked():
+                        result2 = processing.run(
+                            "pff:ceo_validation_export",
+                            params, context=ctx2,
+                            feedback=feedback)
+                        if self._ceo_add_to_map.isChecked():
                             self._add_outputs_to_project(ctx2)
+                            self._add_ceo_outputs_from_result(
+                                result2, feedback)
                         self._log.append("<span style='color:#080;'>✔ "
                                          "Validation sampling complete "
                                          "(with skipped class).</span>")
@@ -2306,6 +3515,105 @@ class PffDockWidget(QgsDockWidget):
             self._leave_running_state()
             return
 
+        # Batch 28.5: auto-validation preflight gate. If §8 Source is
+        # set to "Auto" but Vectorise nested outputs is OFF, the
+        # workflow won't produce the 06c vector that auto-validation
+        # needs. Catch this BEFORE the run so the user doesn't wait
+        # for completion only to find validation skipped. Offer to
+        # auto-tick the nest box; user can decline + abort.
+        if self._ceo_use_auto_source() and not self._vec_nest.isChecked():
+            ans = QMessageBox.question(
+                self, "Primary Forest Finder",
+                "Auto-validation is enabled in §8 (Source = 'Auto: "
+                "use this run's nested vector') BUT Vectorise nested "
+                "outputs (§6 Outputs > Vectorise outputs > Nested) "
+                "is OFF.\n\n"
+                "Without that tickbox, the workflow won't produce a "
+                "06c nested vector and auto-validation will skip.\n\n"
+                "Tick Vectorise nested outputs now and continue?\n"
+                "(No = abort, fix manually, run again. "
+                "Cancel = run anyway and accept the auto-validation "
+                "skip.)",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes)
+            if ans == QMessageBox.Yes:
+                self._vec_nest.setChecked(True)
+                # vec_nest toggling needs vec_dissolve set; mirror the
+                # signal so the dependent state is consistent.
+                self._vec_dissolve.setEnabled(True)
+                feedback.pushInfo(
+                    "✔ Auto-ticked: Vectorise nested outputs (so "
+                    "auto-validation has its 06c input).")
+                # Re-collect params so VECTORIZE_NEST=True propagates.
+                # The workflow's run_vectorize gate is "any of the
+                # three vectorise flags ticked" so just setting NEST
+                # is enough to trigger Stage 7.
+                params[FW.VECTORIZE_NEST] = True
+            elif ans == QMessageBox.No:
+                feedback.pushWarning(
+                    "Run aborted -- enable Vectorise nested outputs "
+                    "or change §8 Source to 'Pick a file/layer' before "
+                    "running again.")
+                self._leave_running_state()
+                return
+            # ans == Cancel: fall through, run as-is (auto-validation
+            # will skip with the existing post-run warning).
+
+        # Batch 28.8 item 5: nest+dissolve are exclusive. When §8
+        # Source = Auto AND nest+dissolve are both ticked, the workflow
+        # would produce only 06d (dissolved). But auto-validation needs
+        # the un-dissolved 06c. Prompt to untick dissolve.
+        if (self._ceo_use_auto_source()
+                and self._vec_nest.isChecked()
+                and self._vec_dissolve.isChecked()):
+            ans2 = QMessageBox.question(
+                self, "Primary Forest Finder",
+                "Auto-validation needs the un-dissolved 06c nested "
+                "vector. With Vectorise > Dissolve to multipart by "
+                "level ticked, the workflow only produces the dissolved "
+                "06d output -- auto-validation will have nothing to "
+                "sample.\n\n"
+                "Untick Dissolve and continue?\n"
+                "(No = abort, fix manually. Cancel = run anyway and "
+                "accept the auto-validation skip.)",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes)
+            if ans2 == QMessageBox.Yes:
+                self._vec_dissolve.setChecked(False)
+                feedback.pushInfo(
+                    "✔ Auto-unticked: Vectorise > Dissolve (so the "
+                    "un-dissolved 06c reaches auto-validation).")
+                params[FW.VECTORIZE_DISSOLVE_MULTIPART] = False
+            elif ans2 == QMessageBox.No:
+                feedback.pushWarning(
+                    "Run aborted -- untick Dissolve or change §8 Source "
+                    "to 'Pick a file/layer' before running again.")
+                self._leave_running_state()
+                return
+            # ans2 == Cancel: fall through, run as-is.
+
+        # Batch 29: auto-chain + existing-points combo. Allowed but
+        # the user can't pre-count (06c doesn't exist yet). Brief
+        # information prompt explains the clamp behaviour; user can
+        # cancel or continue.
+        if (self._ceo_use_auto_source()
+                and self._ceo_use_existing.isChecked()
+                and self._ceo_existing_picker.filePath()):
+            ans3 = QMessageBox.question(
+                self, "Primary Forest Finder",
+                "§8 has both 'Auto: use this run's nested vector' AND "
+                "'Use existing points' on. Plot/sample counts will be "
+                "clamped to what's available after counting against "
+                "this run's 06c output. (Validation against a known "
+                "input file is more predictable.)\n\nContinue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes)
+            if ans3 != QMessageBox.Yes:
+                feedback.pushWarning(
+                    "Run aborted -- combo not confirmed.")
+                self._leave_running_state()
+                return
+
         status = "failed"
         try:
             if len(year_list) > 1 and "all" not in year_list:
@@ -2328,6 +3636,9 @@ class PffDockWidget(QgsDockWidget):
                     status = "finished"
                     feedback.pushInfo("✔ Workflow finished.")
                     self._add_outputs_to_project(ctx)
+                    # Batch 28.4: auto-chain validation if enabled.
+                    self._run_ceo_chain_after_workflow(
+                        year_list[0] if year_list else "", feedback)
         except Exception as e:
             if feedback.isCanceled():
                 status = "cancelled"
@@ -2346,6 +3657,15 @@ class PffDockWidget(QgsDockWidget):
             self._active_history_index = None
             if status == "finished":
                 self._record_qgis_history(params)
+            # Batch 28.6: emit the categorised summary of warnings/
+            # errors accumulated during the run. Easy to miss the
+            # warnings inline in a long algorithm log; the summary
+            # surfaces what's worth attention (resolved auto-recoveries,
+            # skipped steps, output-quality concerns).
+            try:
+                feedback.print_summary()
+            except Exception:
+                pass
 
     def _single_year_filenames_aligned(self, params, declared_year,
                                         feedback) -> bool:
@@ -2535,6 +3855,8 @@ class PffDockWidget(QgsDockWidget):
                         f"⚠ Cancelled during year {year}.")
                     return
                 self._add_outputs_to_project(ctx)
+                # Batch 28.4: auto-chain validation per year if enabled.
+                self._run_ceo_chain_after_workflow(year, feedback)
             except Exception as e:
                 if feedback.isCanceled():
                     feedback.pushWarning(
@@ -2597,7 +3919,18 @@ class PffDockWidget(QgsDockWidget):
                 if _ym and _ym.group(1) not in name:
                     name = f"{name} {_ym.group(1)}"
                 ext = os.path.splitext(path)[1].lower()
-                if ext in (".gpkg", ".shp", ".geojson", ".kml", ".gml"):
+                is_vector = ext in (
+                    ".gpkg", ".shp", ".geojson", ".kml", ".gml")
+                # Batch 28.8 item 7: respect the per-section vectorise
+                # add-to-map toggle. Vectors only load when ticked.
+                # Rasters keep loading per their own toggle (handled by
+                # the algorithm's loadOnCompletion registrations -- if
+                # the user unticked "Add main outputs to map" the
+                # algorithm wouldn't have registered them).
+                if is_vector and hasattr(self, "_vec_add_to_map") \
+                        and not self._vec_add_to_map.isChecked():
+                    continue
+                if is_vector:
                     layer = QgsVectorLayer(path, name, "ogr")
                 else:
                     layer = QgsRasterLayer(path, name)
@@ -2746,6 +4079,44 @@ class PffDockWidget(QgsDockWidget):
             QMessageBox.warning(
                 self, "PFF",
                 f"Could not restore that run: {e}")
+
+    def _on_reset_all_clicked(self):
+        """Batch 28.8: dock-wide reset to the captured initial defaults.
+
+        Confirms with the user before clearing every dock input. Recent
+        runs (history file) and saved settings JSONs on disk are NOT
+        touched -- the user can still re-pick a Recent run after reset.
+        """
+        if not self._initial_defaults:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                "Could not capture default values when the dock was "
+                "built; Reset all is unavailable. Reload the plugin to "
+                "try again.")
+            return
+        ans = QMessageBox.question(
+            self, "Primary Forest Finder",
+            "<b>Reset every input back to its default?</b><br><br>"
+            "All pickers, toggles and numeric values across §0–§8 "
+            "will be cleared / restored to the values they had when "
+            "you first opened the dock.<br><br>"
+            "Your Recent runs and any settings files you've saved are "
+            "<b>not</b> affected — you can still pick a Recent run "
+            "afterwards to bring those values back.",
+            QMessageBox.Reset | QMessageBox.Cancel,
+            QMessageBox.Cancel)
+        if ans != QMessageBox.Reset:
+            return
+        try:
+            self._apply_params(self._initial_defaults)
+            self._log.append(
+                "<span style='color:#444;'>↺ All dock inputs reset to "
+                "defaults.</span>")
+        except Exception as e:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                f"Reset failed partway through: {e}\n\nReload the "
+                "plugin to get a clean slate.")
 
     def _apply_params(self, p: dict):
         """Set every dock widget from a saved params dict.
