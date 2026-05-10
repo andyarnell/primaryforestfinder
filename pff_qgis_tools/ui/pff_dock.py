@@ -387,9 +387,9 @@ class PffDockWidget(QgsDockWidget):
         # user can confirm at a glance which version they have loaded.
         # Pulls from FullWorkflowAlgorithm.PFF_VERSION (single source).
         version_label = QLabel(
-            f"<b>Primary Forest Finder</b> "
-            f"<span style='color:#666;'>v{FW.PFF_VERSION}</span>")
-        version_label.setStyleSheet("padding: 2px 0;")
+            f"<span style='font-size:15px; font-weight:bold;'>Primary Forest Finder</span> "
+            f"<span style='font-size:12px; color:#666;'>v{FW.PFF_VERSION}</span>")
+        version_label.setStyleSheet("padding: 4px 0;")
         outer_layout.addWidget(version_label)
 
         # Splitter so the user can drag the divider to give sections
@@ -420,12 +420,10 @@ class PffDockWidget(QgsDockWidget):
         self._build_section_2_tree_cover()
         self._build_section_3_human_influence()
         self._build_section_4_refine_output()
-        # P1.30 batch 23: §6 Outputs is the new parent that consolidates
-        # the former §6 Vectorise / §7 Run Options / §8 CEO Export +
-        # Output folder (moved from §0) + Save list (moved from §7) +
-        # Add-to-map toggle. Stats keeps its §5 slot.
         self._build_section_5_area_statistics()
         self._build_section_6_outputs()
+        self._build_section_7_validation()
+        self._build_section_config()
         self._sections_layout.addStretch(1)
 
         # P1.30 batch 20i: accordion -- only one top-level section
@@ -703,8 +701,12 @@ class PffDockWidget(QgsDockWidget):
 
     def _on_aoi_or_iso3_changed(self, *_):
         """AOI path or ISO3 changed -- refresh prefix preview AND
-        rebuild the CRS combo so suggestions track the new inputs."""
+        rebuild the CRS combo so suggestions track the new inputs.
+        Clears the previous CRS choice so the user consciously picks
+        the right one for the new country."""
         self._refresh_prefix_preview()
+        self._chosen_crs = None
+        self._chosen_crs_label = ""
         self._rebuild_crs_combo()
 
     # ────────────────────────────────────────────────────────────────
@@ -1251,7 +1253,7 @@ class PffDockWidget(QgsDockWidget):
         body.addLayout(raster_form)
 
         # --- FRA-aligned checkbox ---
-        self._fra_aligned = QCheckBox("FRA-aligned?")
+        self._fra_aligned = QCheckBox("FRA-aligned")
         self._fra_aligned.setToolTip(
             "Align categories with FAO Forest Resources\n"
             "Assessment (FRA 2025) definitions.\n\n"
@@ -1331,7 +1333,7 @@ class PffDockWidget(QgsDockWidget):
         body.addWidget(self._refine_sep)
 
         # --- Create intermediate layers toggle ---
-        self._create_intermediate = QCheckBox("Refine input?")
+        self._create_intermediate = QCheckBox("Refine input")
         self._create_intermediate.setToolTip(
             "Save each exclusion step as a separate output\n"
             "layer, useful for comparing against primary\n"
@@ -1577,7 +1579,7 @@ class PffDockWidget(QgsDockWidget):
         bx_form.addRow("DEM/Slope:", self._dem_slope_picker)
 
         self._slope_threshold = _spin(default=30, mn=0, mx=90, suffix=" °")
-        bx_form.addRow("Threshold:", self._slope_threshold)
+        bx_form.addRow("Slope (°) >", self._slope_threshold)
 
         self._protected_picker = SmartLayerPicker()
         bx_form.addRow("Protected:", self._protected_picker)
@@ -1664,12 +1666,12 @@ class PffDockWidget(QgsDockWidget):
         self._enable_refine.setChecked(True)
         form.addRow("", self._enable_refine)
 
-        self._smooth_radius = _spin(default=1500, mn=0, mx=10000)
-        form.addRow("Smooth radius:", self._smooth_radius)
+        self._smooth_radius = _spin(default=2000, mn=0, mx=10000)
+        form.addRow("Neighbourhood radius:", self._smooth_radius)
 
         self._density_threshold = _spin(
             default=0.5, mn=0.0, mx=1.0, decimals=2, suffix="")
-        form.addRow("Min density:", self._density_threshold)
+        form.addRow("Min. density to keep:", self._density_threshold)
 
         self._refine_min_patch = _spin(
             default=0.0, mn=0.0, mx=100000.0, suffix=" ha")
@@ -1814,13 +1816,17 @@ class PffDockWidget(QgsDockWidget):
         # symbolic names for backwards-compat). The display suffix
         # "(02c)" / "(02e)" reflects the NEW filename letters.
         self._save_layers = [
-            ("save_02b_forest", "Forest", "(02c)", True),
-            ("save_02d_nrf", "Naturally regenerating forest", "(02e)", True),
+            # ── Main (default ON) ──
+            ("save_02b_forest", "Forest", "(02c)", True, "main"),
+            ("save_02d_nrf", "Naturally regenerating forest",
+             "(02e)", True, "main"),
+            ("save_04a_primary", "Primary forest",
+             "(04a)", True, "main"),
+            # ── Intermediates (default OFF) ──
             ("save_03c_pre_conn", "Pre-refinement primary forest",
-             "(03c, intermediate)", False),
-            ("save_04a_primary", "Primary forest", "(04a, final)", True),
+             "(03c)", False, "intermediate"),
             ("save_04e_anthro_mask", "Anthropogenic mask",
-             "(04e, debug)", False),
+             "(04e)", False, "intermediate"),
         ]
         self._save_checkboxes = {}
 
@@ -1858,7 +1864,16 @@ class PffDockWidget(QgsDockWidget):
         btn_row.addStretch(1)
         cust_layout.addLayout(btn_row)
 
-        for key, name, suffix, default in self._save_layers:
+        _prev_group = None
+        for key, name, suffix, default, group in self._save_layers:
+            if group != _prev_group:
+                _header = QLabel(
+                    "Main" if group == "main" else "Intermediates")
+                _header.setStyleSheet(
+                    "font-weight:bold; font-size:11px; color:#555; "
+                    "margin-top:4px;")
+                cust_layout.addWidget(_header)
+                _prev_group = group
             cb = QCheckBox(f"{name}  {suffix}")
             cb.setChecked(default)
             cb.toggled.connect(self._refresh_save_summary)
@@ -1876,7 +1891,7 @@ class PffDockWidget(QgsDockWidget):
         self._refresh_save_summary()
 
     def _build_subsection_performance(self):
-        """Performance / cache sub-section for §6 Outputs."""
+        """Performance / cache sub-section for Config."""
         sec = CollapsibleSection(
             "Performance / cache", expanded=False,
             indent_px=8, header_bold=False)
@@ -1893,7 +1908,7 @@ class PffDockWidget(QgsDockWidget):
         return sec
 
     def _build_subsection_save_load_config(self):
-        """Save / Load run config sub-section for §6 Outputs.
+        """Save / Load run config sub-section for Config.
 
         P1.30 batch 23: lets users persist the dock's full panel state
         as a human-readable JSON, then reload it later. Mirrors the
@@ -1932,16 +1947,7 @@ class PffDockWidget(QgsDockWidget):
         return sec
 
     def _build_section_6_outputs(self):
-        """§6 Outputs — consolidated parent for everything output-
-        related. Contains:
-          - Output folder picker (moved from §0)
-          - Save list summary + Customise (moved from §7, batch 22)
-          - "Add saved outputs to map" toggle (renamed from §7)
-          - ▸ Vectorise outputs (was §6)
-          - ▸ Validation sampling (experimental) (was §8, renamed)
-          - ▸ Run config (save / load) (NEW in batch 23)
-          - ▸ Performance / cache (was rest of §7)
-        """
+        """§6 Outputs — output folder, save list, add-to-map."""
         sec = CollapsibleSection("6. Outputs", expanded=False)
         body = QVBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -1949,16 +1955,11 @@ class PffDockWidget(QgsDockWidget):
 
         form = _form()
 
-        # Batch 27.2: Output folder lives here in §6 (where it was
-        # before 27.1 briefly relocated it to §0). User feedback:
-        # prefer it grouped with the other output controls.
         self._output_folder = QgsFileWidget()
         self._output_folder.setStorageMode(QgsFileWidget.GetDirectory)
         self._output_folder.setToolTip(
             "Folder where all PFF outputs land. Disambiguate runs by "
             "naming this folder descriptively (e.g. BTN/aberdares_2020).")
-        # Batch 28.8: shrink to whatever the form column gives us so the
-        # browse button never gets clipped + dock can drag narrow.
         self._output_folder.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._output_folder.setMinimumWidth(0)
@@ -1976,26 +1977,52 @@ class PffDockWidget(QgsDockWidget):
 
         body.addLayout(form)
 
-        # Sub-sections (collapsed by default).
+        # Customise save-list accordion (only sub-section left in §6)
+        self._outputs_subsections = [self._save_customise_section]
+        for _sub in self._outputs_subsections:
+            _sub.toggled.connect(self._on_outputs_subsection_toggled)
+
+        sec.set_content_layout(body)
+        self._sections_layout.addWidget(sec)
+
+    def _build_section_7_validation(self):
+        """§7 Validation — vectorise + validation sampling.
+        Both steps are standalone but auto-chain after Run Workflow.
+        """
+        sec = CollapsibleSection("7. Validation", expanded=False)
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+
         _vec_sec = self._build_subsection_vectorise()
         _val_sec = self._build_subsection_validation_sampling()
-        _sav_sec = self._build_subsection_save_load_config()
-        _perf_sec = self._build_subsection_performance()
         body.addWidget(_vec_sec)
         body.addWidget(_val_sec)
+
+        self._validation_subsections = [_vec_sec, _val_sec]
+        for _sub in self._validation_subsections:
+            _sub.toggled.connect(self._on_validation_subsection_toggled)
+
+        sec.set_content_layout(body)
+        self._sections_layout.addWidget(sec)
+
+    def _build_section_config(self):
+        """Config — save/load settings + performance/cache.
+        Mirrors GEE app's Config panel.
+        """
+        sec = CollapsibleSection("Config", expanded=False)
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+
+        _sav_sec = self._build_subsection_save_load_config()
+        _perf_sec = self._build_subsection_performance()
         body.addWidget(_sav_sec)
         body.addWidget(_perf_sec)
 
-        # Batch 27.2: §6 sub-section accordion -- only one open at a
-        # time (Customise outputs / Vectorise / Validation /
-        # Save-Load / Performance). Otherwise the whole §6 panel
-        # gets unwieldy when a user expands several at once.
-        self._outputs_subsections = [
-            self._save_customise_section,
-            _vec_sec, _val_sec, _sav_sec, _perf_sec,
-        ]
-        for _sub in self._outputs_subsections:
-            _sub.toggled.connect(self._on_outputs_subsection_toggled)
+        self._config_subsections = [_sav_sec, _perf_sec]
+        for _sub in self._config_subsections:
+            _sub.toggled.connect(self._on_config_subsection_toggled)
 
         sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
@@ -2006,6 +2033,24 @@ class PffDockWidget(QgsDockWidget):
             return
         sender = self.sender()
         for sub in getattr(self, "_outputs_subsections", []):
+            if sub is not sender and sub.is_expanded():
+                sub.set_expanded(False)
+
+    def _on_validation_subsection_toggled(self, expanded: bool):
+        """Mutual-exclusion accordion for §7 Validation sub-sections."""
+        if not expanded:
+            return
+        sender = self.sender()
+        for sub in getattr(self, "_validation_subsections", []):
+            if sub is not sender and sub.is_expanded():
+                sub.set_expanded(False)
+
+    def _on_config_subsection_toggled(self, expanded: bool):
+        """Mutual-exclusion accordion for Config sub-sections."""
+        if not expanded:
+            return
+        sender = self.sender()
+        for sub in getattr(self, "_config_subsections", []):
             if sub is not sender and sub.is_expanded():
                 sub.set_expanded(False)
 
@@ -2061,7 +2106,7 @@ class PffDockWidget(QgsDockWidget):
 
     # ── Save-list handlers ────────────────────────────────────────────
     def _on_save_defaults(self):
-        for key, _name, _suffix, default in self._save_layers:
+        for key, _name, _suffix, default, *_ in self._save_layers:
             self._save_checkboxes[key].setChecked(default)
 
     def _on_save_all(self):
@@ -2074,9 +2119,9 @@ class PffDockWidget(QgsDockWidget):
 
     def _refresh_save_summary(self):
         """Live summary line above the Customise sub-section."""
-        ticked = [name for key, name, _suffix, _default in self._save_layers
+        ticked = [name for key, name, _suffix, _default, *_ in self._save_layers
                   if self._save_checkboxes[key].isChecked()]
-        defaults_set = {name for _key, name, _suffix, default
+        defaults_set = {name for _key, name, _suffix, default, *_
                         in self._save_layers if default}
         ticked_set = set(ticked)
         if not ticked:
@@ -2624,13 +2669,22 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_other_value.valueChanged.connect(
             self._on_ceo_existing_invalidated)
         # Batch 29.1: cross-clamp + live running-sum on the per-class
-        # spinboxes. Reentrancy flag prevents one setValue from
-        # triggering the partner's handler in a loop.
+        # spinboxes. Cross-clamp uses editingFinished (fires on
+        # Enter/Tab/focus-loss) to avoid mid-typing jumps — valueChanged
+        # fires on every keystroke, so clearing a box to type "50" would
+        # momentarily send value=0 and push the other box to max.
+        # Label refresh stays on valueChanged for live feedback.
         self._ceo_pair_updating = False
+        self._ceo_n_primary.editingFinished.connect(
+            lambda: self._on_ceo_n_primary_changed(
+                self._ceo_n_primary.value()))
+        self._ceo_n_other.editingFinished.connect(
+            lambda: self._on_ceo_n_other_changed(
+                self._ceo_n_other.value()))
         self._ceo_n_primary.valueChanged.connect(
-            self._on_ceo_n_primary_changed)
+            lambda _: self._refresh_ceo_per_class_label())
         self._ceo_n_other.valueChanged.connect(
-            self._on_ceo_n_other_changed)
+            lambda _: self._refresh_ceo_per_class_label())
         return sec
 
     def _refresh_ceo_class_field(self):
@@ -2970,14 +3024,16 @@ class PffDockWidget(QgsDockWidget):
 
     def _on_ceo_n_primary_changed(self, value):
         """Cross-clamp: when Primary changes, recalculate Other so the
-        pair tries to sum to `total` (capped per-class). Reentrancy
-        flag prevents the chained signal from looping. Updates the
-        live label after both values settle.
+        pair tries to sum to `total` (capped per-class). Only active
+        in existing-points mode. Reentrancy flag prevents looping.
         """
         if getattr(self, "_ceo_pair_updating", False):
             return
         counts = self._ceo_existing_counts
-        if counts and self._ceo_use_existing.isChecked():
+        if not counts or not self._ceo_use_existing.isChecked():
+            self._refresh_ceo_per_class_label()
+            return
+        if counts:
             total = int(counts.get("total", 0))
             other_max = int(counts.get("other", 0))
             desired_other = max(0, total - int(value))
@@ -2995,7 +3051,10 @@ class PffDockWidget(QgsDockWidget):
         if getattr(self, "_ceo_pair_updating", False):
             return
         counts = self._ceo_existing_counts
-        if counts and self._ceo_use_existing.isChecked():
+        if not counts or not self._ceo_use_existing.isChecked():
+            self._refresh_ceo_per_class_label()
+            return
+        if counts:
             total = int(counts.get("total", 0))
             primary_max = int(counts.get("primary", 0))
             desired_primary = max(0, total - int(value))
@@ -3030,9 +3089,9 @@ class PffDockWidget(QgsDockWidget):
         except Exception:
             return False
 
-    def _find_06c_nested_vector(self, year: str = None) -> str:
-        """Locate the 06c nested-vector file the workflow just produced
-        in the output folder. Returns the path or '' if not found.
+    def _find_06d_nested_dissolved(self, year: str = None) -> str:
+        """Locate the 06d dissolved nested-vector file the workflow just
+        produced in the output folder. Returns the path or '' if not found.
 
         Checks both .gpkg AND .shp extensions (user may have
         Vectorise outputs > 'Output as Shapefile' ticked) and both
@@ -3050,8 +3109,8 @@ class PffDockWidget(QgsDockWidget):
             for ext in ("gpkg", "shp"):
                 try:
                     cand = generate_layer_name(
-                        iso3, PLATFORM_QGIS, "06c",
-                        f"{forest_name}_with_primary_nested_vector",
+                        iso3, PLATFORM_QGIS, "06d",
+                        f"{forest_name}_with_primary_nested_dissolved",
                         ext=ext, year=year_str)
                 except Exception:
                     cand = ""
@@ -3061,18 +3120,16 @@ class PffDockWidget(QgsDockWidget):
             full = os.path.join(out_dir, cand)
             if os.path.exists(full):
                 return full
-        # Glob fallback: handles unexpected forest-name suffixes.
-        # Try both .gpkg and .shp; year-filter when known.
         import glob as _glob
         for ext in ("gpkg", "shp"):
             if year_str:
                 pat = os.path.join(
                     out_dir,
-                    f"*{year_str}*_06c_*_with_primary_nested_vector.{ext}")
+                    f"*{year_str}*_06d_*_nested_dissolved.{ext}")
             else:
                 pat = os.path.join(
                     out_dir,
-                    f"*_06c_*_with_primary_nested_vector.{ext}")
+                    f"*_06d_*_nested_dissolved.{ext}")
             hits = _glob.glob(pat)
             if hits:
                 return hits[0]
@@ -3323,19 +3380,19 @@ class PffDockWidget(QgsDockWidget):
     def _run_ceo_chain_after_workflow(self, year: str, feedback):
         """Auto-chain helper: called from Run Workflow handler after a
         successful single-year (or per-year multi-year iteration). If
-        the §8 Source dropdown is set to auto, locate the 06c nested
-        vector that the just-completed workflow produced and fire the
-        validation algorithm against it. Non-blocking: surfaces a
+        the §8 Source dropdown is set to auto, locate the 06d dissolved
+        nested vector that the just-completed workflow produced and fire
+        the validation algorithm against it. Non-blocking: surfaces a
         warning + returns silently if anything is missing."""
         if not self._ceo_use_auto_source():
             return
-        nested_path = self._find_06c_nested_vector(year=year)
+        nested_path = self._find_06d_nested_dissolved(year=year)
         if not nested_path:
             feedback.pushWarning(
-                f"⚠ Auto-validation: could not find a 06c nested "
-                f"vector for year={year} in the output folder. "
+                f"⚠ Auto-validation: could not find a 06d dissolved "
+                f"nested vector for year={year} in the output folder. "
                 "Skipping validation. (Make sure 'Vectorise nested "
-                "outputs' is ticked in §6.)")
+                "outputs' and 'Dissolve' are ticked in §6.)")
             return
         if not self._ceo_output_folder.filePath():
             feedback.pushWarning(
@@ -3821,83 +3878,46 @@ class PffDockWidget(QgsDockWidget):
 
         # Batch 28.5: auto-validation preflight gate. If §8 Source is
         # set to "Auto" but Vectorise nested outputs is OFF, the
-        # workflow won't produce the 06c vector that auto-validation
-        # needs. Catch this BEFORE the run so the user doesn't wait
-        # for completion only to find validation skipped. Offer to
-        # auto-tick the nest box; user can decline + abort.
-        if self._ceo_use_auto_source() and not self._vec_nest.isChecked():
+        # Auto-validation needs the 06d dissolved nested vector.
+        # If nest or dissolve is off, offer to auto-tick both.
+        if self._ceo_use_auto_source() and (
+                not self._vec_nest.isChecked()
+                or not self._vec_dissolve.isChecked()):
+            missing = []
+            if not self._vec_nest.isChecked():
+                missing.append("Vectorise nested outputs")
+            if not self._vec_dissolve.isChecked():
+                missing.append("Dissolve to multipart")
             ans = QMessageBox.question(
                 self, "Primary Forest Finder",
-                "Auto-validation is enabled in §8 (Source = 'Auto: "
-                "use this run's nested vector') BUT Vectorise nested "
-                "outputs (§6 Outputs > Vectorise outputs > Nested) "
-                "is OFF.\n\n"
-                "Without that tickbox, the workflow won't produce a "
-                "06c nested vector and auto-validation will skip.\n\n"
-                "Tick Vectorise nested outputs now and continue?\n"
-                "(No = abort, fix manually, run again. "
+                "Auto-validation is enabled in §8 (Source = 'Auto') "
+                "but needs the dissolved nested vector (06d).\n\n"
+                "Currently off: " + ", ".join(missing) + ".\n\n"
+                "Tick these now and continue?\n"
+                "(No = abort, fix manually. "
                 "Cancel = run anyway and accept the auto-validation "
                 "skip.)",
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
                 QMessageBox.Yes)
             if ans == QMessageBox.Yes:
                 self._vec_nest.setChecked(True)
-                # vec_nest toggling needs vec_dissolve set; mirror the
-                # signal so the dependent state is consistent.
                 self._vec_dissolve.setEnabled(True)
-                feedback.pushInfo(
-                    "✔ Auto-ticked: Vectorise nested outputs (so "
-                    "auto-validation has its 06c input).")
-                # Re-collect params so VECTORIZE_NEST=True propagates.
-                # The workflow's run_vectorize gate is "any of the
-                # three vectorise flags ticked" so just setting NEST
-                # is enough to trigger Stage 7.
+                self._vec_dissolve.setChecked(True)
                 params[FW.VECTORIZE_NEST] = True
+                params[FW.VECTORIZE_DISSOLVE_MULTIPART] = True
+                feedback.pushInfo(
+                    "Auto-ticked: Vectorise nested + Dissolve (so "
+                    "auto-validation has its 06d input).")
             elif ans == QMessageBox.No:
                 feedback.pushWarning(
-                    "Run aborted -- enable Vectorise nested outputs "
+                    "Run aborted -- enable Vectorise nested + Dissolve "
                     "or change §8 Source to 'Pick a file/layer' before "
                     "running again.")
                 self._leave_running_state()
                 return
-            # ans == Cancel: fall through, run as-is (auto-validation
-            # will skip with the existing post-run warning).
-
-        # Batch 28.8 item 5: nest+dissolve are exclusive. When §8
-        # Source = Auto AND nest+dissolve are both ticked, the workflow
-        # would produce only 06d (dissolved). But auto-validation needs
-        # the un-dissolved 06c. Prompt to untick dissolve.
-        if (self._ceo_use_auto_source()
-                and self._vec_nest.isChecked()
-                and self._vec_dissolve.isChecked()):
-            ans2 = QMessageBox.question(
-                self, "Primary Forest Finder",
-                "Auto-validation needs the un-dissolved 06c nested "
-                "vector. With Vectorise > Dissolve to multipart by "
-                "level ticked, the workflow only produces the dissolved "
-                "06d output -- auto-validation will have nothing to "
-                "sample.\n\n"
-                "Untick Dissolve and continue?\n"
-                "(No = abort, fix manually. Cancel = run anyway and "
-                "accept the auto-validation skip.)",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Yes)
-            if ans2 == QMessageBox.Yes:
-                self._vec_dissolve.setChecked(False)
-                feedback.pushInfo(
-                    "✔ Auto-unticked: Vectorise > Dissolve (so the "
-                    "un-dissolved 06c reaches auto-validation).")
-                params[FW.VECTORIZE_DISSOLVE_MULTIPART] = False
-            elif ans2 == QMessageBox.No:
-                feedback.pushWarning(
-                    "Run aborted -- untick Dissolve or change §8 Source "
-                    "to 'Pick a file/layer' before running again.")
-                self._leave_running_state()
-                return
-            # ans2 == Cancel: fall through, run as-is.
 
         # Batch 29: auto-chain + existing-points combo. Allowed but
-        # the user can't pre-count (06c doesn't exist yet). Brief
+        # the user can't pre-count (06d doesn't exist yet). Brief
         # information prompt explains the clamp behaviour; user can
         # cancel or continue.
         if (self._ceo_use_auto_source()
@@ -4351,7 +4371,7 @@ class PffDockWidget(QgsDockWidget):
         self._recent_combo.blockSignals(True)
         self._recent_combo.clear()
         self._recent_combo.addItem("Recent runs ▾", None)
-        for i, entry in enumerate(self._load_history()[:10]):
+        for i, entry in enumerate(self._load_history()[:20]):
             iso3 = entry.get("iso3") or "—"
             ts = entry.get("timestamp", "")
             short_ts = ts.replace("T", " ")[:16] if ts else ""
@@ -4401,7 +4421,7 @@ class PffDockWidget(QgsDockWidget):
         ans = QMessageBox.question(
             self, "Primary Forest Finder",
             "<b>Reset every input back to its default?</b><br><br>"
-            "All pickers, toggles and numeric values across §0–§8 "
+            "All pickers, toggles and numeric values across §0–§7 + Config "
             "will be cleared / restored to the values they had when "
             "you first opened the dock.<br><br>"
             "Your Recent runs and any settings files you've saved are "

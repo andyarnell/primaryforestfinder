@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.15.5";
+  var PFF_SCRIPT_VERSION = "4.15.7-beta.1";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -1112,11 +1112,16 @@
     style: {margin: '4px 8px'}
   });
 
-  var appTitle = ui.Label('Primary Forest Finder (Beta)', {
-    fontWeight: 'bold',
-    fontSize: '18px',
-    margin: '4px 8px',
-    textAlign: 'center'
+  var appTitleLabel = ui.Label('Primary Forest Finder', {
+    fontWeight: 'bold', fontSize: '18px', margin: '4px 0 4px 8px'
+  });
+  var appVersionLabel = ui.Label('v' + PFF_SCRIPT_VERSION, {
+    fontSize: '12px', color: '#666', margin: '7px 8px 4px 4px'
+  });
+  var appTitle = ui.Panel({
+    widgets: [appTitleLabel, appVersionLabel],
+    layout: ui.Panel.Layout.flow('horizontal'),
+    style: {margin: '0', padding: '0'}
   });
 
 
@@ -1155,6 +1160,21 @@
         'Designed to support national forest monitoring and reporting ' +
         '(e.g. FAO FRA) with transparent, reproducible methods.',
         {fontSize: '11px', margin: '0 0 8px 0'}),
+
+      ui.Label('How to use', {fontWeight: 'bold', fontSize: '11px', margin: '8px 0 2px 0'}),
+      ui.Label(
+        '1. Select a country and view the map\n' +
+        '2. Adjust parameters, then click Update Analysis\n' +
+        '3. View outputs and statistics in the right panel\n' +
+        '4. Save outputs via the Outputs section\n' +
+        '5. Save/load your settings via the ⚙ Config button',
+        {fontSize: '10px', margin: '0 0 4px 4px', whiteSpace: 'pre'}
+      ),
+      ui.Label(
+        'Preprocessing: expand ⚙ Preprocessing on custom data inputs ' +
+        'to filter bands, remap classes, or set thresholds before use.',
+        {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 8px 4px'}
+      ),
 
       ui.Label('Resources', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
       ui.Label({
@@ -1287,7 +1307,7 @@
   var individualBufferRows = null; // set after anthropogenicContent is built
   var masterBufferRow = null;      // set after anthropogenicContent is built
 
-  var masterBufferStatusLabel = ui.Label('', {fontSize: '9px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 4px', shown: false, whiteSpace: 'pre'});
+  var masterBufferStatusLabel = ui.Label('', {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 4px', shown: false, whiteSpace: 'pre'});
 
   function updateMasterBufferStatus() {
     if (!useMasterBufferCheckbox.getValue()) {
@@ -1483,7 +1503,7 @@
         var fraLabel = fraStats.formatFRA(selectedCountry, yearInt);
         yearPanel.add(ui.Label('  ' + fraLabel, {fontSize: '11px', color: '#555', margin: '0 0 2px 4px'}));
         // Separator between FRA and calculated values
-        yearPanel.add(ui.Label('  ───────────', {color: '#ccc', fontSize: '9px', margin: '0 0 2px 4px'}));
+        yearPanel.add(ui.Label('  ───────────', {color: '#ccc', fontSize: '10px', margin: '0 0 2px 4px'}));
         // Progress indicator — updates per step
         var calcLabel = ui.Label('  Calculating total forest area...', {color: '#888', fontStyle: 'italic'});
         yearPanel.add(calcLabel);
@@ -1597,7 +1617,7 @@
   // Info popup for area statistics
   var statsInfoContent = ui.Panel({
     widgets: [
-      ui.Label('Area Statistics — Notes', {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}),
+      ui.Label('Area Statistics', {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}),
       ui.Label('On-the-fly statistics may time out at high resolutions ' +
               'for large countries. If this happens, try increasing the ' +
               'Resolution slider or use "Export Statistics to Drive" which has ' +
@@ -1612,14 +1632,14 @@
               {fontSize: '11px', margin: '0 0 6px 0'}),
       ui.Label('─── FRA 2025 definitions ───', {fontWeight: 'bold', fontSize: '10px', color: '#888', margin: '4px 0 2px 0'}),
       ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 4px'}),
-      ui.Label('As tree cover, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '9px', margin: '0 0 2px 12px', color: '#555'}),
+      ui.Label('As tree cover, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 12px', color: '#555'}),
       ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 4px'}),
-      ui.Label('Forest established through natural regeneration', {fontSize: '9px', margin: '0 0 2px 12px', color: '#555'}),
+      ui.Label('Forest established through natural regeneration', {fontSize: '10px', margin: '0 0 2px 12px', color: '#555'}),
       ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 4px'}),
-      ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '9px', margin: '0 0 2px 12px', color: '#555'}),
+      ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '10px', margin: '0 0 2px 12px', color: '#555'}),
       ui.Label({
         value: 'FAO FRA 2025 full definitions →',
-        style: {fontSize: '9px', color: '#1a73e8', margin: '2px 0 0 4px'},
+        style: {fontSize: '10px', color: '#1a73e8', margin: '2px 0 0 4px'},
         targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
       })
     ],
@@ -2831,7 +2851,7 @@
             '⚠ Links expire ~2 hours after generation.',
             {fontSize: '10px', margin: '2px 0', whiteSpace: 'pre'}));
           psScriptPanel.add(ui.Label(script, {
-            fontSize: '9px', whiteSpace: 'pre', margin: '4px 0',
+            fontSize: '10px', whiteSpace: 'pre', margin: '4px 0',
             border: '1px solid #ccc', padding: '4px'
           }));
           psScriptPanel.style().set('shown', true);
@@ -2938,7 +2958,7 @@
       psScriptPanel.add(ui.Label(instructions,
         {fontSize: '10px', margin: '2px 0', whiteSpace: 'pre'}));
       psScriptPanel.add(ui.Label(script, {
-        fontSize: '9px',
+        fontSize: '10px',
         whiteSpace: 'pre',
         margin: '4px 0',
         border: '1px solid #ccc',
@@ -3467,21 +3487,21 @@
     widgets: [
       ui.Label('FRA 2025 definitions:', {fontWeight: 'bold', fontSize: '10px', margin: '2px 0 2px 4px'}),
       ui.Label('Tree cover', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Land >0.5 ha, trees >5 m, canopy >10%, any land use', {fontSize: '9px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Land >0.5 ha, trees >5 m, canopy >10%, any land use', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('As above, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '9px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('As above, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Forest established through natural regeneration', {fontSize: '9px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Forest established through natural regeneration', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '9px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('─────', {fontSize: '8px', color: '#ccc', margin: '2px 0 2px 8px'}),
       ui.Label('Other land with tree cover', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Tree cover on non-forest land use: oil palm, orchards, agroforestry', {fontSize: '9px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Tree cover on non-forest land use: oil palm, orchards, agroforestry', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Planted forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Trees established by planting/seeding: eucalyptus, pine, teak, rubber', {fontSize: '9px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Trees established by planting/seeding: eucalyptus, pine, teak, rubber', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label({
         value: 'FAO FRA 2025 full definitions →',
-        style: {fontSize: '9px', color: '#1a73e8', margin: '4px 0 0 8px'},
+        style: {fontSize: '10px', color: '#1a73e8', margin: '4px 0 0 8px'},
         targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
       })
     ],
@@ -3559,20 +3579,22 @@
       refineSep.style().set('shown', true);
       excludeAgriPanel.style().set('shown', true);
       includePlantationsPanel.style().set('shown', true);
-      nationalOLWTC.setShown(true);
-      nationalPlantations.setShown(true);
+      var customOn = enableTreeCoverCustomCheckbox.getValue();
+      nationalOLWTC.setShown(customOn);
+      nationalPlantations.setShown(customOn);
       excludeAgricultureFromForestCheckbox.setValue(true);
       includePlantationsCheckbox.setValue(true);
     } else {
       var v = inputCategorySelect.getValue();
       var showOlwtc   = (v === INPUT_CATEGORY_ALL);
       var showPlanted = showOlwtc || (v === INPUT_CATEGORY_FOREST);
+      var customOn = enableTreeCoverCustomCheckbox.getValue();
 
       refineSep.style().set('shown', true);
       excludeAgriPanel.style().set('shown', showOlwtc);
       includePlantationsPanel.style().set('shown', showPlanted);
-      nationalOLWTC.setShown(showOlwtc);
-      nationalPlantations.setShown(showPlanted);
+      nationalOLWTC.setShown(customOn && showOlwtc);
+      nationalPlantations.setShown(customOn && showPlanted);
 
       if (!showOlwtc)   excludeAgricultureFromForestCheckbox.setValue(false);
       if (!showPlanted) includePlantationsCheckbox.setValue(false);
@@ -3661,13 +3683,28 @@
     margin: '4px 0 4px 4px', shown: false}
   );
 
+  var enableTreeCoverCustomCheckbox = ui.Checkbox({
+    label: 'Enable custom data inputs',
+    value: false,
+    onChange: function(checked) {
+      nationalForest.setShown(checked);
+      if (!checked) {
+        nationalOLWTC.setShown(false);
+        nationalPlantations.setShown(false);
+      } else {
+        updateRefineVisibility();
+      }
+    },
+    style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0'}
+  });
+  nationalForest.panel.style().set({shown: false});
+
   var treeCoverContent = ui.Panel({
     widgets: [
       ui.Label('Define Tree Cover:', {fontWeight: 'bold', margin: '0 0 4px 0'}),
       treecoverSourceRow,
       treecoverPanel,
       treecoverHeightPanel,
-      nationalForest.panel,
       globalSourceHiddenNote,
       fraAlignedCheckbox,
       fraInputSection,
@@ -3678,7 +3715,9 @@
       excludeAgriPanel,
       nationalOLWTC.panel,
       includePlantationsPanel,
-      nationalPlantations.panel
+      nationalPlantations.panel,
+      enableTreeCoverCustomCheckbox,
+      nationalForest.panel
     ],
     style: {shown: false, padding: '8px'}
   });
@@ -3816,7 +3855,25 @@
   var addInputLayersToMap = ui.Checkbox({
     label: 'Add input + buffer layers to map',
     value: false,
-    onChange: markNeedsUpdate
+    onChange: function(v) {
+      markNeedsUpdate();
+      if (v) {
+        updateMap();
+      } else {
+        var prefixes = ['Input: ', 'Buffer: ', 'Planted forest'];
+        [map1, map2].forEach(function(m) {
+          if (!m) return;
+          var layers = m.layers();
+          for (var i = 0; i < layers.length(); i++) {
+            var lyr = layers.get(i);
+            var n = lyr.getName();
+            for (var p = 0; p < prefixes.length; p++) {
+              if (n.indexOf(prefixes[p]) === 0) lyr.setShown(false);
+            }
+          }
+        });
+      }
+    }
   });
 
   // Batch 27.1: shown:false matches the new enableProtectedAreas default.
@@ -3848,7 +3905,7 @@
     layout: ui.Panel.Layout.flow('vertical'),
     style: {shown: false, margin: '0 0 0 4px'}
   });
-  var bufferExceptionsStatusLabel = ui.Label('', {fontSize: '9px', color: '#888', fontStyle: 'italic', margin: '0 0 0 4px', shown: false});
+  var bufferExceptionsStatusLabel = ui.Label('', {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 0 4px', shown: false});
 
   function updateBufferExceptionsStatus() {
     var enabled = [];
@@ -4301,7 +4358,7 @@
       'over the Falkland Islands (Malvinas).';
 
     var disclaimerContent = ui.Panel({
-      widgets: [ui.Label(disclaimerText, {fontSize: '9px', color: '#555', margin: '4px'})],
+      widgets: [ui.Label(disclaimerText, {fontSize: '10px', color: '#555', margin: '4px'})],
       style: {shown: false, width: '320px', backgroundColor: 'rgba(255,255,255,0.95)', border: '1px solid #ccc', padding: '4px'}
     });
 
@@ -4311,7 +4368,7 @@
         var s = disclaimerContent.style().get('shown');
         disclaimerContent.style().set({shown: !s});
       },
-      style: {fontSize: '9px', color: '#555', padding: '2px 6px', margin: '0', backgroundColor: 'rgba(255,255,255,0.85)', border: '1px solid #ccc'}
+      style: {fontSize: '10px', color: '#555', padding: '2px 6px', margin: '0', backgroundColor: 'rgba(255,255,255,0.85)', border: '1px solid #ccc'}
     });
 
     return ui.Panel({
@@ -4584,97 +4641,72 @@
   var validationFliiCheckbox = ui.Checkbox({
     label: 'FLII (high/medium integrity)',
     value: false,
-    onChange: function(v) {
-      visibleLayers.flii = v;
-      toggleLayerByName('Reference: FLII (high/med)', v);
-    }
+    onChange: function() { markNeedsUpdate(); }
   });
 
   var validationFdapCheckbox = ui.Checkbox({
     label: 'Forest Persistence (FDaP)',
     value: false,
-    onChange: function(v) {
-      toggleLayerByName('Reference: Forest Persistence (FDaP)', v);
-    }
+    onChange: function() { markNeedsUpdate(); }
   });
 
   // -- Custom reference layer input factory --
   function createValidationInput(label, index) {
     var layerName = 'Reference: Custom ' + index;
+    var enableCheckbox = ui.Checkbox({
+      label: label,
+      value: false,
+      onChange: function() { markNeedsUpdate(); },
+      style: {fontWeight: 'bold', fontSize: '10px', margin: '6px 0 2px 0'}
+    });
     var assetInput = ui.Textbox({
       placeholder: 'e.g. projects/my-project/assets/my-layer',
       style: {fontSize: '10px', stretch: 'horizontal'}
     });
     var prepUi = createPreprocessingUi();
     prepUi.panel.style().set('shown', false);
-    var statusLabel = ui.Label('', {fontSize: '10px', color: '#666', margin: '2px 0 0 0'});
-    statusLabel.style().set({shown: false});
-
-    var addButton = ui.Button({
-      label: 'Add to map',
-      onClick: function() {
-        var path = assetInput.getValue();
-        if (!path || path.trim() === '') {
-          statusLabel.setValue('Enter an asset path first.');
-          statusLabel.style().set({shown: true, color: '#c00'});
-          return;
-        }
-        statusLabel.setValue('Loading...');
-        statusLabel.style().set({shown: true, color: '#666'});
-        try {
-          var img = preprocessAsset(path.trim(), prepUi.getConfig());
-          var vis = {min: 0, max: 1, palette: ['white', index === 1 ? '#e377c2' : '#17becf']};
-          [map1, map2].forEach(function(m) {
-            if (!m) return;
-            // Remove existing layer with same name
-            var layers = m.layers();
-            for (var i = layers.length() - 1; i >= 0; i--) {
-              if (layers.get(i).getName() === layerName) layers.remove(layers.get(i));
-            }
-            m.addLayer(img, vis, layerName, true, 0.7);
-          });
-          statusLabel.setValue('Added: ' + path.trim());
-          statusLabel.style().set({color: '#060'});
-        } catch (e) {
-          statusLabel.setValue('Error: ' + e.message);
-          statusLabel.style().set({color: '#c00'});
-        }
-      },
-      style: {fontSize: '10px', padding: '2px 8px', margin: '2px 0'}
-    });
 
     var panel = ui.Panel({
       widgets: [
-        ui.Label(label, {fontWeight: 'bold', fontSize: '10px', margin: '6px 0 2px 0'}),
+        enableCheckbox,
         assetInput,
-        prepUi.panel,
-        addButton,
-        statusLabel
+        prepUi.panel
       ],
       layout: ui.Panel.Layout.flow('vertical'),
       style: {margin: '0 0 4px 0', padding: '4px', backgroundColor: '#f8f8f8',
               border: '1px solid #e0e0e0'}
     });
 
-    return {panel: panel, assetInput: assetInput, prepUi: prepUi};
+    return {panel: panel, enableCheckbox: enableCheckbox, assetInput: assetInput, prepUi: prepUi};
   }
 
   var customRef1 = createValidationInput('Custom reference layer 1', 1);
   var customRef2 = createValidationInput('Custom reference layer 2', 2);
+  customRef1.panel.style().set({shown: false});
+  customRef2.panel.style().set({shown: false});
+
+  var enableCustomValidationCheckbox = ui.Checkbox({
+    label: 'Enable custom inputs',
+    value: false,
+    onChange: function(checked) {
+      customRef1.panel.style().set({shown: checked});
+      customRef2.panel.style().set({shown: checked});
+    },
+    style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0'}
+  });
 
   var validationContent = ui.Panel({
     widgets: [
       ui.Label(
-        'Experimental: Compare outputs to existing maps. ' +
-        'For validation and sampling see the Primary Forest Finder ' +
-        'QGIS plugin and Collect Earth Online (CEO) workflows.',
+        'Compare outputs to existing maps. ' +
+        'For validation and sampling see the QGIS plugin ' +
+        'and Collect Earth Online (CEO) workflows.',
         {fontSize: '10px', color: '#666', fontStyle: 'italic',
          margin: '4px 0 8px 0'}),
-      ui.Label('Reference layers:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 0px 0'}),
-      ui.Label('Add to map:', {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 2px 0'}),
+      ui.Label('Reference layers:', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}),
       validationFliiCheckbox,
       validationFdapCheckbox,
-      ui.Label('Custom inputs:', {fontWeight: 'bold', fontSize: '11px', margin: '8px 0 2px 0'}),
+      enableCustomValidationCheckbox,
       customRef1.panel,
       customRef2.panel
     ],
@@ -6336,6 +6368,23 @@
         pffAddLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)", true, 1);
       }
 
+      if (customRef1.enableCheckbox.getValue()) {
+        var ref1Path = customRef1.assetInput.getValue();
+        if (ref1Path && ref1Path.trim() !== '') {
+          var ref1Img = preprocessAsset(ref1Path.trim(), customRef1.prepUi.getConfig())
+              .updateMask(country_and_buffer_mask).selfMask();
+          pffAddLayer(ref1Img, {min: 0, max: 1, palette: ['white', '#e377c2']}, 'Reference: Custom 1', true, 0.7);
+        }
+      }
+
+      if (customRef2.enableCheckbox.getValue()) {
+        var ref2Path = customRef2.assetInput.getValue();
+        if (ref2Path && ref2Path.trim() !== '') {
+          var ref2Img = preprocessAsset(ref2Path.trim(), customRef2.prepUi.getConfig())
+              .updateMask(country_and_buffer_mask).selfMask();
+          pffAddLayer(ref2Img, {min: 0, max: 1, palette: ['white', '#17becf']}, 'Reference: Custom 2', true, 0.7);
+        }
+      }
 
       //european primary forests database    
       // var epfd_2018_polys = ee.FeatureCollection("HU_BERLIN/EPFD/V2/polygons");
