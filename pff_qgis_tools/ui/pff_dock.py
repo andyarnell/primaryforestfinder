@@ -2668,19 +2668,8 @@ class PffDockWidget(QgsDockWidget):
             self._on_ceo_existing_invalidated)
         self._ceo_other_value.valueChanged.connect(
             self._on_ceo_existing_invalidated)
-        # Batch 29.1: cross-clamp + live running-sum on the per-class
-        # spinboxes. Cross-clamp uses editingFinished (fires on
-        # Enter/Tab/focus-loss) to avoid mid-typing jumps — valueChanged
-        # fires on every keystroke, so clearing a box to type "50" would
-        # momentarily send value=0 and push the other box to max.
-        # Label refresh stays on valueChanged for live feedback.
-        self._ceo_pair_updating = False
-        self._ceo_n_primary.editingFinished.connect(
-            lambda: self._on_ceo_n_primary_changed(
-                self._ceo_n_primary.value()))
-        self._ceo_n_other.editingFinished.connect(
-            lambda: self._on_ceo_n_other_changed(
-                self._ceo_n_other.value()))
+        # Live running-sum label on the per-class spinboxes. Each box
+        # is independently capped via setMaximum(); no cross-clamping.
         self._ceo_n_primary.valueChanged.connect(
             lambda _: self._refresh_ceo_per_class_label())
         self._ceo_n_other.valueChanged.connect(
@@ -2937,6 +2926,11 @@ class PffDockWidget(QgsDockWidget):
         cf = self._ceo_class_field.currentField() or "level"
         primary_val = int(self._ceo_primary_value.value())
         other_val = int(self._ceo_other_value.value())
+        self._ceo_existing_readout.setText(
+            "<i style='color:#888;'>Counting — this may take a moment "
+            "for large point sets…</i>")
+        from qgis.PyQt.QtWidgets import QApplication
+        QApplication.processEvents()
         primary_count, other_count, unmatched = (
             self._ceo_count_existing_vs_input(
                 pts_path, in_path, cf, primary_val, other_val))
@@ -3023,48 +3017,14 @@ class PffDockWidget(QgsDockWidget):
             f"max {p_count} + {o_count} = {total})")
 
     def _on_ceo_n_primary_changed(self, value):
-        """Cross-clamp: when Primary changes, recalculate Other so the
-        pair tries to sum to `total` (capped per-class). Only active
-        in existing-points mode. Reentrancy flag prevents looping.
+        """Refresh the live label when Primary changes. Each spinbox is
+        independently capped at its per-class max via setMaximum() —
+        no cross-clamp (the user sets each count freely).
         """
-        if getattr(self, "_ceo_pair_updating", False):
-            return
-        counts = self._ceo_existing_counts
-        if not counts or not self._ceo_use_existing.isChecked():
-            self._refresh_ceo_per_class_label()
-            return
-        if counts:
-            total = int(counts.get("total", 0))
-            other_max = int(counts.get("other", 0))
-            desired_other = max(0, total - int(value))
-            new_other = min(desired_other, other_max)
-            if new_other != self._ceo_n_other.value():
-                self._ceo_pair_updating = True
-                try:
-                    self._ceo_n_other.setValue(new_other)
-                finally:
-                    self._ceo_pair_updating = False
         self._refresh_ceo_per_class_label()
 
     def _on_ceo_n_other_changed(self, value):
-        """Mirror of _on_ceo_n_primary_changed (Other -> Primary)."""
-        if getattr(self, "_ceo_pair_updating", False):
-            return
-        counts = self._ceo_existing_counts
-        if not counts or not self._ceo_use_existing.isChecked():
-            self._refresh_ceo_per_class_label()
-            return
-        if counts:
-            total = int(counts.get("total", 0))
-            primary_max = int(counts.get("primary", 0))
-            desired_primary = max(0, total - int(value))
-            new_primary = min(desired_primary, primary_max)
-            if new_primary != self._ceo_n_primary.value():
-                self._ceo_pair_updating = True
-                try:
-                    self._ceo_n_primary.setValue(new_primary)
-                finally:
-                    self._ceo_pair_updating = False
+        """Refresh the live label when Other changes."""
         self._refresh_ceo_per_class_label()
 
     def _on_ceo_source_changed(self, idx: int):
