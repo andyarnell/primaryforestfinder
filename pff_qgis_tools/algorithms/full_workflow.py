@@ -567,6 +567,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     # ISO3 country code prefix for output filenames (Option D / P1.13).
     # Optional; when blank, the prefix is omitted from filenames.
     ISO3_PREFIX = "ISO3_PREFIX"
+    # Batch 30: optional sub-national / ecosystem area name. Inserted
+    # between ISO3 and year in output filenames when set; e.g.
+    # KEN_aberdares_district_2020_qgis_04a_primary_forest.tif. Free-
+    # form (sanitised by utils._sanitise_label), max 16 chars in the
+    # dock. ISO3 stays a strict 3-letter code so CRS suggestion +
+    # filename-sanity checks keep working.
+    REGION_LABEL = "REGION_LABEL"
     # Custom human-use disturbance slots (3, all optional, all FlagAdvanced).
     # Each slot has a raster input, a user-editable label (shown in logs +
     # metadata), and a per-slot buffer distance. Plumbed through prepare /
@@ -951,6 +958,13 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterString(
             self.ISO3_PREFIX,
             "00 Country: ISO3 prefix (e.g. 'KEN'; leave blank to omit)",
+            defaultValue="",
+            optional=True))
+        # Batch 30: optional sub-national / ecosystem area name.
+        self.addParameter(QgsProcessingParameterString(
+            self.REGION_LABEL,
+            "00 Country: Sub-national area name (optional; e.g. "
+            "'aberdares_district', 'coastal_ecosystem'; max 16 chars)",
             defaultValue="",
             optional=True))
         # P1.30 batch 20a.3: time-period tag (metadata-only).
@@ -1355,7 +1369,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.15.0"
+    PFF_VERSION = "0.15.1"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1372,16 +1386,20 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         _year_tag = (self.parameterAsString(
             parameters, self.YEAR, context) or "").strip() or "2020"
         feedback.pushInfo(f"Year tag: {_year_tag}")
-        # P1.30 batch 20j: AOI-name auto-prefix dropped. The 20c bet
-        # was that users would name their AOI vectors descriptively
-        # (e.g. "bhutan_aberdares") but real prepared data has noisy
-        # mechanical names (e.g. "BTN_0_aoi_bhutan_vector_16h03m") that
-        # produce ugly output filenames. Disambiguation now lives in
-        # the user-controlled output folder name. _aoi_label is kept as
-        # an empty placeholder so the generate_layer_name() signature
-        # still works; future batches can re-enable via a manual
-        # "Run label" field if needed.
-        _aoi_label = ""
+        # P1.30 batch 20j: AOI-name auto-prefix dropped (mechanical-
+        # noise problem on real data).
+        # Batch 30: re-enable the slot via an explicit user-typed
+        # Region / Area name. ISO3 stays a strict 3-letter code so
+        # CRS suggestion + filename-sanity checks keep working. The
+        # `_aoi_label` variable name is kept (it's wired through every
+        # _out() call) — only the SOURCE of the value changes.
+        _aoi_label = (self.parameterAsString(
+            parameters, self.REGION_LABEL, context) or "").strip()
+        # Sanitisation (lowercase snake-case) is handled by
+        # generate_layer_name() via utils._sanitise_label.
+        if _aoi_label:
+            feedback.pushInfo(
+                f"Sub-national / ecosystem area name: {_aoi_label}")
 
         # Per-stage timing. _stage() closes the previous stage timer and
         # opens a new one; _close_last_stage() flushes the final stage
@@ -3662,13 +3680,18 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             # SAVE flag. When SAVE=False the layer file lives in
             # scratch (cleaned up post-run); loading it to map would
             # produce a broken layer reference. Skip those.
+            _fra_tag = (
+                "" if parameters.get("TREE_COVER_MODE") == "fra"
+                else " (non-FRA-aligned)")
             _forest_top_path = _out("02c", "forest")
             if save_02b_forest and os.path.exists(_forest_top_path):
-                _layers_to_load.append(("Forest", _forest_top_path))
+                _layers_to_load.append(
+                    ("Forest" + _fra_tag, _forest_top_path))
             if (save_02d_nrf and forest_natreg_path is not None
                     and os.path.exists(forest_natreg_path)):
                 _layers_to_load.append(
-                    ("Naturally regenerating forest", forest_natreg_path))
+                    ("Naturally regenerating forest" + _fra_tag,
+                     forest_natreg_path))
             if save_03c_pre_conn and os.path.exists(candidate_path):
                 _layers_to_load.append(
                     ("Pre-connectivity forest", candidate_path))

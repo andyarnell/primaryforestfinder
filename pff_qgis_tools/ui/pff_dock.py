@@ -61,20 +61,21 @@ from ..defaults import (
 )
 
 
-# Tree-cover input-category options — copied verbatim from the GEE app
-# (pff_4.js:3670-3673) so screenshots and workshop materials line up
-# 1:1 across both tools. The dropdown drives:
+# Tree-cover input-category options. Colon separates the FRA category
+# name from the short description. Tooltips (set in
+# _build_section_2_tree_cover) provide dataset-focused detail + FRA
+# definition on hover. The dropdown drives:
 #   1. visibility of OLWTC + Planted-forest sub-controls
 #   2. the EXCLUDE_AGRICULTURE_FROM_FOREST + EXCLUDE_PLANTATIONS booleans
 INPUT_CATEGORY_TREECOVER = (
-    "Tree cover (includes oil palm, orchards, agroforestry etc)")
+    "Tree cover: includes oil palm, orchards, agroforestry etc")
 INPUT_CATEGORY_FOREST = (
-    "Forest (excludes other land with tree cover e.g. oil palm, "
-    "orchards, agroforestry etc)")
+    "Forest: excludes other land with tree cover e.g. oil palm, "
+    "orchards, agroforestry etc")
 INPUT_CATEGORY_NRF = (
-    "Naturally regenerating forest (also excludes planted forest)")
+    "Naturally regenerating forest: also excludes planted forest")
 INPUT_CATEGORY_PRIMARY = (
-    "Primary forest (for comparison/further analysis)")
+    "Primary forest: for comparison / further analysis")
 
 
 # Path for the dock-local recent-runs history file. Lives under the
@@ -87,6 +88,8 @@ def _history_path() -> str:
 
 
 _HISTORY_MAX_ENTRIES = 50
+
+INPUT_CATEGORY_PLACEHOLDER = "— Select one —"
 
 INPUT_CATEGORY_ITEMS = [
     INPUT_CATEGORY_TREECOVER,
@@ -558,8 +561,58 @@ class PffDockWidget(QgsDockWidget):
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._iso3_edit.setMinimumWidth(0)
         self._iso3_edit.editingFinished.connect(self._on_aoi_or_iso3_changed)
+        # Live CRS-suggestion rebuild as the user types ISO3, not just
+        # on focus-loss/Enter. pyproj's query is fast enough (~50ms);
+        # without this the dropdown stays empty until the user tabs
+        # away from the field, which feels broken.
+        self._iso3_edit.textChanged.connect(self._on_aoi_or_iso3_changed)
         self._iso3_edit.textChanged.connect(self._refresh_prefix_preview)
         form.addRow("ISO3:", self._iso3_edit)
+
+        # Batch 30: optional sub-national / ecosystem area name.
+        # Tickbox is hidden until ticked; reveals an Area name field
+        # whose value gets inserted between ISO3 and year in output
+        # filenames. ISO3 stays a strict 3-letter code so CRS
+        # suggestion + filename-sanity checks keep working alongside.
+        self._use_subnational_chk = QCheckBox("Sub-national AOI?")
+        self._use_subnational_chk.setToolTip(
+            "Reveals an 'Area name:' field added to output filenames.")
+        self._use_subnational_chk.toggled.connect(
+            self._on_subnational_toggled)
+        form.addRow("", self._use_subnational_chk)
+
+        self._region_edit = QLineEdit()
+        self._region_edit.setMaxLength(16)
+        self._region_edit.setPlaceholderText(
+            "e.g. aberdares_district, coastal_ecosystem")
+        self._region_edit.setToolTip(
+            "Free-form name for the sub-national area you're running. "
+            "Lowercase letters, digits and underscores; spaces and "
+            "special characters auto-convert. Max 16 chars. Inserted "
+            "between ISO3 and year in output filenames, e.g. "
+            "KEN_aberdares_district_2020_qgis_04a_primary_forest.tif.")
+        self._region_edit.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self._region_edit.setMinimumWidth(0)
+        self._region_edit.textChanged.connect(self._refresh_prefix_preview)
+        form.addRow("Area name:", self._region_edit)
+
+        self._region_tip = QLabel(
+            "<i>Tip: aberdares_district, coastal_ecosystem, "
+            "mekong_basin, tarangire_park, pilot_north, sites_2026</i>")
+        self._region_tip.setStyleSheet("color:#888;")
+        self._region_tip.setWordWrap(True)
+        self._region_tip.setMinimumWidth(0)
+        self._region_tip.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred)
+        form.addRow("", self._region_tip)
+
+        # Track the row indices of the two rows that hide/show with
+        # the tickbox. _on_subnational_toggled walks them by index.
+        self._subnational_row_indices = (
+            form.rowCount() - 2,  # Area name row
+            form.rowCount() - 1,  # tip row
+        )
 
         # Batch 27.2: Output folder lives in §6 Outputs (where it sat
         # before 27.1 briefly tried moving it here). Tip below points
@@ -642,6 +695,11 @@ class PffDockWidget(QgsDockWidget):
         sec._content_outer_layout.addWidget(adv)
 
         self._sections_layout.addWidget(sec)
+        # Batch 30: collapse the Sub-national rows to match the
+        # default-unticked checkbox state. (The rows are added to
+        # the form above so we can capture their indices; this call
+        # hides them until the user ticks.)
+        self._on_subnational_toggled(self._use_subnational_chk.isChecked())
 
     def _on_aoi_or_iso3_changed(self, *_):
         """AOI path or ISO3 changed -- refresh prefix preview AND
@@ -721,8 +779,7 @@ class PffDockWidget(QgsDockWidget):
             bool(suggestions) or bool(recents) or self._chosen_crs is not None)
 
         if not has_anything:
-            placeholder = QStandardItem(
-                "(no CRS selected — set AOI or ISO3, or type/browse)")
+            placeholder = QStandardItem("— Select one —")
             placeholder.setData(self._CRS_ROLE_NONE, Qt.UserRole)
             placeholder.setSelectable(False)
             placeholder.setEnabled(False)
@@ -944,8 +1001,11 @@ class PffDockWidget(QgsDockWidget):
         """Render the live output-filename prefix preview in §0.
 
         Shows what `BTN_2020_qgis_04a_primary_forest.tif` will actually
-        look like given the current ISO3 + year inputs. P1.30 batch 20j:
-        the AOI layer name no longer feeds the prefix.
+        look like given the current ISO3 + year inputs. P1.30 batch 20j
+        dropped the AOI-layer-name auto-feed; Batch 30 re-enables the
+        slot via the explicit Sub-national AOI? tickbox + Area name
+        field. When the tickbox is ticked, both forms are previewed
+        side-by-side so the user sees what the area name buys them.
         """
         try:
             from ..utils import generate_layer_name, PLATFORM_QGIS
@@ -968,12 +1028,60 @@ class PffDockWidget(QgsDockWidget):
         else:
             year = year_text or None
         try:
-            sample = generate_layer_name(
+            sample_no_region = generate_layer_name(
                 iso3, PLATFORM_QGIS, "04a", "primary_forest",
                 ext="tif", year=year)
         except Exception:
-            sample = "—"
-        self._prefix_preview.setText(f"Prefix preview: {sample}")
+            sample_no_region = "—"
+        # Batch 30: dual-line preview when sub-national tickbox is on.
+        sub_on = (hasattr(self, "_use_subnational_chk")
+                  and self._use_subnational_chk.isChecked())
+        if sub_on:
+            region = (self._region_edit.text().strip()
+                      if hasattr(self, "_region_edit") else "")
+            try:
+                sample_with_region = generate_layer_name(
+                    iso3, PLATFORM_QGIS, "04a", "primary_forest",
+                    ext="tif", year=year, aoi_label=region)
+            except Exception:
+                sample_with_region = "—"
+            self._prefix_preview.setText(
+                f"Prefix preview:<br>"
+                f"&nbsp;&nbsp;Without area name: {sample_no_region}<br>"
+                f"&nbsp;&nbsp;With area name:&nbsp;&nbsp;&nbsp; "
+                f"{sample_with_region}")
+        else:
+            self._prefix_preview.setText(
+                f"Prefix preview: {sample_no_region}")
+
+    def _on_subnational_toggled(self, on: bool):
+        """Batch 30: show / hide the Area name + tip rows when the
+        Sub-national AOI? tickbox flips. Walks the form by row index
+        and toggles widget visibility so the rows fully collapse
+        (not just grey out)."""
+        from qgis.PyQt.QtWidgets import QFormLayout
+        if not hasattr(self, "_subnational_row_indices"):
+            return
+        # Find the section's form layout via the Area-name widget's
+        # parent. (The form is local to _build_section_0_study_area;
+        # we don't keep a direct reference, but the row indices we
+        # captured are valid for that form.)
+        form = self._region_edit.parentWidget().layout()
+        if not isinstance(form, QFormLayout):
+            return
+        for idx in self._subnational_row_indices:
+            for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+                item = form.itemAt(idx, role)
+                if item is None:
+                    continue
+                w = item.widget()
+                if w is not None:
+                    w.setVisible(on)
+        if not on:
+            # Clear the field when collapsed so empty state matches
+            # the empty-string state in collected params.
+            self._region_edit.clear()
+        self._refresh_prefix_preview()
 
     def _build_section_1_time_period(self):
         sec = CollapsibleSection("1. Time Period", expanded=False)
@@ -1073,7 +1181,16 @@ class PffDockWidget(QgsDockWidget):
         self._sections_layout.addWidget(sec)
 
     def _current_year_text(self) -> str:
-        """Single source of truth for the YEAR param string."""
+        """Single source of truth for the YEAR param string.
+
+        Defensive: returns "" when called BEFORE §1 has been built
+        (e.g. from §0 initial-toggle handlers during dock construction).
+        Section build order is §0 -> §1 -> ..., so §0 wiring that
+        triggers a prefix-preview refresh would otherwise hit
+        AttributeError on `_year_all_since_2000`.
+        """
+        if not hasattr(self, "_year_all_since_2000"):
+            return ""
         if self._year_all_since_2000.isChecked():
             return "all"
         if self._multi_year_chk.isChecked():
@@ -1120,72 +1237,243 @@ class PffDockWidget(QgsDockWidget):
 
     def _build_section_2_tree_cover(self):
         sec = CollapsibleSection("2. Tree Cover", expanded=False)
-        form = _form()
+        body = QVBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(4)
 
+        # --- Forest / tree-cover raster picker ---
+        raster_form = _form()
         self._forest_raster = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.RasterLayer,
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
-            browse_caption="Pick forest raster")
-        form.addRow("Forest raster *:", self._forest_raster)
+            browse_caption="Pick tree cover / forest raster")
+        raster_form.addRow("Tree cover / forest raster *:", self._forest_raster)
+        body.addLayout(raster_form)
 
+        # --- FRA-aligned checkbox ---
+        self._fra_aligned = QCheckBox("FRA-aligned?")
+        self._fra_aligned.setToolTip(
+            "Align categories with FAO Forest Resources\n"
+            "Assessment (FRA 2025) definitions.\n\n"
+            "When ticked, choose your input type so the\n"
+            "tool shows which exclusion steps apply.")
+        body.addWidget(self._fra_aligned)
+
+        # FRA-only: input type dropdown (indented)
+        fra_row = QHBoxLayout()
+        fra_row.setContentsMargins(22, 0, 0, 0)
+        self._fra_input_type_label = QLabel("Select input type:")
+        self._fra_input_type_label.setStyleSheet(
+            "color: #555; font-size: 11px;")
+        self._fra_input_type_label.setToolTip(
+            "Select which FRA category matches your input data")
+        fra_row.addWidget(self._fra_input_type_label)
         self._input_category = QComboBox()
+        self._input_category.addItem(INPUT_CATEGORY_PLACEHOLDER)
         for it in INPUT_CATEGORY_ITEMS:
             self._input_category.addItem(it)
-        # P1.30 batch 21: cap combo's reported sizeHint width so the
-        # full GEE-verbatim string ("Tree cover (includes oil palm,
-        # orchards, agroforestry etc)") doesn't force the form field
-        # column to ~450 px — which would clip the LayerOrFilePicker
-        # browse buttons in nearby rows. The combo can still show the
-        # full text at runtime; the dropdown is unaffected.
         self._input_category.setSizeAdjustPolicy(
             QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self._input_category.setMinimumContentsLength(15)
         self._input_category.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self._input_category.currentIndexChanged.connect(
-            self._on_input_category_changed)
-        form.addRow("My tree cover\nrepresents:", self._input_category)
+        fra_row.addWidget(self._input_category, 1)
+        _tooltips = {
+            INPUT_CATEGORY_TREECOVER: (
+                "• Excludes: nothing — all land with tree cover,\n"
+                "  regardless of land use.\n\n"
+                "• FRA definition: Land spanning more than\n"
+                "  0.5 ha with trees higher than 5 m and\n"
+                "  canopy cover >10%, or trees able to reach\n"
+                "  these thresholds in situ."),
+            INPUT_CATEGORY_FOREST: (
+                "• Excludes: Other Land with Tree Cover (OLTC)\n"
+                "  — oil palm, orchards, agroforestry, urban\n"
+                "  trees etc.\n\n"
+                "• FRA definition: Land spanning more than\n"
+                "  0.5 ha with trees higher than 5 m and\n"
+                "  canopy cover >10%, or trees able to reach\n"
+                "  these thresholds in situ, where land use\n"
+                "  is forest. Excludes tree stands in\n"
+                "  agricultural production systems and\n"
+                "  urban parks."),
+            INPUT_CATEGORY_NRF: (
+                "• Excludes: planted forest — eucalyptus,\n"
+                "  pine, teak, timber/pulp/fibre etc.\n\n"
+                "• FRA definition: Forest predominantly\n"
+                "  composed of trees established through\n"
+                "  natural regeneration. Includes forests\n"
+                "  where it is not possible to distinguish\n"
+                "  whether planted or naturally regenerated.\n"
+                "  Includes coppice from trees originally\n"
+                "  established through natural regeneration."),
+            INPUT_CATEGORY_PRIMARY: (
+                "• Input is already primary forest — no\n"
+                "  further exclusions apply. Human\n"
+                "  influence removal (§3) still runs.\n\n"
+                "• FRA definition: Naturally regenerating\n"
+                "  forest of native tree species, where there\n"
+                "  are no clearly visible indications of human\n"
+                "  activities and the ecological processes are\n"
+                "  not significantly disturbed."),
+        }
+        for i in range(self._input_category.count()):
+            txt = self._input_category.itemText(i)
+            if txt in _tooltips:
+                self._input_category.setItemData(
+                    i, _tooltips[txt], Qt.ToolTipRole)
+        body.addLayout(fra_row)
 
-        # OLTC group (variable names keep "olwtc" prefix for backwards-
-        # compat with saved Recent Runs; only display strings change)
-        self._olwtc_label = QLabel("OLTC raster:")
+        # Separator (between data inputs and refine groups)
+        self._refine_sep = QWidget()
+        self._refine_sep.setFixedHeight(1)
+        self._refine_sep.setStyleSheet("background-color: #ddd;")
+        body.addWidget(self._refine_sep)
+
+        # --- Create intermediate layers toggle ---
+        self._create_intermediate = QCheckBox("Refine input?")
+        self._create_intermediate.setToolTip(
+            "Save each exclusion step as a separate output\n"
+            "layer, useful for comparing against primary\n"
+            "forest extent or FRA reporting categories.\n\n"
+            "Primary forest is still created either way —\n"
+            "these intermediate layers are optional extras.")
+        body.addWidget(self._create_intermediate)
+
+        self._refine_input_hint = QLabel("Creates intermediate layer(s) (optional)")
+        self._refine_input_hint.setStyleSheet(
+            "color: #666; font-size: 10px; font-style: italic;"
+            " margin-left: 22px;")
+        body.addWidget(self._refine_input_hint)
+
+        # --- Refine to forest ---
+        self._olwtc_refine = QCheckBox("Refine to forest")
+        self._olwtc_refine.setToolTip(
+            "Exclude other land with tree cover (OLTC)\n"
+            "— e.g. oil palm, orchards, agroforestry.")
+        self._olwtc_refine.setChecked(False)
+        self._olwtc_refine.setStyleSheet("margin-left: 18px;")
+        body.addWidget(self._olwtc_refine)
+
+        olwtc_row = QHBoxLayout()
+        olwtc_row.setContentsMargins(40, 0, 0, 0)
+        self._olwtc_label = QLabel("Other land with tree cover:")
+        self._olwtc_label.setStyleSheet("color: #555; font-size: 11px;")
+        self._olwtc_label.setToolTip(
+            "Binary raster masking areas like oil palm,\n"
+            "orchards, and agroforestry that have tree\n"
+            "cover but are not classified as forest\n"
+            "under FRA definitions.")
+        olwtc_row.addWidget(self._olwtc_label)
         self._olwtc_raster = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.RasterLayer,
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
             browse_caption="Pick OLTC raster")
-        self._olwtc_refine = QCheckBox("Refine to forest (exclude OLTC)")
-        self._olwtc_refine.setChecked(True)
-        form.addRow(self._olwtc_label, self._olwtc_raster)
-        form.addRow("", self._olwtc_refine)
+        olwtc_row.addWidget(self._olwtc_raster, 1)
+        body.addLayout(olwtc_row)
 
-        # Planted forest group
+        # --- Refine to naturally regenerating forest ---
+        self._planted_refine = QCheckBox(
+            "Refine to naturally regenerating forest")
+        self._planted_refine.setToolTip(
+            "Exclude planted forest\n"
+            "— e.g. eucalyptus, pine, teak, timber/pulp/fibre.")
+        self._planted_refine.setChecked(False)
+        self._planted_refine.setStyleSheet("margin-left: 18px;")
+        body.addWidget(self._planted_refine)
+
+        planted_row = QHBoxLayout()
+        planted_row.setContentsMargins(40, 0, 0, 0)
         self._planted_label = QLabel("Planted forest:")
+        self._planted_label.setStyleSheet("color: #555; font-size: 11px;")
+        self._planted_label.setToolTip(
+            "Binary raster masking planted forest\n"
+            "— e.g. eucalyptus, pine, teak, and other\n"
+            "timber, pulp, or fibre plantations.")
+        planted_row.addWidget(self._planted_label)
         self._planted_raster = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.RasterLayer,
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
             browse_caption="Pick planted-forest raster")
-        self._planted_refine = QCheckBox(
-            "Refine to NRF (exclude planted forest)")
-        self._planted_refine.setChecked(True)
-        form.addRow(self._planted_label, self._planted_raster)
-        form.addRow("", self._planted_refine)
+        planted_row.addWidget(self._planted_raster, 1)
+        body.addLayout(planted_row)
 
-        sec.set_content_layout(form)
+        sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
 
-        self._on_input_category_changed()  # set initial visibility
+        # Wire signals
+        self._fra_aligned.toggled.connect(self._update_refine_visibility)
+        self._create_intermediate.toggled.connect(
+            self._update_refine_visibility)
+        self._input_category.currentIndexChanged.connect(
+            self._update_refine_visibility)
+        self._update_refine_visibility()
 
-    def _on_input_category_changed(self):
+    def _update_refine_visibility(self):
+        fra = self._fra_aligned.isChecked()
+        intermediate = self._create_intermediate.isChecked()
+
+        # Dynamic checkbox labels — match GEE pff_4.js updateRefineVisibility()
+        self._olwtc_refine.setText(
+            "Refine to forest" if fra
+            else "Exclude other land with tree cover")
+        self._planted_refine.setText(
+            "Refine to naturally regenerating forest" if fra
+            else "Exclude planted forest")
+
+        # FRA-only widgets
+        self._fra_input_type_label.setVisible(fra)
+        self._input_category.setVisible(fra)
+
+        # Grey out "Create intermediate" when FRA input is NRF or Primary
+        # (nothing left to refine).
+        if fra:
+            cat = self._input_category.currentText()
+            no_refine_possible = cat in (INPUT_CATEGORY_NRF,
+                                         INPUT_CATEGORY_PRIMARY)
+            self._create_intermediate.setEnabled(not no_refine_possible)
+            self._refine_input_hint.setVisible(not no_refine_possible)
+            if no_refine_possible:
+                self._create_intermediate.setChecked(False)
+                intermediate = False
+        else:
+            self._create_intermediate.setEnabled(True)
+            self._refine_input_hint.setVisible(True)
+
+        if not intermediate:
+            self._refine_sep.setVisible(False)
+            for w in (self._olwtc_refine,
+                      self._olwtc_label, self._olwtc_raster,
+                      self._planted_refine,
+                      self._planted_label, self._planted_raster):
+                w.setVisible(False)
+            self._olwtc_refine.setChecked(False)
+            self._planted_refine.setChecked(False)
+            return
+
+        if not fra:
+            self._refine_sep.setVisible(True)
+            for w in (self._olwtc_refine,
+                      self._olwtc_label, self._olwtc_raster,
+                      self._planted_refine,
+                      self._planted_label, self._planted_raster):
+                w.setVisible(True)
+            self._olwtc_refine.setChecked(True)
+            self._planted_refine.setChecked(True)
+            return
+
+        # FRA + intermediate: conditional on input type
         cat = self._input_category.currentText()
+        is_placeholder = (cat == INPUT_CATEGORY_PLACEHOLDER)
         show_olwtc = (cat == INPUT_CATEGORY_TREECOVER)
         show_planted = show_olwtc or (cat == INPUT_CATEGORY_FOREST)
-        for w in (self._olwtc_label, self._olwtc_raster, self._olwtc_refine):
+        self._refine_sep.setVisible(not is_placeholder)
+        for w in (self._olwtc_refine,
+                  self._olwtc_label, self._olwtc_raster):
             w.setVisible(show_olwtc)
-        for w in (self._planted_label, self._planted_raster,
-                  self._planted_refine):
+        for w in (self._planted_refine,
+                  self._planted_label, self._planted_raster):
             w.setVisible(show_planted)
-        # Functional: when input is already filtered, the corresponding
-        # refine checkbox flips OFF so the run doesn't double-subtract.
         if not show_olwtc:
             self._olwtc_refine.setChecked(False)
         if not show_planted:
@@ -3270,7 +3558,13 @@ class PffDockWidget(QgsDockWidget):
     def _validate(self):
         issues = []
         if not self._forest_raster.path():
-            issues.append("Forest raster (§2) is required.")
+            issues.append("Tree cover / forest raster (§2) is required.")
+        if (self._fra_aligned.isChecked()
+                and self._input_category.currentText()
+                == INPUT_CATEGORY_PLACEHOLDER):
+            issues.append(
+                "FRA-aligned is ticked but no input type "
+                "has been chosen (§2). Select what your data represents.")
         if not self._output_folder.filePath():
             issues.append("Output folder (§1) is required.")
         return issues
@@ -3281,6 +3575,13 @@ class PffDockWidget(QgsDockWidget):
         # §0 Study Area
         params[FW.AOI] = self._aoi_picker.path() or None
         params[FW.ISO3_PREFIX] = self._iso3_edit.text().strip()
+        # Batch 30: sub-national / ecosystem area name. Empty when the
+        # Sub-national AOI? tickbox is off.
+        params[FW.REGION_LABEL] = (
+            self._region_edit.text().strip()
+            if (hasattr(self, "_use_subnational_chk")
+                and self._use_subnational_chk.isChecked())
+            else "")
         params[FW.OUTPUT_FOLDER] = self._output_folder.filePath()
         # P1.30 batch 20b.1: AUTO_UTM is deprecated. The dock never
         # ticks it; the algorithm ignores the parameter at run time.
@@ -3310,6 +3611,9 @@ class PffDockWidget(QgsDockWidget):
         params[FW.YEAR] = self._current_year_text() or "2020"
 
         # §2 Tree Cover
+        params["TREE_COVER_MODE"] = (
+            "fra" if self._fra_aligned.isChecked() else "simple")
+        params["INPUT_CATEGORY"] = self._input_category.currentText()
         params[FW.FOREST_RASTER] = self._forest_raster.path()
         params[FW.FRA_AGRICULTURE_RASTER] = (
             self._olwtc_raster.path() or None)
@@ -4139,6 +4443,16 @@ class PffDockWidget(QgsDockWidget):
         # §0
         self._aoi_picker.set_path(s(FW.AOI))
         self._iso3_edit.setText(s(FW.ISO3_PREFIX))
+        # Batch 30: restore Region/Area name. Tick the Sub-national
+        # AOI? checkbox iff a non-empty value was saved; otherwise
+        # leave it unticked + field hidden.
+        _saved_region = s(FW.REGION_LABEL)
+        if _saved_region:
+            self._use_subnational_chk.setChecked(True)
+            self._region_edit.setText(_saved_region)
+        else:
+            self._use_subnational_chk.setChecked(False)
+            self._region_edit.clear()
         self._output_folder.setFilePath(s(FW.OUTPUT_FOLDER))
         # P1.30 batch 20b.1: AUTO_UTM is deprecated and the dock no
         # longer has a checkbox for it. Saved values are ignored.
@@ -4183,12 +4497,21 @@ class PffDockWidget(QgsDockWidget):
         self._year_stack.setEnabled(not is_all)
 
         # §2
+        _tc_mode = p.get("TREE_COVER_MODE", "simple")
+        self._fra_aligned.setChecked(_tc_mode == "fra")
+        _saved_cat = p.get("INPUT_CATEGORY", INPUT_CATEGORY_PLACEHOLDER)
+        idx = self._input_category.findText(_saved_cat)
+        self._input_category.setCurrentIndex(idx if idx >= 0 else 0)
         self._forest_raster.set_path(s(FW.FOREST_RASTER))
         self._olwtc_raster.set_path(s(FW.FRA_AGRICULTURE_RASTER))
+        _has_refine = (b(FW.EXCLUDE_AGRICULTURE_FROM_FOREST, False)
+                       or b(FW.EXCLUDE_PLANTATIONS, False))
+        self._create_intermediate.setChecked(_has_refine)
         self._olwtc_refine.setChecked(b(FW.EXCLUDE_AGRICULTURE_FROM_FOREST,
-                                        True))
+                                        False))
         self._planted_raster.set_path(s(FW.PLANTATIONS_RASTER))
-        self._planted_refine.setChecked(b(FW.EXCLUDE_PLANTATIONS, True))
+        self._planted_refine.setChecked(b(FW.EXCLUDE_PLANTATIONS, False))
+        self._update_refine_visibility()
 
         # §3
         self._roads_picker.set_path(
