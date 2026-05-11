@@ -3620,7 +3620,14 @@
     _updatingRefineVis = false;
   }
 
-  updateRefineVisibility();
+  // NOTE: initial call to updateRefineVisibility() deferred until after
+  // the new §2 layout panels (inputDefinitionPanel,
+  // refineSubsectionContent, olwtcCreatesHint, plantedCreatesHint) and
+  // enableTreeCoverCustomCheckbox are defined further down. The function
+  // now references those widgets unconditionally, so calling it here
+  // (before they exist) throws "Cannot read property 'getValue' of
+  // undefined". See the call at L3848-ish (next to
+  // updateGlobalForestInputsVisibility() initial sync).
 
   // Helper: a hidden exclusion checkbox should never apply, even if its
   // underlying value is still `true`. Used at every analysis branch
@@ -3845,6 +3852,13 @@
   // updateRefineVisibility(). Placed after treeCoverContent so
   // treecoverSourceRow / globalSourceHiddenNote are in scope.
   updateGlobalForestInputsVisibility();
+
+  // Initial sync of the refine subsection state. Deferred to here
+  // (rather than at the end of the function definition) because the
+  // function body references enableTreeCoverCustomCheckbox,
+  // olwtcCreatesHint, and plantedCreatesHint — all defined between
+  // the function and this call site.
+  updateRefineVisibility();
 
   var treeCoverToggle = ui.Button({
     label: '▶ 2. Tree Cover',
