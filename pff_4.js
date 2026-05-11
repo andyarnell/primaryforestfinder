@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.15.7-beta.1";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.1";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -860,6 +860,7 @@
     ui: {
       datesCollapsed: true,
       treeCoverCollapsed: true,
+      refineInputCollapsed: true,
       anthropogenicCollapsed: true,
       limitedAccessCollapsed: true,
       connectivityCollapsed: true,
@@ -3475,7 +3476,7 @@
   function updateFraDefLabel() {
     var v = inputCategorySelect.getValue();
     var defs = {};
-    defs[INPUT_CATEGORY_ALL]     = 'FRA: Land >0.5 ha, trees >5 m, canopy >10%, any land use';
+    defs[INPUT_CATEGORY_ALL]     = 'Not an FRA category — entry point for the FRA cascade. Forest + OLTC combined (≥5 m, ≥10% canopy, ≥0.5 ha) without land-use filter.';
     defs[INPUT_CATEGORY_FOREST]  = 'FRA: As above, but land use is forest — excludes agricultural/urban tree stands';
     defs[INPUT_CATEGORY_NATREG]  = 'FRA: Forest of trees established through natural regeneration';
     defs[INPUT_CATEGORY_PRIMARY] = 'FRA: Naturally regenerating, native species, no visible human activity';
@@ -3486,8 +3487,8 @@
   var fraDefsPanel = ui.Panel({
     widgets: [
       ui.Label('FRA 2025 definitions:', {fontWeight: 'bold', fontSize: '10px', margin: '2px 0 2px 4px'}),
-      ui.Label('Tree cover', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Land >0.5 ha, trees >5 m, canopy >10%, any land use', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Tree cover (FRA cascade entry — not a FRA category)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
+      ui.Label('Sum of Forest + OLTC. FRA threshold (≥5 m, ≥10% canopy, ≥0.5 ha) applied without a land-use filter.', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('As above, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
@@ -3542,72 +3543,79 @@
     if (_updatingRefineVis) return;
     _updatingRefineVis = true;
 
-    var fra = fraAlignedCheckbox.getValue();
-    var refine = refineInputCheckbox.getValue();
+    // New scheme: dropdown is the single gate. Empty (placeholder)
+    // means no FRA declaration → no intermediate layers surface.
+    // Declared category drives exclusion-toggle auto-tick + ↳ creates
+    // hint visibility. fraAlignedCheckbox + refineInputCheckbox are
+    // kept hidden + synced from the dropdown so existing runtime
+    // callers (stats panel, export logic, exclusionActive) continue
+    // to work without rewriting.
+    var cat = inputCategorySelect.getValue();
+    var declared = !!cat && cat !== '';
 
-    fraInputSection.style().set('shown', fra);
+    var intermediatesPossible = declared
+        && cat !== INPUT_CATEGORY_NATREG
+        && cat !== INPUT_CATEGORY_PRIMARY;
+    fraAlignedCheckbox.setValue(declared, false);
+    refineInputCheckbox.setValue(intermediatesPossible, false);
 
-    if (fra) {
-      updateFraDefLabel();
-      var cat = inputCategorySelect.getValue();
-      var noRefine = (cat === INPUT_CATEGORY_NATREG || cat === INPUT_CATEGORY_PRIMARY);
-      if (noRefine) {
-        refineInputCheckbox.setValue(false);
-        refine = false;
-        var catName = (cat === INPUT_CATEGORY_NATREG)
-          ? 'Naturally regenerating forest' : 'Primary forest';
-        noRefineNote.setValue(catName + ' — no refinement needed');
-        noRefineNote.style().set('shown', true);
-      } else {
-        noRefineNote.style().set('shown', false);
-      }
-      refineInputHint.style().set('shown', !noRefine);
-    } else {
-      refineInputHint.style().set('shown', true);
-      noRefineNote.style().set('shown', false);
+    updateFraDefLabel();
+
+    // OLTC widgets visible unless input is past the OLTC step.
+    // - Placeholder: visible (user may tick toggles freely; no
+    //   intermediate surfaces because not declared)
+    // - Tree cover: visible
+    // - Forest / NRF / Primary: hidden (OLTC irrelevant)
+    var showOlwtc = !declared || (cat === INPUT_CATEGORY_ALL);
+    // Planted widgets visible unless input is past the planted step.
+    var showPlanted = !declared
+        || (cat === INPUT_CATEGORY_ALL)
+        || (cat === INPUT_CATEGORY_FOREST);
+
+    var customOn = enableTreeCoverCustomCheckbox.getValue();
+    excludeAgriPanel.style().set('shown', showOlwtc);
+    nationalOLWTC.setShown(customOn && showOlwtc);
+    includePlantationsPanel.style().set('shown', showPlanted);
+    nationalPlantations.setShown(customOn && showPlanted);
+
+    // ↳ creates hints — visible only when the toggle would actually
+    // produce a valid FRA intermediate layer given the declaration.
+    olwtcCreatesHint.style().set('shown',
+        cat === INPUT_CATEGORY_ALL);
+    plantedCreatesHint.style().set('shown',
+        cat === INPUT_CATEGORY_ALL || cat === INPUT_CATEGORY_FOREST);
+
+    // Auto-tick exclusion checkboxes per category. Placeholder leaves
+    // toggles alone — user has full control.
+    if (cat === INPUT_CATEGORY_ALL) {
+      excludeAgricultureFromForestCheckbox.setValue(true, false);
+      includePlantationsCheckbox.setValue(true, false);
+    } else if (cat === INPUT_CATEGORY_FOREST) {
+      excludeAgricultureFromForestCheckbox.setValue(false, false);
+      includePlantationsCheckbox.setValue(true, false);
+    } else if (cat === INPUT_CATEGORY_NATREG
+            || cat === INPUT_CATEGORY_PRIMARY) {
+      excludeAgricultureFromForestCheckbox.setValue(false, false);
+      includePlantationsCheckbox.setValue(false, false);
     }
 
-    if (!refine) {
-      refineSep.style().set('shown', false);
-      excludeAgriPanel.style().set('shown', false);
-      includePlantationsPanel.style().set('shown', false);
-      nationalOLWTC.setShown(false);
-      nationalPlantations.setShown(false);
-      excludeAgricultureFromForestCheckbox.setValue(false);
-      includePlantationsCheckbox.setValue(false);
-    } else if (!fra) {
-      refineSep.style().set('shown', true);
-      excludeAgriPanel.style().set('shown', true);
-      includePlantationsPanel.style().set('shown', true);
-      var customOn = enableTreeCoverCustomCheckbox.getValue();
-      nationalOLWTC.setShown(customOn);
-      nationalPlantations.setShown(customOn);
-      excludeAgricultureFromForestCheckbox.setValue(true);
-      includePlantationsCheckbox.setValue(true);
-    } else {
-      var v = inputCategorySelect.getValue();
-      var showOlwtc   = (v === INPUT_CATEGORY_ALL);
-      var showPlanted = showOlwtc || (v === INPUT_CATEGORY_FOREST);
-      var customOn = enableTreeCoverCustomCheckbox.getValue();
-
-      refineSep.style().set('shown', true);
-      excludeAgriPanel.style().set('shown', showOlwtc);
-      includePlantationsPanel.style().set('shown', showPlanted);
-      nationalOLWTC.setShown(customOn && showOlwtc);
-      nationalPlantations.setShown(customOn && showPlanted);
-
-      if (!showOlwtc)   excludeAgricultureFromForestCheckbox.setValue(false);
-      if (!showPlanted) includePlantationsCheckbox.setValue(false);
-    }
-
+    // Stable labels (no FRA / non-FRA branching). Match QGIS plugin.
     excludeAgricultureFromForestCheckbox.setLabel(
-      fra ? 'Refine to forest' : 'Exclude other land with tree cover');
-    includePlantationsCheckbox.setLabel(
-      fra ? 'Refine to naturally regenerating forest' : 'Exclude planted forest');
+      'Exclude OLTC (oil palm / orchards / agroforestry)');
+    includePlantationsCheckbox.setLabel('Exclude planted forest');
     exportChk_inputForest.setLabel(
-      fra ? 'Forest' : 'Forest (non-FRA)');
+      declared ? 'Forest' : 'Forest (non-FRA)');
     exportChk_naturallyRegenerating.setLabel(
-      fra ? 'Naturally regenerating forest' : 'NRF (non-FRA)');
+      declared ? 'Naturally regenerating forest' : 'NRF (non-FRA)');
+
+    // Hidden / no-op legacy widgets — never visible in the new UI.
+    fraInputSection.style().set('shown', true); // it's inside the
+                                                // collapsible subsection
+                                                // so collapse already
+                                                // hides it
+    refineInputHint.style().set('shown', false);
+    noRefineNote.style().set('shown', false);
+    refineSep.style().set('shown', false);
 
     _updatingRefineVis = false;
   }
@@ -3621,6 +3629,14 @@
   // on the wrapper (so checkbox + hint label hide together), so we must
   // read the wrapper's shown state, not the bare checkbox.
   function exclusionActive(checkbox, wrapper) {
+    // Change F (GEE port): exclusions inside the collapsed "Refine
+    // input (optional, experimental)" subsection should never count
+    // as active. The wrapper panel's `shown` flag is per-widget and
+    // doesn't inherit from the collapsed ancestor, so check the
+    // subsection state explicitly.
+    if (appState && appState.ui && appState.ui.refineInputCollapsed) {
+      return false;
+    }
     var visTarget = wrapper || checkbox;
     return visTarget.style().get('shown') !== false && checkbox.getValue();
   }
@@ -3699,25 +3715,87 @@
   });
   nationalForest.panel.style().set({shown: false});
 
-  var treeCoverContent = ui.Panel({
+  // ── §2 restructure (Change A + C, GEE port) ───────────────────────
+  // Source + threshold + custom-forest widgets go inside a bordered
+  // "Tree-cover input definition" panel. FRA dropdown + exclusion
+  // toggles go inside a collapsible "Refine input (optional,
+  // experimental)" subsection, closed by default. fraAlignedCheckbox
+  // and refineInputCheckbox are removed from the visible UI but
+  // remain in scope so existing runtime callers (stats / exports /
+  // exclusionActive) keep working — synced from the dropdown by
+  // updateRefineVisibility.
+  // ───────────────────────────────────────────────────────────────────
+
+  var inputDefinitionPanel = ui.Panel({
     widgets: [
-      ui.Label('Define Tree Cover:', {fontWeight: 'bold', margin: '0 0 4px 0'}),
+      ui.Label('Tree-cover input definition', {
+        fontWeight: 'bold', fontSize: '11px',
+        margin: '0 0 4px 0', color: '#444'}),
       treecoverSourceRow,
       treecoverPanel,
       treecoverHeightPanel,
       globalSourceHiddenNote,
-      fraAlignedCheckbox,
-      fraInputSection,
-      refineInputCheckbox,
-      refineInputHint,
-      noRefineNote,
-      refineSep,
-      excludeAgriPanel,
-      nationalOLWTC.panel,
-      includePlantationsPanel,
-      nationalPlantations.panel,
       enableTreeCoverCustomCheckbox,
       nationalForest.panel
+    ],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {border: '1px solid #d0d0d0', backgroundColor: '#fafafa',
+            margin: '0 0 6px 0', padding: '6px'}
+  });
+
+  // ↳ creates "Forest" intermediate layer — italic helper shown only
+  // when Tree cover declared (and so a Forest intermediate becomes
+  // valid). Mirrors the QGIS plugin's _olwtc_creates_hint.
+  var olwtcCreatesHint = ui.Label(
+    '↳ creates "Forest" intermediate layer',
+    {fontSize: '10px', color: '#666', fontStyle: 'italic',
+     margin: '0 0 2px 22px', shown: false});
+
+  // ↳ creates "Naturally regenerating forest" intermediate layer —
+  // shown when Tree cover or Forest declared.
+  var plantedCreatesHint = ui.Label(
+    '↳ creates "Naturally regenerating forest" intermediate layer',
+    {fontSize: '10px', color: '#666', fontStyle: 'italic',
+     margin: '0 0 2px 22px', shown: false});
+
+  var refineSubsectionContent = ui.Panel({
+    widgets: [
+      fraInputSection,
+      excludeAgriPanel,
+      olwtcCreatesHint,
+      nationalOLWTC.panel,
+      includePlantationsPanel,
+      plantedCreatesHint,
+      nationalPlantations.panel
+    ],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {shown: false, margin: '0 0 0 6px'}
+  });
+
+  var refineSubsectionToggle = ui.Button({
+    label: '▶ Refine input (optional, experimental)',
+    onClick: function() {
+      appState.ui.refineInputCollapsed = !appState.ui.refineInputCollapsed;
+      refineSubsectionContent.style().set({
+        shown: !appState.ui.refineInputCollapsed});
+      refineSubsectionToggle.setLabel(
+        (appState.ui.refineInputCollapsed ? '▶ ' : '▼ ')
+        + 'Refine input (optional, experimental)');
+      // Re-evaluate downstream visibility — collapsed state changes
+      // exclusionActive() results, so stats / map gating must refresh.
+      if (typeof markNeedsUpdate === 'function') markNeedsUpdate();
+    },
+    style: {stretch: 'horizontal', textAlign: 'left',
+            padding: '2px 6px', margin: '2px 0',
+            backgroundColor: '#f6f6f6'}
+  });
+
+  var treeCoverContent = ui.Panel({
+    widgets: [
+      ui.Label('Define Tree Cover:', {fontWeight: 'bold', margin: '0 0 4px 0'}),
+      inputDefinitionPanel,
+      refineSubsectionToggle,
+      refineSubsectionContent
     ],
     style: {shown: false, padding: '8px'}
   });

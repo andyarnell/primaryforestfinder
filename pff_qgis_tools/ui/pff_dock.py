@@ -28,7 +28,7 @@ from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QStandardItem, QStandardItemModel, QTextCursor
 from qgis.PyQt.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
+    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter,
     QTextEdit, QToolButton, QVBoxLayout, QWidget
 )
@@ -1243,33 +1243,49 @@ class PffDockWidget(QgsDockWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(4)
 
-        # --- Forest / tree-cover raster picker ---
+        # ── Group box: Tree-cover input definition ──────────────────
+        input_def = QGroupBox("Tree-cover input definition")
+        input_def_layout = QVBoxLayout()
+        input_def_layout.setContentsMargins(6, 6, 6, 6)
         raster_form = _form()
         self._forest_raster = LayerOrFilePicker(
             layer_filter=QgsMapLayerProxyModel.RasterLayer,
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
             browse_caption="Pick tree cover / forest raster")
         raster_form.addRow("Tree cover / forest raster *:", self._forest_raster)
-        body.addLayout(raster_form)
+        input_def_layout.addLayout(raster_form)
+        input_def.setLayout(input_def_layout)
+        body.addWidget(input_def)
 
-        # --- FRA-aligned checkbox ---
-        self._fra_aligned = QCheckBox("FRA-aligned")
-        self._fra_aligned.setToolTip(
-            "Align categories with FAO Forest Resources\n"
-            "Assessment (FRA 2025) definitions.\n\n"
-            "When ticked, choose your input type so the\n"
-            "tool shows which exclusion steps apply.")
-        body.addWidget(self._fra_aligned)
+        # ── Hidden backward-compat widgets ──────────────────────────
+        # FRA-aligned checkbox removed from UI; derived from dropdown
+        # selection. Kept as hidden widget so _collect_params / _validate /
+        # _apply_params logic continues working without rewriting.
+        self._fra_aligned = QCheckBox()
+        self._fra_aligned.setVisible(False)
+        # _create_intermediate (master "Refine input" toggle) removed from
+        # UI; the collapsible subsection's expansion state replaces it.
+        # Kept as hidden widget for _apply_params compatibility.
+        self._create_intermediate = QCheckBox()
+        self._create_intermediate.setVisible(False)
 
-        # FRA-only: input type dropdown (indented)
-        fra_row = QHBoxLayout()
-        fra_row.setContentsMargins(22, 0, 0, 0)
-        self._fra_input_type_label = QLabel("Select input type:")
+        # ── Collapsible: Refine input (optional) ────────────────────
+        refine_sec = CollapsibleSection(
+            "Refine input (optional, experimental)", expanded=False)
+        refine_body = QVBoxLayout()
+        refine_body.setContentsMargins(0, 0, 0, 0)
+        refine_body.setSpacing(4)
+
+        # FRA category dropdown
+        cat_row = QHBoxLayout()
+        self._fra_input_type_label = QLabel(
+            "FRA category (for naming + intermediates):")
         self._fra_input_type_label.setStyleSheet(
             "color: #555; font-size: 11px;")
         self._fra_input_type_label.setToolTip(
-            "Select which FRA category matches your input data")
-        fra_row.addWidget(self._fra_input_type_label)
+            "Pick the FRA category that matches your input data.\n"
+            "Leave on '— Select one —' to skip FRA refinement entirely.")
+        cat_row.addWidget(self._fra_input_type_label)
         self._input_category = QComboBox()
         self._input_category.addItem(INPUT_CATEGORY_PLACEHOLDER)
         for it in INPUT_CATEGORY_ITEMS:
@@ -1279,15 +1295,16 @@ class PffDockWidget(QgsDockWidget):
         self._input_category.setMinimumContentsLength(15)
         self._input_category.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
-        fra_row.addWidget(self._input_category, 1)
+        cat_row.addWidget(self._input_category, 1)
         _tooltips = {
             INPUT_CATEGORY_TREECOVER: (
                 "• Excludes: nothing — all land with tree cover,\n"
                 "  regardless of land use.\n\n"
-                "• FRA definition: Land spanning more than\n"
-                "  0.5 ha with trees higher than 5 m and\n"
-                "  canopy cover >10%, or trees able to reach\n"
-                "  these thresholds in situ."),
+                "• Not an FRA category — entry point for the\n"
+                "  FRA cascade. Equivalent to Forest + Other\n"
+                "  Land with Tree Cover (OLTC) combined: the\n"
+                "  FRA threshold (≥5 m height, ≥10% canopy,\n"
+                "  ≥0.5 ha) applied without a land-use filter."),
             INPUT_CATEGORY_FOREST: (
                 "• Excludes: Other Land with Tree Cover (OLTC)\n"
                 "  — oil palm, orchards, agroforestry, urban\n"
@@ -1324,42 +1341,29 @@ class PffDockWidget(QgsDockWidget):
             if txt in _tooltips:
                 self._input_category.setItemData(
                     i, _tooltips[txt], Qt.ToolTipRole)
-        body.addLayout(fra_row)
+        refine_body.addLayout(cat_row)
 
-        # Separator (between data inputs and refine groups)
-        self._refine_sep = QWidget()
-        self._refine_sep.setFixedHeight(1)
-        self._refine_sep.setStyleSheet("background-color: #ddd;")
-        body.addWidget(self._refine_sep)
-
-        # --- Create intermediate layers toggle ---
-        self._create_intermediate = QCheckBox("Refine input")
-        self._create_intermediate.setToolTip(
-            "Save each exclusion step as a separate output\n"
-            "layer, useful for comparing against primary\n"
-            "forest extent or FRA reporting categories.\n\n"
-            "Primary forest is still created either way —\n"
-            "these intermediate layers are optional extras.")
-        body.addWidget(self._create_intermediate)
-
-        self._refine_input_hint = QLabel("Creates intermediate layer(s) (optional)")
-        self._refine_input_hint.setStyleSheet(
-            "color: #666; font-size: 10px; font-style: italic;"
-            " margin-left: 22px;")
-        body.addWidget(self._refine_input_hint)
-
-        # --- Refine to forest ---
-        self._olwtc_refine = QCheckBox("Refine to forest")
+        # --- Exclude OLTC (oil palm / orchards / agroforestry) ---
+        self._olwtc_refine = QCheckBox(
+            "Exclude OLTC (oil palm / orchards / agroforestry)")
         self._olwtc_refine.setToolTip(
             "Exclude other land with tree cover (OLTC)\n"
             "— e.g. oil palm, orchards, agroforestry.")
         self._olwtc_refine.setChecked(False)
-        self._olwtc_refine.setStyleSheet("margin-left: 18px;")
-        body.addWidget(self._olwtc_refine)
+        refine_body.addWidget(self._olwtc_refine)
+
+        # Helper hint: shown only when Tree cover declared
+        self._olwtc_creates_hint = QLabel(
+            '↳ creates "Forest" intermediate layer')
+        self._olwtc_creates_hint.setStyleSheet(
+            "color: #666; font-size: 10px; font-style: italic;"
+            " margin-left: 22px;")
+        self._olwtc_creates_hint.setVisible(False)
+        refine_body.addWidget(self._olwtc_creates_hint)
 
         olwtc_row = QHBoxLayout()
-        olwtc_row.setContentsMargins(40, 0, 0, 0)
-        self._olwtc_label = QLabel("Other land with tree cover:")
+        olwtc_row.setContentsMargins(22, 0, 0, 0)
+        self._olwtc_label = QLabel("OLTC raster:")
         self._olwtc_label.setStyleSheet("color: #555; font-size: 11px;")
         self._olwtc_label.setToolTip(
             "Binary raster masking areas like oil palm,\n"
@@ -1372,21 +1376,28 @@ class PffDockWidget(QgsDockWidget):
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
             browse_caption="Pick OLTC raster")
         olwtc_row.addWidget(self._olwtc_raster, 1)
-        body.addLayout(olwtc_row)
+        refine_body.addLayout(olwtc_row)
 
-        # --- Refine to naturally regenerating forest ---
-        self._planted_refine = QCheckBox(
-            "Refine to naturally regenerating forest")
+        # --- Exclude planted forest ---
+        self._planted_refine = QCheckBox("Exclude planted forest")
         self._planted_refine.setToolTip(
             "Exclude planted forest\n"
             "— e.g. eucalyptus, pine, teak, timber/pulp/fibre.")
         self._planted_refine.setChecked(False)
-        self._planted_refine.setStyleSheet("margin-left: 18px;")
-        body.addWidget(self._planted_refine)
+        refine_body.addWidget(self._planted_refine)
+
+        # Helper hint: shown when Tree cover or Forest declared
+        self._planted_creates_hint = QLabel(
+            '↳ creates "Naturally regenerating forest" intermediate layer')
+        self._planted_creates_hint.setStyleSheet(
+            "color: #666; font-size: 10px; font-style: italic;"
+            " margin-left: 22px;")
+        self._planted_creates_hint.setVisible(False)
+        refine_body.addWidget(self._planted_creates_hint)
 
         planted_row = QHBoxLayout()
-        planted_row.setContentsMargins(40, 0, 0, 0)
-        self._planted_label = QLabel("Planted forest:")
+        planted_row.setContentsMargins(22, 0, 0, 0)
+        self._planted_label = QLabel("Planted forest raster:")
         self._planted_label.setStyleSheet("color: #555; font-size: 11px;")
         self._planted_label.setToolTip(
             "Binary raster masking planted forest\n"
@@ -1398,88 +1409,99 @@ class PffDockWidget(QgsDockWidget):
             file_filter="Raster (*.tif *.tiff *.img *.vrt);;All (*.*)",
             browse_caption="Pick planted-forest raster")
         planted_row.addWidget(self._planted_raster, 1)
-        body.addLayout(planted_row)
+        refine_body.addLayout(planted_row)
+
+        # Mount the Refine subsection inside §2 body
+        refine_sec.set_content_layout(refine_body)
+        body.addWidget(refine_sec)
+        self._refine_subsection = refine_sec
+
+        # Hidden backward-compat: _refine_sep and _refine_input_hint were
+        # visible widgets previously; kept hidden so any code touching them
+        # doesn't error.
+        self._refine_sep = QWidget()
+        self._refine_sep.setVisible(False)
+        self._refine_input_hint = QLabel("")
+        self._refine_input_hint.setVisible(False)
 
         sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
 
-        # Wire signals
-        self._fra_aligned.toggled.connect(self._update_refine_visibility)
-        self._create_intermediate.toggled.connect(
-            self._update_refine_visibility)
+        # Wire signals — dropdown drives auto-tick + visibility.
         self._input_category.currentIndexChanged.connect(
-            self._update_refine_visibility)
+            self._on_input_category_changed)
+        self._update_refine_visibility()
+
+    def _on_input_category_changed(self):
+        """Signal handler for dropdown changes — auto-ticks toggles per
+        category, then refreshes widget visibility.
+
+        Called only when the dropdown index actually changes (user action
+        or programmatic setCurrentIndex). _apply_params relies on the
+        signal firing during dropdown restore, then explicitly overrides
+        the saved toggle state, then calls _update_refine_visibility()
+        for the final visibility pass (which does NOT auto-tick).
+        """
+        cat = self._input_category.currentText()
+        if cat == INPUT_CATEGORY_TREECOVER:
+            self._olwtc_refine.setChecked(True)
+            self._planted_refine.setChecked(True)
+        elif cat == INPUT_CATEGORY_FOREST:
+            self._olwtc_refine.setChecked(False)
+            self._planted_refine.setChecked(True)
+        elif cat in (INPUT_CATEGORY_NRF, INPUT_CATEGORY_PRIMARY):
+            self._olwtc_refine.setChecked(False)
+            self._planted_refine.setChecked(False)
+        # Placeholder: leave toggles alone — user has full control.
         self._update_refine_visibility()
 
     def _update_refine_visibility(self):
-        fra = self._fra_aligned.isChecked()
-        intermediate = self._create_intermediate.isChecked()
+        """Refresh widget visibility from the current FRA dropdown.
 
-        # Dynamic checkbox labels — match GEE pff_4.js updateRefineVisibility()
-        self._olwtc_refine.setText(
-            "Refine to forest" if fra
-            else "Exclude other land with tree cover")
-        self._planted_refine.setText(
-            "Refine to naturally regenerating forest" if fra
-            else "Exclude planted forest")
+        Does NOT auto-tick toggles — that lives in _on_input_category_changed
+        so _apply_params can restore saved toggle states without being
+        overwritten by a final visibility pass.
 
-        # FRA-only widgets
-        self._fra_input_type_label.setVisible(fra)
-        self._input_category.setVisible(fra)
+        - Empty dropdown ("— Select one —"): both toggles visible
+          (freely tickable); no intermediate-creation hints shown.
+        - Tree cover declared: both toggles visible; both hints shown.
+        - Forest declared: OLTC hidden; Planted visible; NRF hint shown.
+        - NRF / Primary declared: both toggles hidden.
 
-        # Grey out "Create intermediate" when FRA input is NRF or Primary
-        # (nothing left to refine).
-        if fra:
-            cat = self._input_category.currentText()
-            no_refine_possible = cat in (INPUT_CATEGORY_NRF,
-                                         INPUT_CATEGORY_PRIMARY)
-            self._create_intermediate.setEnabled(not no_refine_possible)
-            self._refine_input_hint.setVisible(not no_refine_possible)
-            if no_refine_possible:
-                self._create_intermediate.setChecked(False)
-                intermediate = False
-        else:
-            self._create_intermediate.setEnabled(True)
-            self._refine_input_hint.setVisible(True)
-
-        if not intermediate:
-            self._refine_sep.setVisible(False)
-            for w in (self._olwtc_refine,
-                      self._olwtc_label, self._olwtc_raster,
-                      self._planted_refine,
-                      self._planted_label, self._planted_raster):
-                w.setVisible(False)
-            self._olwtc_refine.setChecked(False)
-            self._planted_refine.setChecked(False)
-            return
-
-        if not fra:
-            self._refine_sep.setVisible(True)
-            for w in (self._olwtc_refine,
-                      self._olwtc_label, self._olwtc_raster,
-                      self._planted_refine,
-                      self._planted_label, self._planted_raster):
-                w.setVisible(True)
-            self._olwtc_refine.setChecked(True)
-            self._planted_refine.setChecked(True)
-            return
-
-        # FRA + intermediate: conditional on input type
+        Hidden backward-compat widgets _fra_aligned and _create_intermediate
+        are synced from the dropdown so _collect_params / _validate /
+        _apply_params keep working without rewriting.
+        """
         cat = self._input_category.currentText()
         is_placeholder = (cat == INPUT_CATEGORY_PLACEHOLDER)
-        show_olwtc = (cat == INPUT_CATEGORY_TREECOVER)
-        show_planted = show_olwtc or (cat == INPUT_CATEGORY_FOREST)
-        self._refine_sep.setVisible(not is_placeholder)
-        for w in (self._olwtc_refine,
-                  self._olwtc_label, self._olwtc_raster):
+        declared = not is_placeholder
+
+        # Sync hidden backward-compat widgets.
+        self._fra_aligned.setChecked(declared)
+        intermediates_possible = declared and (
+            cat not in (INPUT_CATEGORY_NRF, INPUT_CATEGORY_PRIMARY))
+        self._create_intermediate.setChecked(intermediates_possible)
+
+        # OLTC widgets: visible unless input is already past OLTC step.
+        show_olwtc = is_placeholder or (cat == INPUT_CATEGORY_TREECOVER)
+        # Planted widgets: visible unless input is already past planted step.
+        show_planted = is_placeholder or (cat in (
+            INPUT_CATEGORY_TREECOVER, INPUT_CATEGORY_FOREST))
+
+        for w in (self._olwtc_refine, self._olwtc_label, self._olwtc_raster):
             w.setVisible(show_olwtc)
-        for w in (self._planted_refine,
-                  self._planted_label, self._planted_raster):
+        for w in (self._planted_refine, self._planted_label,
+                  self._planted_raster):
             w.setVisible(show_planted)
-        if not show_olwtc:
-            self._olwtc_refine.setChecked(False)
-        if not show_planted:
-            self._planted_refine.setChecked(False)
+
+        # "↳ creates X intermediate layer" helper hints — visible only
+        # when the toggle would actually produce a valid FRA layer:
+        # - OLTC hint visible only when Tree cover declared (creates Forest)
+        # - Planted hint visible when Tree cover or Forest declared (creates NRF)
+        self._olwtc_creates_hint.setVisible(
+            cat == INPUT_CATEGORY_TREECOVER)
+        self._planted_creates_hint.setVisible(
+            cat in (INPUT_CATEGORY_TREECOVER, INPUT_CATEGORY_FOREST))
 
     def _build_section_3_human_influence(self):
         sec = CollapsibleSection("3. Human Influence", expanded=False)
@@ -4476,12 +4498,20 @@ class PffDockWidget(QgsDockWidget):
                     self._year_single_combo.setCurrentText("2020")
         self._year_stack.setEnabled(not is_all)
 
-        # §2
+        # §2 — backward-compat mapping for saved settings:
+        #   TREE_COVER_MODE: "simple"  → dropdown = placeholder (no FRA)
+        #   TREE_COVER_MODE: "fra"     → dropdown = saved INPUT_CATEGORY
+        # Old _fra_aligned and _create_intermediate booleans no longer
+        # control the UI directly; they are derived from the dropdown.
         _tc_mode = p.get("TREE_COVER_MODE", "simple")
-        self._fra_aligned.setChecked(_tc_mode == "fra")
-        _saved_cat = p.get("INPUT_CATEGORY", INPUT_CATEGORY_PLACEHOLDER)
-        idx = self._input_category.findText(_saved_cat)
-        self._input_category.setCurrentIndex(idx if idx >= 0 else 0)
+        if _tc_mode == "fra":
+            _saved_cat = p.get("INPUT_CATEGORY", INPUT_CATEGORY_PLACEHOLDER)
+            idx = self._input_category.findText(_saved_cat)
+            self._input_category.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            # "simple" mode = no FRA declaration. Force placeholder
+            # regardless of stale INPUT_CATEGORY value in the saved file.
+            self._input_category.setCurrentIndex(0)
         self._forest_raster.set_path(s(FW.FOREST_RASTER))
         self._olwtc_raster.set_path(s(FW.FRA_AGRICULTURE_RASTER))
         _has_refine = (b(FW.EXCLUDE_AGRICULTURE_FROM_FOREST, False)
