@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.5";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.6";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -4373,7 +4373,7 @@
     {key: 'forestOutsideBuffers',  color: '#4caf50', label: 'Pre-refinement primary',   group: 'Forest'},
     {key: 'naturallyRegenerating', color: '#81c784', label: 'Naturally regenerating forest', group: 'Forest'},
     {key: 'forest',                color: '#90EE90', label: 'Forest',                   group: 'Forest'},
-    {key: 'treeCover',             color: '#c8e6c9', label: 'Input: Tree cover',        group: 'Forest'},
+    {key: 'treeCover',             color: '#c8e6c9', label: 'Input',                    group: 'Forest'},
     {key: 'plantations',           color: '#d4a017', label: 'Planted forest',           group: 'Forest'},
     {key: 'agriBuffer',          color: '#ffcc00', label: 'Buffer: Agriculture',    group: 'Human Influence'},
     {key: 'roadSmallBuffer',     color: '#ff6600', label: 'Buffer: Roads',          group: 'Human Influence'},
@@ -4414,6 +4414,7 @@
         'Primary Forest': 'primaryForest',
         'Primary forest': 'primaryForest',
         'Pre-refinement primary': 'forestOutsideBuffers',
+        'Input': 'treeCover',
         'Input: Tree cover': 'treeCover',
         'Forest': 'forest',
         'Naturally regenerating forest': 'naturallyRegenerating',
@@ -5604,7 +5605,7 @@
         'Buffer: Roads', 'Buffer: Small Built-up', 'Buffer: Large Built-up',
         'Buffer: Agriculture', 'Input: Roads', 'Input: Small Built-up',
         'Input: Large Built-up', 'Input: Agriculture', 'Planted forest',
-        'Input: Tree cover', 'Forest',
+        'Input', 'Input: Tree cover', 'Forest',
         'Naturally regenerating forest',
         'Pre-refinement primary',
         // legacy name kept so users with stale projects can still see
@@ -5631,6 +5632,7 @@
         'Primary Forest': 'primaryForest',
         'Primary forest': 'primaryForest',
         'Pre-refinement primary': 'forestOutsideBuffers',
+        'Input': 'treeCover',
         'Input: Tree cover': 'treeCover',
         'Forest': 'forest',
         'Naturally regenerating forest': 'naturallyRegenerating',
