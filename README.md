@@ -35,7 +35,6 @@ Download the latest zip from [`dist/`](dist/) and install in QGIS via
 - **[QGIS_Plugin_Walkthrough.md](docs/workshop/QGIS_Plugin_Walkthrough.md)** - step-by-step QGIS plugin follow-along
 - **[QGIS_Plugin_Workshop_Onepager.md](docs/workshop/QGIS_Plugin_Workshop_Onepager.md)** - compact QGIS reference handout (+ .docx)
 - **[datasets_workshop_reference.md](docs/workshop/datasets_workshop_reference.md)** - full dataset info + citations (+ .docx)
-- **[datasets_workshop_handout.md](docs/workshop/datasets_workshop_handout.md)** - 2-page simple datasets handout (+ .docx)
 
 ### Other reference docs
 
