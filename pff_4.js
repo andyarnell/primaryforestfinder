@@ -3715,11 +3715,24 @@
 
   // P1.24: status note that appears in the gap left by the hidden global
   // controls when custom forest replaces them. Default hidden.
-  var globalSourceHiddenNote = ui.Label(
-    'Global tree-cover source not in use — Replace global option selected.',
-    {fontSize: '10px', color: '#a04040', fontStyle: 'italic',
-    fontWeight: 'bold', margin: '4px 0 4px 4px', shown: false}
-  );
+  // GEE ui.Label can't mix bold and non-bold inline, so split into a
+  // 3-label horizontal panel: lead text + bold "Replace global" + tail.
+  // All three share the warn-style red + italic; only the middle label
+  // adds bold so the option name pops.
+  var _warnStyleBase = {fontSize: '10px', color: '#a04040',
+                        fontStyle: 'italic', margin: '4px 0 4px 0'};
+  var _warnStyleBold = {fontSize: '10px', color: '#a04040',
+                        fontStyle: 'italic', fontWeight: 'bold',
+                        margin: '4px 0 4px 0'};
+  var globalSourceHiddenNote = ui.Panel({
+    widgets: [
+      ui.Label('Global tree-cover source not in use — ', _warnStyleBase),
+      ui.Label('Replace global', _warnStyleBold),
+      ui.Label(' option selected.', _warnStyleBase)
+    ],
+    layout: ui.Panel.Layout.flow('horizontal'),
+    style: {margin: '0 0 0 4px', shown: false}
+  });
 
   var enableTreeCoverCustomCheckbox = ui.Checkbox({
     label: 'Enable custom data inputs',
