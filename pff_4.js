@@ -3716,9 +3716,9 @@
   // P1.24: status note that appears in the gap left by the hidden global
   // controls when custom forest replaces them. Default hidden.
   var globalSourceHiddenNote = ui.Label(
-    'Global tree-cover source not in use — custom forest replaces it.',
-    {fontSize: '10px', color: '#666', fontStyle: 'italic',
-    margin: '4px 0 4px 4px', shown: false}
+    'Global tree-cover source not in use — Replace global option selected.',
+    {fontSize: '10px', color: '#a04040', fontStyle: 'italic',
+    fontWeight: 'bold', margin: '4px 0 4px 4px', shown: false}
   );
 
   var enableTreeCoverCustomCheckbox = ui.Checkbox({
