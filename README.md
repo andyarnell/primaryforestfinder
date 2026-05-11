@@ -6,6 +6,26 @@ Tools and data pipelines for identifying potential primary forest at national sc
 2. **QGIS Processing plugin** - [`pff_qgis_tools/`](pff_qgis_tools/) - desktop workflow for mixing national and global data, bespoke analysis, and offline use. See the [plugin README](pff_qgis_tools/README.md). Built zip in [`pff_qgis_tools/dist/`](pff_qgis_tools/dist/).
 3. **Data preprocessing notebooks** - OSM, Microsoft Roads, WDB and related extractors in [`preprocessing/`](preprocessing/).
 
+## Try the GEE app
+
+Two ways to access Primary Forest Finder in Google Earth Engine:
+
+1. **Browser app** — no account needed. Fastest way to explore.
+   → https://ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder
+2. **Code Editor script** — requires a (free) Google Earth Engine account.
+   Same tool plus you can save settings, export to Drive, and edit the script.
+   → https://code.earthengine.google.com/66503aadedcb379433227212fa3e29a6
+
+## Install the QGIS plugin
+
+Download the latest zip from [`dist/`](dist/) and install in QGIS via
+**Plugins → Manage and Install Plugins → Install from ZIP**.
+
+| Channel | Zip |
+|---|---|
+| Current (FRA UX restructure) | [`pff_qgis_tools_0.16.0-beta.10.zip`](dist/pff_qgis_tools_0.16.0-beta.10.zip) |
+| Stable fallback | [`pff_qgis_tools_0.15.1-beta.1.zip`](dist/pff_qgis_tools_0.15.1-beta.1.zip) |
+
 ## Documentation
 
 - **[docs/PFF_QGIS_Workshop_Guide_DRAFT.md](docs/PFF_QGIS_Workshop_Guide_DRAFT.md)** - end-user workshop guide (main doc + appendices)
