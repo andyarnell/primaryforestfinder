@@ -4785,7 +4785,7 @@
       style: {fontWeight: 'bold', fontSize: '10px', margin: '6px 0 2px 0'}
     });
     var assetInput = ui.Textbox({
-      placeholder: 'e.g. projects/my-project/assets/my-layer',
+      placeholder: 'asset path or gs:// URI',
       style: {fontSize: '10px', stretch: 'horizontal'}
     });
     var prepUi = createPreprocessingUi();
