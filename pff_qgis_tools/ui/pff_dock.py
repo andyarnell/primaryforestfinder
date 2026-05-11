@@ -1300,10 +1300,11 @@ class PffDockWidget(QgsDockWidget):
             INPUT_CATEGORY_TREECOVER: (
                 "• Excludes: nothing — all land with tree cover,\n"
                 "  regardless of land use.\n\n"
-                "• FRA definition: Land spanning more than\n"
-                "  0.5 ha with trees higher than 5 m and\n"
-                "  canopy cover >10%, or trees able to reach\n"
-                "  these thresholds in situ."),
+                "• Not an FRA category — entry point for the\n"
+                "  FRA cascade. Equivalent to Forest + Other\n"
+                "  Land with Tree Cover (OLTC) combined: the\n"
+                "  FRA threshold (≥5 m height, ≥10% canopy,\n"
+                "  ≥0.5 ha) applied without a land-use filter."),
             INPUT_CATEGORY_FOREST: (
                 "• Excludes: Other Land with Tree Cover (OLTC)\n"
                 "  — oil palm, orchards, agroforestry, urban\n"
@@ -1351,6 +1352,15 @@ class PffDockWidget(QgsDockWidget):
         self._olwtc_refine.setChecked(False)
         refine_body.addWidget(self._olwtc_refine)
 
+        # Helper hint: shown only when Tree cover declared
+        self._olwtc_creates_hint = QLabel(
+            '↳ creates "Forest" intermediate layer')
+        self._olwtc_creates_hint.setStyleSheet(
+            "color: #666; font-size: 10px; font-style: italic;"
+            " margin-left: 22px;")
+        self._olwtc_creates_hint.setVisible(False)
+        refine_body.addWidget(self._olwtc_creates_hint)
+
         olwtc_row = QHBoxLayout()
         olwtc_row.setContentsMargins(22, 0, 0, 0)
         self._olwtc_label = QLabel("OLTC raster:")
@@ -1375,6 +1385,15 @@ class PffDockWidget(QgsDockWidget):
             "— e.g. eucalyptus, pine, teak, timber/pulp/fibre.")
         self._planted_refine.setChecked(False)
         refine_body.addWidget(self._planted_refine)
+
+        # Helper hint: shown when Tree cover or Forest declared
+        self._planted_creates_hint = QLabel(
+            '↳ creates "Naturally regenerating forest" intermediate layer')
+        self._planted_creates_hint.setStyleSheet(
+            "color: #666; font-size: 10px; font-style: italic;"
+            " margin-left: 22px;")
+        self._planted_creates_hint.setVisible(False)
+        refine_body.addWidget(self._planted_creates_hint)
 
         planted_row = QHBoxLayout()
         planted_row.setContentsMargins(22, 0, 0, 0)
@@ -1455,6 +1474,15 @@ class PffDockWidget(QgsDockWidget):
         for w in (self._planted_refine, self._planted_label,
                   self._planted_raster):
             w.setVisible(show_planted)
+
+        # "↳ creates X intermediate layer" helper hints — visible only
+        # when the toggle would actually produce a valid FRA layer:
+        # - OLTC hint visible only when Tree cover declared (creates Forest)
+        # - Planted hint visible when Tree cover or Forest declared (creates NRF)
+        self._olwtc_creates_hint.setVisible(
+            cat == INPUT_CATEGORY_TREECOVER)
+        self._planted_creates_hint.setVisible(
+            cat in (INPUT_CATEGORY_TREECOVER, INPUT_CATEGORY_FOREST))
 
         # Auto-tick toggles based on category. When placeholder, leave the
         # toggles' current state alone — user has full control.
