@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.6";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.7";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -3157,23 +3157,31 @@
 
   showHideWdpaCheckboxes(false);
 
-  // Treecover threshold panels - compact inline layout
+  // Treecover threshold panels. Stacked vertically (label above
+  // slider) because the inline layout caused horizontal scrollbars
+  // on narrow left panels — workshop feedback (2026-05-12).
+  // The slider stretches to the panel width; the label sits on its
+  // own line above so it never gets cropped.
+  treecoverThresholdSlider.style().set('stretch', 'horizontal');
+  treecoverHeightThresholdSlider.style().set('stretch', 'horizontal');
   var treecoverPanel = ui.Panel({
-    layout: ui.Panel.Layout.flow('horizontal'),
+    layout: ui.Panel.Layout.flow('vertical'),
     widgets: [
-      ui.Label('Tree canopy threshold (%):', {margin: '6px 2px 0 0'}),
+      ui.Label('Tree canopy threshold (%):',
+               {fontSize: '11px', margin: '4px 0 0 0'}),
       treecoverThresholdSlider
     ],
-    style: {margin: '0px', shown: false}
+    style: {margin: '0', shown: false}
   });
 
   var treecoverHeightPanel = ui.Panel({
-    layout: ui.Panel.Layout.flow('horizontal'),
+    layout: ui.Panel.Layout.flow('vertical'),
     widgets: [
-      ui.Label('Tree height threshold (m):', {margin: '6px 2px 0 0'}),
+      ui.Label('Tree height threshold (m):',
+               {fontSize: '11px', margin: '4px 0 0 0'}),
       treecoverHeightThresholdSlider
     ],
-    style: {margin: '0px', shown: true}
+    style: {margin: '0', shown: true}
   });
 
   // Dropdown for treecover source. P1.23: "Custom Forest" was pulled out
@@ -3214,12 +3222,14 @@
   var excludeAgricultureFromForestCheckbox = ui.Checkbox({
     label: 'Refine to forest',
     value: true,
-    onChange: function() { markNeedsUpdate(); }
+    onChange: function() { markNeedsUpdate(); },
+    style: {fontSize: '11px'}
   });
-  var excludeAgriHint = ui.Label(
-    'Excludes other land with tree cover — e.g. oil palm, orchards, agroforestry',
-    {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 4px 22px'}
-  );
+  // Hint text removed (2026-05-12 workshop) — checkbox label now
+  // reads "Exclude other land with tree cover" inline. Kept as a
+  // hidden widget so updateRefineVisibility() still has the
+  // reference to manage (no NPEs elsewhere in the code).
+  var excludeAgriHint = ui.Label('', {shown: false});
   var excludeAgriPanel = ui.Panel({
     widgets: [excludeAgricultureFromForestCheckbox, excludeAgriHint],
     layout: ui.Panel.Layout.flow('vertical'),
@@ -3229,12 +3239,12 @@
   var includePlantationsCheckbox = ui.Checkbox({
     label: 'Refine to naturally regenerating forest',
     value: true,
-    onChange: function() { markNeedsUpdate(); }
+    onChange: function() { markNeedsUpdate(); },
+    style: {fontSize: '11px'}
   });
-  var includePlantationsHint = ui.Label(
-    'Excludes planted forest — e.g. eucalyptus, pine, teak',
-    {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '0 0 4px 22px'}
-  );
+  // Hint text removed (2026-05-12 workshop) — checkbox label now
+  // says "Exclude planted forest" inline.
+  var includePlantationsHint = ui.Label('', {shown: false});
   var includePlantationsPanel = ui.Panel({
     widgets: [includePlantationsCheckbox, includePlantationsHint],
     layout: ui.Panel.Layout.flow('vertical'),
@@ -3484,7 +3494,7 @@
   // the dropdown so users can undo a previous category pick. Workshop
   // feedback (2026-05-12): the placeholder-only approach trapped users
   // on whatever category they first picked.
-  var INPUT_CATEGORY_NONE = 'No FRA category alignment';
+  var INPUT_CATEGORY_NONE = 'No FRA alignment';
 
   var inputCategorySelect = ui.Select({
     items: [INPUT_CATEGORY_NONE,
@@ -3561,12 +3571,14 @@
             margin: '4px 0 4px 4px', padding: '4px'}
   });
 
+  // fraInputSection now contains just the dropdown + the contextual
+  // FRA-def label. The ⓘ FRA definitions button + the collapsible
+  // defs panel are mounted at the TOP of the Refine subsection
+  // (workshop feedback 2026-05-12).
   var fraInputSection = ui.Panel({
     widgets: [
       createCompactRow('FRA category:', inputCategorySelect),
-      fraDefLabel,
-      inputCategoryFraInfo,
-      fraDefsPanel
+      fraDefLabel
     ],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {margin: '0 0 0 0'}
@@ -3650,9 +3662,11 @@
       includePlantationsCheckbox.setValue(false, false);
     }
 
-    // Stable labels (no FRA / non-FRA branching). Match QGIS plugin.
+    // Stable labels (no FRA / non-FRA branching). Workshop feedback
+    // (2026-05-12): use plain "Exclude other land with tree cover"
+    // rather than the OLTC acronym — clearer to first-time users.
     excludeAgricultureFromForestCheckbox.setLabel(
-      'Exclude OLTC (oil palm / orchards / agroforestry)');
+      'Exclude other land with tree cover');
     includePlantationsCheckbox.setLabel('Exclude planted forest');
     exportChk_inputForest.setLabel(
       declared ? 'Forest' : 'Forest (non-FRA)');
@@ -3831,7 +3845,9 @@
 
   var refineSubsectionContent = ui.Panel({
     widgets: [
-      fraInputSection,
+      inputCategoryFraInfo,       // ⓘ FRA definitions button (top)
+      fraDefsPanel,               // collapsible definitions panel
+      fraInputSection,            // dropdown + contextual FRA-def label
       excludeAgriPanel,
       olwtcCreatesHint,
       nationalOLWTC.panel,
@@ -3863,7 +3879,8 @@
 
   var treeCoverContent = ui.Panel({
     widgets: [
-      ui.Label('Define Tree Cover:', {fontWeight: 'bold', margin: '0 0 4px 0'}),
+      ui.Label('Define Tree Cover:',
+               {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}),
       inputDefinitionPanel,
       refineSubsectionToggle,
       refineSubsectionContent
