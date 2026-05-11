@@ -4073,7 +4073,7 @@ class PffDockWidget(QgsDockWidget):
         year via filename glob. Inputs without a year token (DEM,
         slope, protected, AOI vector) are passed through unchanged.
         """
-        from ..utils_year_iter import build_year_paths
+        from ..utils_year_iter import build_year_paths, find_year_token
 
         # The set of param names whose values are file paths we want
         # to consider for year substitution. Output folder + ISO3 +
@@ -4088,7 +4088,32 @@ class PffDockWidget(QgsDockWidget):
             FW.ZONE_LAYER,
         ]
 
-        anchor_year = year_list[0]
+        # Anchor-year detection (Batch 30, fix 2026-05-12 workshop):
+        # if the loaded forest raster filename contains a year token
+        # that's also in the user's year_list, treat THAT as the
+        # anchor regardless of where it sits in year_list. Otherwise
+        # fall back to year_list[0].
+        #
+        # Why: previously anchor was always year_list[0]. If the user
+        # listed "2000, 2020" but loaded a *_2020_*.tif forest input,
+        # the year-2000 iteration treated the 2020 file as anchor
+        # data (anchor==target ⇒ no substitution) and silently used
+        # 2020 data for the "2000" output. Detecting the anchor from
+        # the filename auto-corrects this so list order doesn't matter.
+        _detected_anchor = None
+        _forest_path = base_params.get(FW.FOREST_RASTER) or ""
+        if _forest_path:
+            _tok = find_year_token(_forest_path)
+            if _tok and _tok in year_list:
+                _detected_anchor = _tok
+        anchor_year = _detected_anchor or year_list[0]
+        if _detected_anchor and _detected_anchor != year_list[0]:
+            feedback.pushInfo(
+                f"Anchor year auto-detected from forest filename: "
+                f"{_detected_anchor} (year list starts with "
+                f"{year_list[0]}, but the loaded forest input "
+                f"contains '{_detected_anchor}' — using that as "
+                f"anchor so year substitution finds the right files).")
         feedback.pushInfo(
             f"=== Multi-year run: {len(year_list)} years "
             f"({', '.join(year_list)}) ===")
@@ -4156,6 +4181,13 @@ class PffDockWidget(QgsDockWidget):
                     "Nothing to run.")
                 return
 
+        # Multi-year summary state (batch 30 workshop fix):
+        # per-year stats dict + overall elapsed timer for the
+        # consolidated table printed at the end.
+        import time as _time
+        multi_year_stats = {}
+        _multi_year_t0 = _time.time()
+
         # Iterate.
         for i, year in enumerate(year_list, start=1):
             if feedback.isCanceled():
@@ -4193,6 +4225,12 @@ class PffDockWidget(QgsDockWidget):
                 self._add_outputs_to_project(ctx)
                 # Batch 28.4: auto-chain validation per year if enabled.
                 self._run_ceo_chain_after_workflow(year, feedback)
+                # Batch 30 (workshop): capture per-year stats from the
+                # CSV so we can print a consolidated summary table at
+                # the end of the multi-year run.
+                _stats = self._read_year_totals_from_csv(year_params, year)
+                if _stats:
+                    multi_year_stats[year] = _stats
             except Exception as e:
                 if feedback.isCanceled():
                     feedback.pushWarning(
@@ -4203,6 +4241,120 @@ class PffDockWidget(QgsDockWidget):
                     "remaining years.")
         feedback.pushInfo(
             f"\n✔ Multi-year run complete ({len(year_list)} years).")
+        # Print consolidated stats table + total time + output folder.
+        self._print_multi_year_summary(
+            multi_year_stats, year_list,
+            base_params.get(FW.OUTPUT_FOLDER, "(unknown)"),
+            _time.time() - _multi_year_t0,
+            feedback)
+
+    def _read_year_totals_from_csv(self, year_params, year):
+        """Read a single year's 05a area-stats CSV and return a dict
+        of {stat_label: kha_value}. Returns None on any failure
+        (silent — multi-year summary just skips that year).
+
+        CSV format: one row per zone, optional final TOTAL row when
+        multiple zones. If TOTAL exists, use it; otherwise sum the
+        zone rows.
+        """
+        try:
+            import csv
+            out_folder = year_params.get(FW.OUTPUT_FOLDER) or ""
+            iso3 = (year_params.get(FW.ISO3_PREFIX) or "").strip().upper()
+            if not out_folder:
+                return None
+            # Filename pattern mirrors what full_workflow writes:
+            # {ISO3}_{year}_qgis_05a_area_statistics.csv (no ISO3 prefix
+            # if user didn't set ISO3_PREFIX).
+            if iso3:
+                fname = f"{iso3}_{year}_qgis_05a_area_statistics.csv"
+            else:
+                fname = f"qgis_{year}_05a_area_statistics.csv"
+            path = os.path.join(out_folder, fname)
+            if not os.path.exists(path):
+                return None
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                rows = list(csv.DictReader(f))
+            if not rows:
+                return None
+            # Prefer the TOTAL row if present.
+            total = next((r for r in rows
+                          if (r.get("zone_name") or "").upper() == "TOTAL"),
+                         None)
+            out = {}
+            if total:
+                for k, v in total.items():
+                    if k.endswith("_kha"):
+                        try:
+                            out[k] = float(v)
+                        except (TypeError, ValueError):
+                            pass
+            else:
+                for r in rows:
+                    for k, v in r.items():
+                        if k.endswith("_kha"):
+                            try:
+                                out[k] = out.get(k, 0.0) + float(v)
+                            except (TypeError, ValueError):
+                                pass
+            return out or None
+        except Exception:
+            return None
+
+    def _print_multi_year_summary(self, multi_year_stats, year_list,
+                                   output_folder, elapsed_seconds,
+                                   feedback):
+        """Print a consolidated multi-year stats table + run summary.
+
+        Skipped gracefully if no per-year stats were captured (e.g.
+        single-year run, or CSV reads failed).
+        """
+        feedback.pushInfo("\n=== Multi-year summary ===")
+        if multi_year_stats:
+            # Collect column labels in stable order (use whichever year
+            # has the most keys as the column source).
+            cols = []
+            for y in year_list:
+                for k in (multi_year_stats.get(y) or {}).keys():
+                    if k not in cols:
+                        cols.append(k)
+            # Pretty header labels (strip _kha).
+            headers = ["Year"] + [c[:-4] if c.endswith("_kha") else c
+                                  for c in cols]
+            # Build rows. Format numbers with thousands sep + 1 dp.
+            def _fmt(v):
+                try:
+                    return f"{float(v):,.1f}"
+                except (TypeError, ValueError):
+                    return "—"
+            data_rows = []
+            for y in year_list:
+                s = multi_year_stats.get(y) or {}
+                data_rows.append([y] + [_fmt(s.get(c)) for c in cols])
+            # Compute column widths.
+            widths = [
+                max(len(str(headers[i])),
+                    max((len(r[i]) for r in data_rows), default=0))
+                for i in range(len(headers))
+            ]
+            # Print header + separator + rows.
+            sep = "  ".join("-" * w for w in widths)
+            feedback.pushInfo("  " + "  ".join(
+                str(h).rjust(w) for h, w in zip(headers, widths)))
+            feedback.pushInfo("  " + sep)
+            for r in data_rows:
+                feedback.pushInfo("  " + "  ".join(
+                    str(cell).rjust(w) for cell, w in zip(r, widths)))
+            feedback.pushInfo("  (all values in kha)")
+        else:
+            feedback.pushInfo(
+                "  (no per-year stats captured — CSVs not readable)")
+        # Time + folder footer.
+        mins, secs = divmod(int(elapsed_seconds), 60)
+        feedback.pushInfo(
+            f"\nTotal time: {mins} min {secs} s "
+            f"({elapsed_seconds:.1f} s)")
+        feedback.pushInfo(f"Output folder: {output_folder}")
 
     # ────────────────────────────────────────────────────────────────
     # P1.30 batch 20j: project-bound context + add-to-map helpers
