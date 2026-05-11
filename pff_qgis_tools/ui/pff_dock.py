@@ -1427,23 +1427,46 @@ class PffDockWidget(QgsDockWidget):
         sec.set_content_layout(body)
         self._sections_layout.addWidget(sec)
 
-        # Wire signals — dropdown drives visibility/auto-tick.
+        # Wire signals — dropdown drives auto-tick + visibility.
         self._input_category.currentIndexChanged.connect(
-            self._update_refine_visibility)
+            self._on_input_category_changed)
+        self._update_refine_visibility()
+
+    def _on_input_category_changed(self):
+        """Signal handler for dropdown changes — auto-ticks toggles per
+        category, then refreshes widget visibility.
+
+        Called only when the dropdown index actually changes (user action
+        or programmatic setCurrentIndex). _apply_params relies on the
+        signal firing during dropdown restore, then explicitly overrides
+        the saved toggle state, then calls _update_refine_visibility()
+        for the final visibility pass (which does NOT auto-tick).
+        """
+        cat = self._input_category.currentText()
+        if cat == INPUT_CATEGORY_TREECOVER:
+            self._olwtc_refine.setChecked(True)
+            self._planted_refine.setChecked(True)
+        elif cat == INPUT_CATEGORY_FOREST:
+            self._olwtc_refine.setChecked(False)
+            self._planted_refine.setChecked(True)
+        elif cat in (INPUT_CATEGORY_NRF, INPUT_CATEGORY_PRIMARY):
+            self._olwtc_refine.setChecked(False)
+            self._planted_refine.setChecked(False)
+        # Placeholder: leave toggles alone — user has full control.
         self._update_refine_visibility()
 
     def _update_refine_visibility(self):
-        """Drive widget visibility + auto-tick from the FRA dropdown.
+        """Refresh widget visibility from the current FRA dropdown.
 
-        New scheme (Change A):
-        - FRA-aligned checkbox is gone; dropdown selection is the gate.
-        - Empty dropdown ("— Select one —") = no declaration; toggles are
-          visible and freely tickable, but no intermediate layers surface.
-        - Tree cover declared: both toggles visible, auto-ticked.
-        - Forest declared: OLTC widgets hidden (irrelevant); Planted
-          visible + auto-ticked.
-        - NRF / Primary declared: both toggles hidden (input already past
-          those steps).
+        Does NOT auto-tick toggles — that lives in _on_input_category_changed
+        so _apply_params can restore saved toggle states without being
+        overwritten by a final visibility pass.
+
+        - Empty dropdown ("— Select one —"): both toggles visible
+          (freely tickable); no intermediate-creation hints shown.
+        - Tree cover declared: both toggles visible; both hints shown.
+        - Forest declared: OLTC hidden; Planted visible; NRF hint shown.
+        - NRF / Primary declared: both toggles hidden.
 
         Hidden backward-compat widgets _fra_aligned and _create_intermediate
         are synced from the dropdown so _collect_params / _validate /
@@ -1454,10 +1477,6 @@ class PffDockWidget(QgsDockWidget):
         declared = not is_placeholder
 
         # Sync hidden backward-compat widgets.
-        # _fra_aligned tracks whether a category is declared.
-        # _create_intermediate tracks whether intermediate layers will
-        # actually surface (i.e. user declared AND at least one exclusion
-        # could run — anything but NRF/Primary).
         self._fra_aligned.setChecked(declared)
         intermediates_possible = declared and (
             cat not in (INPUT_CATEGORY_NRF, INPUT_CATEGORY_PRIMARY))
@@ -1483,18 +1502,6 @@ class PffDockWidget(QgsDockWidget):
             cat == INPUT_CATEGORY_TREECOVER)
         self._planted_creates_hint.setVisible(
             cat in (INPUT_CATEGORY_TREECOVER, INPUT_CATEGORY_FOREST))
-
-        # Auto-tick toggles based on category. When placeholder, leave the
-        # toggles' current state alone — user has full control.
-        if cat == INPUT_CATEGORY_TREECOVER:
-            self._olwtc_refine.setChecked(True)
-            self._planted_refine.setChecked(True)
-        elif cat == INPUT_CATEGORY_FOREST:
-            self._olwtc_refine.setChecked(False)
-            self._planted_refine.setChecked(True)
-        elif cat in (INPUT_CATEGORY_NRF, INPUT_CATEGORY_PRIMARY):
-            self._olwtc_refine.setChecked(False)
-            self._planted_refine.setChecked(False)
 
     def _build_section_3_human_influence(self):
         sec = CollapsibleSection("3. Human Influence", expanded=False)
@@ -4491,12 +4498,20 @@ class PffDockWidget(QgsDockWidget):
                     self._year_single_combo.setCurrentText("2020")
         self._year_stack.setEnabled(not is_all)
 
-        # §2
+        # §2 — backward-compat mapping for saved settings:
+        #   TREE_COVER_MODE: "simple"  → dropdown = placeholder (no FRA)
+        #   TREE_COVER_MODE: "fra"     → dropdown = saved INPUT_CATEGORY
+        # Old _fra_aligned and _create_intermediate booleans no longer
+        # control the UI directly; they are derived from the dropdown.
         _tc_mode = p.get("TREE_COVER_MODE", "simple")
-        self._fra_aligned.setChecked(_tc_mode == "fra")
-        _saved_cat = p.get("INPUT_CATEGORY", INPUT_CATEGORY_PLACEHOLDER)
-        idx = self._input_category.findText(_saved_cat)
-        self._input_category.setCurrentIndex(idx if idx >= 0 else 0)
+        if _tc_mode == "fra":
+            _saved_cat = p.get("INPUT_CATEGORY", INPUT_CATEGORY_PLACEHOLDER)
+            idx = self._input_category.findText(_saved_cat)
+            self._input_category.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            # "simple" mode = no FRA declaration. Force placeholder
+            # regardless of stale INPUT_CATEGORY value in the saved file.
+            self._input_category.setCurrentIndex(0)
         self._forest_raster.set_path(s(FW.FOREST_RASTER))
         self._olwtc_raster.set_path(s(FW.FRA_AGRICULTURE_RASTER))
         _has_refine = (b(FW.EXCLUDE_AGRICULTURE_FROM_FOREST, False)
