@@ -26,6 +26,7 @@ from qgis.core import (
 # basename via "endswith(suffix)" before the extension. Order matters
 # only for tie-breaking; entries are mutually exclusive in practice.
 _PFF_STEP_COLOURS = (
+    ("_02a_forest_raw", "#c8e6c9"),                      # palest green — Input / Tree cover (matches GEE)
     ("_02c_forest", "#7fc97f"),                          # light green
     ("_02e_naturally_regenerating_forest", "#41ab5d"),   # mid green
     ("_03c_pre_refinement_primary_forest", "#7a9c2f"), # olive (new)
