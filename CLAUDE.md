@@ -45,9 +45,12 @@ The two tools are complementary: GEE provides consistent preprocessed exports (h
 
 | File | Purpose |
 |------|---------|
-| [docs/datasets_workshop_reference.md](docs/datasets_workshop_reference.md) | Workshop reference — full dataset info + citations |
-| [docs/datasets_workshop_handout.md](docs/datasets_workshop_handout.md) | Workshop handout — 2-page simple version |
-| [docs/QGIS_Walkthrough_Ann_Rotich_V0.md](docs/QGIS_Walkthrough_Ann_Rotich_V0.md) | Ann Rotich's canonical technical workflow — fallback when plugin has bugs or users prefer manual steps |
+| [docs/workshop/](docs/workshop/) | Workshop materials (4 canonicals + datasets handout/reference) |
+| [docs/workshop/datasets_workshop_reference.md](docs/workshop/datasets_workshop_reference.md) | Workshop reference — full dataset info + citations |
+| [docs/workshop/datasets_workshop_handout.md](docs/workshop/datasets_workshop_handout.md) | Workshop handout — 2-page simple version |
+| [docs/workshop/GEE_App_Walkthrough.md](docs/workshop/GEE_App_Walkthrough.md) | GEE step-by-step (follow-along) |
+| [docs/workshop/QGIS_Plugin_Walkthrough.md](docs/workshop/QGIS_Plugin_Walkthrough.md) | QGIS plugin step-by-step (follow-along) — was previously in planning/ as facilitator_participant_tasks |
+| `planning/QGIS_Walkthrough_Ann_Rotich_V0.md` (local-only, gitignored) | Ann Rotich's deeper technical fallback — moved out of repo; pull from local `planning/` if needed |
 | [pff_qgis_tools/README.md](pff_qgis_tools/README.md) | Plugin user docs (install, tools, outputs) |
 | [docs/specs/PFF_QGIS_PROCESSING_TOOL_SPEC.md](docs/specs/PFF_QGIS_PROCESSING_TOOL_SPEC.md) | Plugin input/output definitions |
 | [docs/specs/PFF_QGIS_WORKFLOW_AI_REFERENCE.md](docs/specs/PFF_QGIS_WORKFLOW_AI_REFERENCE.md) | Conceptual workflow description |

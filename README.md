@@ -28,10 +28,21 @@ Download the latest zip from [`dist/`](dist/) and install in QGIS via
 
 ## Documentation
 
-- **[docs/PFF_QGIS_Workshop_Guide_DRAFT.md](docs/PFF_QGIS_Workshop_Guide_DRAFT.md)** - end-user workshop guide (main doc + appendices)
-- **[docs/QGIS_Walkthrough_Ann_Rotich_V0.md](docs/QGIS_Walkthrough_Ann_Rotich_V0.md)** - Ann Rotich canonical technical QGIS workflow (fallback for manual users)
+### Workshop materials → [`docs/workshop/`](docs/workshop/)
+
+- **[GEE_App_Walkthrough.md](docs/workshop/GEE_App_Walkthrough.md)** - step-by-step GEE follow-along (+ .docx)
+- **[GEE_App_Workshop_Onepager.md](docs/workshop/GEE_App_Workshop_Onepager.md)** - compact GEE reference handout (+ .docx)
+- **[QGIS_Plugin_Walkthrough.md](docs/workshop/QGIS_Plugin_Walkthrough.md)** - step-by-step QGIS plugin follow-along
+- **[QGIS_Plugin_Workshop_Onepager.md](docs/workshop/QGIS_Plugin_Workshop_Onepager.md)** - compact QGIS reference handout (+ .docx)
+- **[datasets_workshop_reference.md](docs/workshop/datasets_workshop_reference.md)** - full dataset info + citations (+ .docx)
+- **[datasets_workshop_handout.md](docs/workshop/datasets_workshop_handout.md)** - 2-page simple datasets handout (+ .docx)
+
+### Other reference docs
+
 - **[docs/pff4_vs_qgis_plugin_comparison.md](docs/pff4_vs_qgis_plugin_comparison.md)** - side-by-side workflow comparison between GEE and QGIS
 - **[docs/connectivity_methods.md](docs/connectivity_methods.md)** - review of connectivity / fragmentation filtering methods
+- **[docs/known_issues.md](docs/known_issues.md)** - known bugs + workarounds
+- **[docs/input_labels_review.md](docs/input_labels_review.md)** - design doc for the FRA category labelling scheme (v0.16 UX restructure)
 - **[docs/specs/](docs/specs/)** - plugin technical specs (tool spec, pseudocode, AI reference, automation notes, known doc issues)
 
 ## For contributors and AI coding tools
