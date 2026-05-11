@@ -544,6 +544,12 @@
   //   - Add to global extent   : custom OR global (union)
   //   - Agreement with global  : custom AND global (intersection)
   function applyCustomForestMerge(globalForest, analysisYear) {
+    // Mirrors the visibility gate in updateGlobalForestInputsVisibility:
+    // custom forest only counts as active when BOTH the §2 master
+    // ("Enable custom data inputs") AND the per-dataset nationalForest
+    // checkbox are ticked. Master off → analysis falls back to the
+    // global source even if nationalForest.checkbox is still ticked.
+    if (!enableTreeCoverCustomCheckbox.getValue()) return globalForest;
     if (!nationalForest.checkbox.getValue()) return globalForest;
     var customAsset = nationalForest.getAsset(analysisYear);
     if (!customAsset) return globalForest;
@@ -3848,7 +3854,14 @@
   // into this helper too, so both paths can't disagree.
   // =============================================================================
   function updateGlobalForestInputsVisibility() {
-    var customActive = nationalForest.checkbox.getValue();
+    // Custom forest only counts as "active" when BOTH the §2 master
+    // checkbox ("Enable custom data inputs") AND the per-dataset
+    // nationalForest checkbox are ticked. Master off → custom data
+    // is dormant regardless of the inner checkbox state, so the
+    // global source must reappear. Fixes a bug where the global
+    // dropdown stayed hidden after the user unticked the master.
+    var masterActive = enableTreeCoverCustomCheckbox.getValue();
+    var customActive = masterActive && nationalForest.checkbox.getValue();
     var mode         = nationalForest.modeSelect.getValue();
     var hideGlobal   = customActive && mode === 'Replace global';
 
@@ -3873,8 +3886,12 @@
   // section changes state. Multiple onChange handlers stack in GEE UI,
   // so this composes cleanly with the factory's internal handler at
   // L3470 (which toggles the mode-select and year inputs).
+  // Plus the §2 master toggle: when the user toggles "Enable custom
+  // data inputs", we must re-evaluate so the global source dropdown
+  // appears/disappears in sync.
   nationalForest.checkbox.onChange(updateGlobalForestInputsVisibility);
   nationalForest.modeSelect.onChange(updateGlobalForestInputsVisibility);
+  enableTreeCoverCustomCheckbox.onChange(updateGlobalForestInputsVisibility);
 
   // Initial sync at startup -- mirrors the pattern at line 3683 for
   // updateRefineVisibility(). Placed after treeCoverContent so
@@ -5884,7 +5901,11 @@
       // user supplies a national "plantations" raster that includes tree
       // crops or oil palm, those pixels will be mis-classified as planted
       // forest by the natreg derivation. Document this in workshop notes.
-      if (nationalPlantations.checkbox.getValue()) {
+      // Master-gate: same fix as applyCustomForestMerge — §2 master off
+      // makes the per-dataset checkbox dormant so analysis falls back
+      // to the global source.
+      if (enableTreeCoverCustomCheckbox.getValue() &&
+          nationalPlantations.checkbox.getValue()) {
         var natPlantationsAsset = nationalPlantations.getAsset(analysisYear);
         if (natPlantationsAsset) {
           var natPlantations = preprocessAsset(natPlantationsAsset, nationalPlantations.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
@@ -5977,7 +5998,9 @@
           .or(treeCropsSDPT.unmask(0))
           .or(urbanTreeCover);
 
-      if (nationalOLWTC.checkbox.getValue()) {
+      // Master-gate: same as nationalPlantations / applyCustomForestMerge.
+      if (enableTreeCoverCustomCheckbox.getValue() &&
+          nationalOLWTC.checkbox.getValue()) {
         var natOLWTCAsset = nationalOLWTC.getAsset(analysisYear);
         if (natOLWTCAsset) {
           var natOLWTCData = preprocessAsset(natOLWTCAsset, nationalOLWTC.getPreprocessingConfig()).updateMask(country_and_buffer_mask);
