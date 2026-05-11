@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.1";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.2";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -3432,10 +3432,24 @@
   // for the non-Forest tree-cover bucket -- palms, orchards,
   // agroforestry, urban trees. Surfacing the FRA term in the dropdown
   // trains workshop users on the vocabulary they'll need when reporting.
-  var INPUT_CATEGORY_ALL    = 'Tree cover: includes oil palm, orchards, agroforestry etc';
-  var INPUT_CATEGORY_FOREST = 'Forest: excludes other land with tree cover e.g. oil palm, orchards, agroforestry etc';
-  var INPUT_CATEGORY_NATREG = 'Naturally regenerating forest: also excludes planted forest';
-  var INPUT_CATEGORY_PRIMARY= 'Primary forest: for comparison / further analysis';
+  // Plain names — workshop feedback (2026-05-11): the previous
+  // "Tree cover: includes oil palm..." / "Forest: excludes..." wording
+  // read like the tool was choosing to include or exclude classes,
+  // when really these labels just align the user's input with a FRA
+  // category. Tooltips still explain each category in detail.
+  var INPUT_CATEGORY_ALL    = 'Tree cover';
+  var INPUT_CATEGORY_FOREST = 'Forest';
+  var INPUT_CATEGORY_NATREG = 'Naturally regenerating forest';
+  var INPUT_CATEGORY_PRIMARY= 'Primary forest';
+
+  // Map of old long-form values seen in saved settings → new short
+  // values. Used on load so old saved configs continue to work.
+  var INPUT_CATEGORY_LEGACY_MAP = {
+    'Tree cover: includes oil palm, orchards, agroforestry etc': INPUT_CATEGORY_ALL,
+    'Forest: excludes other land with tree cover e.g. oil palm, orchards, agroforestry etc': INPUT_CATEGORY_FOREST,
+    'Naturally regenerating forest: also excludes planted forest': INPUT_CATEGORY_NATREG,
+    'Primary forest: for comparison / further analysis': INPUT_CATEGORY_PRIMARY
+  };
 
   var inputCategorySelect = ui.Select({
     items: [INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST, INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY],
@@ -3476,10 +3490,10 @@
   function updateFraDefLabel() {
     var v = inputCategorySelect.getValue();
     var defs = {};
-    defs[INPUT_CATEGORY_ALL]     = 'Not an FRA category — entry point for the FRA cascade. Forest + OLTC combined (≥5 m, ≥10% canopy, ≥0.5 ha) without land-use filter.';
-    defs[INPUT_CATEGORY_FOREST]  = 'FRA: As above, but land use is forest — excludes agricultural/urban tree stands';
-    defs[INPUT_CATEGORY_NATREG]  = 'FRA: Forest of trees established through natural regeneration';
-    defs[INPUT_CATEGORY_PRIMARY] = 'FRA: Naturally regenerating, native species, no visible human activity';
+    defs[INPUT_CATEGORY_ALL]     = '* Not a FRA category — entry point for the FRA cascade. Forest + OLTC combined (≥5 m, ≥10% canopy, ≥0.5 ha) without land-use filter.';
+    defs[INPUT_CATEGORY_FOREST]  = 'FRA category: land use is forest — excludes agricultural/urban tree stands.';
+    defs[INPUT_CATEGORY_NATREG]  = 'FRA category: forest of trees established through natural regeneration.';
+    defs[INPUT_CATEGORY_PRIMARY] = 'FRA category: naturally regenerating, native species, no visible human activity.';
     fraDefLabel.setValue(defs[v] || '');
   }
   updateFraDefLabel();
@@ -3512,7 +3526,8 @@
 
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('Select input type:', inputCategorySelect),
+      createCompactRow('FRA category (for naming + intermediates):',
+                       inputCategorySelect),
       fraDefLabel,
       inputCategoryFraInfo,
       fraDefsPanel
@@ -4088,14 +4103,19 @@
       useMasterBufferCheckbox,
       masterBufferRow,
       masterBufferStatusLabel,
-      roadsToggle.row,
+      // Custom data input panels sit ABOVE the corresponding slider so
+      // the user reads top-to-bottom as "data source → buffer
+      // distance". When the master "Enable custom data inputs" box is
+      // off, each panel is hidden, so visually the section collapses
+      // back to just the sliders.
       nationalRoads.panel,
-      builtUpSmallToggle.row,
+      roadsToggle.row,
       nationalBuiltupSmall.panel,
-      builtUpLargeToggle.row,
+      builtUpSmallToggle.row,
       nationalBuiltupLarge.panel,
-      agriToggle.row,
+      builtUpLargeToggle.row,
       nationalAgri.panel,
+      agriToggle.row,
       bufferExceptionsToggle,
       bufferExceptionsContent,
       bufferExceptionsStatusLabel,
@@ -5110,6 +5130,10 @@
 
     if (settings['Input Category']) {
       var savedCat = settings['Input Category'];
+      // Backward compat: map old long-form values to new short ones.
+      if (INPUT_CATEGORY_LEGACY_MAP[savedCat]) {
+        savedCat = INPUT_CATEGORY_LEGACY_MAP[savedCat];
+      }
       if ([INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST,
           INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY].indexOf(savedCat) >= 0) {
         inputCategorySelect.setValue(savedCat);

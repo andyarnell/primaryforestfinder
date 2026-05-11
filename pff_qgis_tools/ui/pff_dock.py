@@ -67,15 +67,29 @@ from ..defaults import (
 # definition on hover. The dropdown drives:
 #   1. visibility of OLWTC + Planted-forest sub-controls
 #   2. the EXCLUDE_AGRICULTURE_FROM_FOREST + EXCLUDE_PLANTATIONS booleans
-INPUT_CATEGORY_TREECOVER = (
-    "Tree cover: includes oil palm, orchards, agroforestry etc")
-INPUT_CATEGORY_FOREST = (
+# Plain names — workshop feedback (2026-05-11): the previous
+# "includes oil palm..." / "excludes other land with tree cover..."
+# wording read like the tool was choosing to include or exclude
+# classes. Really these labels just align the user's input with an
+# FRA category. Tooltips on each dropdown item still spell out the
+# semantics in full.
+INPUT_CATEGORY_TREECOVER = "Tree cover"
+INPUT_CATEGORY_FOREST = "Forest"
+INPUT_CATEGORY_NRF = "Naturally regenerating forest"
+INPUT_CATEGORY_PRIMARY = "Primary forest"
+
+# Map old long-form values seen in saved settings → new short ones.
+# Used on load so old saved configs continue to work.
+INPUT_CATEGORY_LEGACY_MAP = {
+    "Tree cover: includes oil palm, orchards, agroforestry etc": (
+        INPUT_CATEGORY_TREECOVER),
     "Forest: excludes other land with tree cover e.g. oil palm, "
-    "orchards, agroforestry etc")
-INPUT_CATEGORY_NRF = (
-    "Naturally regenerating forest: also excludes planted forest")
-INPUT_CATEGORY_PRIMARY = (
-    "Primary forest: for comparison / further analysis")
+    "orchards, agroforestry etc": INPUT_CATEGORY_FOREST,
+    "Naturally regenerating forest: also excludes planted forest": (
+        INPUT_CATEGORY_NRF),
+    "Primary forest: for comparison / further analysis": (
+        INPUT_CATEGORY_PRIMARY),
+}
 
 
 # Path for the dock-local recent-runs history file. Lives under the
@@ -1300,7 +1314,7 @@ class PffDockWidget(QgsDockWidget):
             INPUT_CATEGORY_TREECOVER: (
                 "• Excludes: nothing — all land with tree cover,\n"
                 "  regardless of land use.\n\n"
-                "• Not an FRA category — entry point for the\n"
+                "• Not a FRA category — entry point for the\n"
                 "  FRA cascade. Equivalent to Forest + Other\n"
                 "  Land with Tree Cover (OLTC) combined: the\n"
                 "  FRA threshold (≥5 m height, ≥10% canopy,\n"
@@ -1342,6 +1356,20 @@ class PffDockWidget(QgsDockWidget):
                 self._input_category.setItemData(
                     i, _tooltips[txt], Qt.ToolTipRole)
         refine_body.addLayout(cat_row)
+
+        # Footnote-style label shown only when "Tree cover" is the
+        # selected category — flags that it's NOT strictly a FRA
+        # category, just the entry point of the cascade.
+        self._fra_cat_note = QLabel(
+            "* Not a FRA category — entry point for the FRA cascade. "
+            "Forest + OLTC combined (≥5 m, ≥10% canopy, ≥0.5 ha) "
+            "without land-use filter.")
+        self._fra_cat_note.setWordWrap(True)
+        self._fra_cat_note.setStyleSheet(
+            "color: #666; font-size: 10px; font-style: italic;"
+            " margin: 0 0 4px 4px;")
+        self._fra_cat_note.setVisible(False)
+        refine_body.addWidget(self._fra_cat_note)
 
         # --- Exclude OLTC (oil palm / orchards / agroforestry) ---
         self._olwtc_refine = QCheckBox(
@@ -1502,6 +1530,9 @@ class PffDockWidget(QgsDockWidget):
             cat == INPUT_CATEGORY_TREECOVER)
         self._planted_creates_hint.setVisible(
             cat in (INPUT_CATEGORY_TREECOVER, INPUT_CATEGORY_FOREST))
+
+        # "* Not a FRA category" footnote shown only for Tree cover.
+        self._fra_cat_note.setVisible(cat == INPUT_CATEGORY_TREECOVER)
 
     def _build_section_3_human_influence(self):
         sec = CollapsibleSection("3. Human Influence", expanded=False)
@@ -4506,6 +4537,9 @@ class PffDockWidget(QgsDockWidget):
         _tc_mode = p.get("TREE_COVER_MODE", "simple")
         if _tc_mode == "fra":
             _saved_cat = p.get("INPUT_CATEGORY", INPUT_CATEGORY_PLACEHOLDER)
+            # Workshop feedback (2026-05-11): old long-form INPUT_CATEGORY
+            # values get mapped forward to the new short names.
+            _saved_cat = INPUT_CATEGORY_LEGACY_MAP.get(_saved_cat, _saved_cat)
             idx = self._input_category.findText(_saved_cat)
             self._input_category.setCurrentIndex(idx if idx >= 0 else 0)
         else:
