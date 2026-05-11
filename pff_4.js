@@ -3532,8 +3532,7 @@
 
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('FRA category (for naming + intermediates):',
-                       inputCategorySelect),
+      createCompactRow('FRA category:', inputCategorySelect),
       fraDefLabel,
       inputCategoryFraInfo,
       fraDefsPanel

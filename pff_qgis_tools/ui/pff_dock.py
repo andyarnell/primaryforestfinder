@@ -1292,8 +1292,7 @@ class PffDockWidget(QgsDockWidget):
 
         # FRA category dropdown
         cat_row = QHBoxLayout()
-        self._fra_input_type_label = QLabel(
-            "FRA category (for naming + intermediates):")
+        self._fra_input_type_label = QLabel("FRA category:")
         self._fra_input_type_label.setStyleSheet(
             "color: #555; font-size: 11px;")
         self._fra_input_type_label.setToolTip(
