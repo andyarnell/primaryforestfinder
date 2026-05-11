@@ -149,7 +149,7 @@ See `docs/specs/PFF_QGIS_WORKFLOW_DOC_UPDATES.md` for 10 known ambiguities inclu
 
 When modifying the plugin, check these documents for context:
 - `planning/tasks_260417_organised.md` — current task backlog and open questions (check first)
-- `docs/QGIS_Workflow_Ann_Rotich_V0.md` — Ann Rotich's canonical technical workflow (fallback when plugin has bugs, or for users who prefer manual QGIS steps)
+- `docs/QGIS_Walkthrough_Ann_Rotich_V0.md` — Ann Rotich's canonical technical workflow (fallback when plugin has bugs, or for users who prefer manual QGIS steps)
 - `docs/PFF_QGIS_Workshop_Guide_DRAFT.md` — end-user workshop guide
 - `docs/specs/PFF_QGIS_PROCESSING_TOOL_SPEC.md` — input/output definitions
 - `docs/specs/PFF_QGIS_WORKFLOW_AI_REFERENCE.md` — conceptual workflow description

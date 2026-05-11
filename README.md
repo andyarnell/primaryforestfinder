@@ -9,7 +9,7 @@ Tools and data pipelines for identifying potential primary forest at national sc
 ## Documentation
 
 - **[docs/PFF_QGIS_Workshop_Guide_DRAFT.md](docs/PFF_QGIS_Workshop_Guide_DRAFT.md)** - end-user workshop guide (main doc + appendices)
-- **[docs/QGIS_Workflow_Ann_Rotich_V0.md](docs/QGIS_Workflow_Ann_Rotich_V0.md)** - Ann Rotich canonical technical QGIS workflow (fallback for manual users)
+- **[docs/QGIS_Walkthrough_Ann_Rotich_V0.md](docs/QGIS_Walkthrough_Ann_Rotich_V0.md)** - Ann Rotich canonical technical QGIS workflow (fallback for manual users)
 - **[docs/pff4_vs_qgis_plugin_comparison.md](docs/pff4_vs_qgis_plugin_comparison.md)** - side-by-side workflow comparison between GEE and QGIS
 - **[docs/connectivity_methods.md](docs/connectivity_methods.md)** - review of connectivity / fragmentation filtering methods
 - **[docs/specs/](docs/specs/)** - plugin technical specs (tool spec, pseudocode, AI reference, automation notes, known doc issues)

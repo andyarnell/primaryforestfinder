@@ -23,11 +23,9 @@ var EXPORT_SCALE = 90;
 var EXPORT_CRS = 'EPSG:4326';
 
 var COUNTRIES = [
-  {name: 'Bhutan',                              iso3: 'BTN', years: [2000]},
+  // BTN, LAO, THA already have year-2000 exports — only gap-fill below
   {name: 'Indonesia',                           iso3: 'IDN', years: [2000]},
-  {name: 'Lao People\'s Democratic Republic',   iso3: 'LAO', years: [2000]},
   {name: 'Papua New Guinea',                    iso3: 'PNG', years: [2000]},
-  {name: 'Thailand',                            iso3: 'THA', years: [2000]},
   {name: 'Viet Nam',                            iso3: 'VNM', years: [2000]}
 ];
 

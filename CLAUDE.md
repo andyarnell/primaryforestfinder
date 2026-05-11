@@ -45,8 +45,9 @@ The two tools are complementary: GEE provides consistent preprocessed exports (h
 
 | File | Purpose |
 |------|---------|
-| [docs/PFF_QGIS_Workshop_Guide_DRAFT.md](docs/PFF_QGIS_Workshop_Guide_DRAFT.md) | End-user workshop guide (short main doc + appendices) |
-| [docs/QGIS_Workflow_Ann_Rotich_V0.md](docs/QGIS_Workflow_Ann_Rotich_V0.md) | Ann Rotich's canonical technical workflow — fallback when plugin has bugs or users prefer manual steps |
+| [docs/datasets_workshop_reference.md](docs/datasets_workshop_reference.md) | Workshop reference — full dataset info + citations |
+| [docs/datasets_workshop_handout.md](docs/datasets_workshop_handout.md) | Workshop handout — 2-page simple version |
+| [docs/QGIS_Walkthrough_Ann_Rotich_V0.md](docs/QGIS_Walkthrough_Ann_Rotich_V0.md) | Ann Rotich's canonical technical workflow — fallback when plugin has bugs or users prefer manual steps |
 | [pff_qgis_tools/README.md](pff_qgis_tools/README.md) | Plugin user docs (install, tools, outputs) |
 | [docs/specs/PFF_QGIS_PROCESSING_TOOL_SPEC.md](docs/specs/PFF_QGIS_PROCESSING_TOOL_SPEC.md) | Plugin input/output definitions |
 | [docs/specs/PFF_QGIS_WORKFLOW_AI_REFERENCE.md](docs/specs/PFF_QGIS_WORKFLOW_AI_REFERENCE.md) | Conceptual workflow description |

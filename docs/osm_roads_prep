@@ -1,0 +1,46 @@
+GEE asset imports (uploaded CSV chunks ingested as FeatureCollections):
+
+var table = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_0_to_10000000_of_20329501"),
+    table2 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_10000000_to_20000000_of_20329501"),
+    table3 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_20000000_to_20329501_of_20329501"),
+    table4 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/antartica_0_to_1102_of_1102"),
+    table5 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_0_to_10000000_of_62409033"),
+    table6 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_10000000_to_20000000_of_62409033"),
+    table7 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_30000000_to_40000000_of_62409033"),
+    table8 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_40000000_to_50000000_of_62409033"),
+    table9 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_50000000_to_60000000_of_62409033"),
+    table10 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_60000000_to_62409033_of_62409033"),
+    table11 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/australia_oceania_0_to_4176086_of_4176086"),
+    table12 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/central_america_0_to_2174319_of_2174319"),
+    table13 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_0_to_9945776_of_96258629"),
+    table14 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_21974838_to_23598911_of_96258629"),
+    table15 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_33598911_to_42897747_of_96258629"),
+    table16 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_42897747_to_50932175_of_96258629"),
+    table17 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_50932175_to_55425784_of_96258629"),
+    table18 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_55425784_to_63749243_of_96258629"),
+    table19 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_73035626_to_81889699_of_96258629"),
+    table20 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_81889699_to_88610282_of_96258629"),
+    table21 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_88610282_to_96258629_of_96258629"),
+    table22 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_9945776_to_11974838_of_96258629"),
+    table23 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_0_to_10000000_of_55568828"),
+    table24 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_10000000_to_20000000_of_55568828"),
+    table25 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_20000000_to_30000000_of_55568828"),
+    table26 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_30000000_to_40000000_of_55568828"),
+    table27 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_40000000_to_50000000_of_55568828"),
+    table28 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/north_america_50000000_to_55568828_of_55568828"),
+    table29 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/south_america_0_to_10000000_of_13549774"),
+    table30 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/south_america_10000000_to_13549774_of_13549774"),
+    table31 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_63749243_to_73035626_of_96258629"),
+    table32 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_23598911_to_33598911_of_96258629"),
+    table33 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/europe_11974838_to_21974838_of_96258629");
+
+
+Downloaded regional data in pbf format from geofabrik (https://download.geofabrik.de/; accessed approx 21/05/2025); The Europe regional file processing led to memory issues due to it's size, so downloaded at country level (accessed approx 29/05/2025) and combined later once all in CSV format. Outputs were manageable chunks for CSV upload into GEE i.e. under 10GB)
+Process chain carried out in python locally usoing pyosmium and scripts on github: https://github.com/andyarnell/primaryforestfinder Steps: convert pbf input file to gpkg, then gpkg into csv (containing geometry column). CSVs chosen as opposed to shapefile due as allows larger files and doesn't have column header limitations.
+
+Filtering from pbf download was carried out including all way files with values for the tag 'highway'. Only a few tags were included in the attribute table as had errors when attempting to include all.
+
+Combined all input chunks from the different regions and combined into one large feature collection. Exported into a raster based on the hansen image projection and cell size (approx 30m resolution at equator).
+
+Further filtering: any tags with values of "proposed" or "planned" for highways were removed prior to conversion to raster. These were found to be erroneous. NB no differentiation otherwise between highway types may measn some are human accessible by foot/bike and not by car. As the info is unlikely to be consistently applied the resulting layer will overexaggerate the extent of human accessibility in some areas when buffered by distances appropriate to impacts from roads.
+
