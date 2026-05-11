@@ -103,7 +103,7 @@ def _history_path() -> str:
 
 _HISTORY_MAX_ENTRIES = 50
 
-INPUT_CATEGORY_PLACEHOLDER = "— Select one —"
+INPUT_CATEGORY_PLACEHOLDER = "No FRA category alignment"
 
 INPUT_CATEGORY_ITEMS = [
     INPUT_CATEGORY_TREECOVER,

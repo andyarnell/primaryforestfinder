@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.3";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.4";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -3457,9 +3457,17 @@
     'Primary forest: for comparison / further analysis': INPUT_CATEGORY_PRIMARY
   };
 
+  // Sentinel value for "no FRA category declared" — selectable inside
+  // the dropdown so users can undo a previous category pick. Workshop
+  // feedback (2026-05-12): the placeholder-only approach trapped users
+  // on whatever category they first picked.
+  var INPUT_CATEGORY_NONE = 'No FRA category alignment';
+
   var inputCategorySelect = ui.Select({
-    items: [INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST, INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY],
-    placeholder: '— Select one —',
+    items: [INPUT_CATEGORY_NONE,
+            INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST,
+            INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY],
+    value: INPUT_CATEGORY_NONE,
     onChange: function() {
       updateRefineVisibility();
       markNeedsUpdate();
@@ -3571,7 +3579,7 @@
     // callers (stats panel, export logic, exclusionActive) continue
     // to work without rewriting.
     var cat = inputCategorySelect.getValue();
-    var declared = !!cat && cat !== '';
+    var declared = !!cat && cat !== '' && cat !== INPUT_CATEGORY_NONE;
 
     var intermediatesPossible = declared
         && cat !== INPUT_CATEGORY_NATREG
