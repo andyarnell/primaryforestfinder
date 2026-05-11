@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.4";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.5";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -1526,6 +1526,13 @@
         var declCat = inputCategorySelect.getValue();
         var olwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
         var plantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
+        // Input row: always shown. Label depends on declaration.
+        // - No FRA category alignment (default): "Input"
+        // - Tree cover declared:                  "Tree cover" (handled by showTreeCoverRow branch)
+        // - Forest / NRF / Primary declared:      input == declared category;
+        //   suppress this row since the cascade already has a labelled row for it.
+        var showInputRow = (declCat === INPUT_CATEGORY_NONE
+                            || !declCat || declCat === '');
         var showTreeCoverRow = (declCat === INPUT_CATEGORY_ALL);
         // Forest is distinct only when OLWTC was applied (declared ALL)
         // or when input IS forest (declared Forest).
@@ -1539,10 +1546,12 @@
         // Primary row always shown when produced.
 
         // Track pending calculations for this year.
+        var hasInput     = showInputRow     && latestMaskedTreeCover[year] !== undefined;
         var hasTreeCover = showTreeCoverRow && latestMaskedTreeCover[year] !== undefined;
         var hasForest    = showForestRow    && latestMaskedForest[year] !== undefined;
         var hasNatreg    = showNrfRow       && latestMaskedNaturallyRegenerating[year] !== undefined;
-        var pending = (hasTreeCover ? 1 : 0)
+        var pending = (hasInput ? 1 : 0)
+          + (hasTreeCover ? 1 : 0)
           + (hasForest ? 1 : 0)
           + (hasNatreg ? 1 : 0)
           + (latestMaskedPrimaryForest[year] ? 1 : 0);
@@ -1562,6 +1571,12 @@
         // label always matches the row in flight. Slightly slower
         // total (rows compute serially), but the panel is correct.
         var rowQueue = [];
+        if (hasInput) {
+          rowQueue.push({
+            layer: latestMaskedTreeCover[year], name: 'Input',
+            waitText: '  Calculating input area...'
+          });
+        }
         if (hasTreeCover) {
           rowQueue.push({
             layer: latestMaskedTreeCover[year], name: 'Tree cover',
@@ -1730,6 +1745,11 @@
       var exportDeclCat = inputCategorySelect.getValue();
       var exportOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
       var exportPlantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
+      // Input row: same logic as the on-the-fly stats panel — always
+      // emitted when no FRA category declared. Avoids redundancy when
+      // a category IS declared (Tree cover row already covers it).
+      var exportShowInput = (exportDeclCat === INPUT_CATEGORY_NONE
+                             || !exportDeclCat || exportDeclCat === '');
       var exportShowTreeCover = (exportDeclCat === INPUT_CATEGORY_ALL);
       var exportShowForest = (exportDeclCat === INPUT_CATEGORY_ALL && exportOlwtcApplied) ||
                             (exportDeclCat === INPUT_CATEGORY_FOREST);
@@ -1739,6 +1759,9 @@
       var _exportFraTag = fraAlignedCheckbox.getValue() ? '' : ' (non-FRA-aligned)';
       Object.keys(latestMaskedForest).forEach(function(year) {
         var yearInt = parseInt(year);
+        if (exportShowInput && latestMaskedTreeCover[year]) {
+          processForestAreaStats(latestMaskedTreeCover[year], 'Input', yearInt, exportScale, true, selectedCountry);
+        }
         if (exportShowTreeCover && latestMaskedTreeCover[year]) {
           processForestAreaStats(latestMaskedTreeCover[year], 'Tree cover', yearInt, exportScale, true, selectedCountry);
         }
@@ -6430,6 +6453,12 @@
         var mapDeclCat = inputCategorySelect.getValue();
         var mapOlwtcApplied = exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel);
         var mapPlantedApplied = exclusionActive(includePlantationsCheckbox, includePlantationsPanel);
+        // Input layer: always added. When no FRA category declared the
+        // map shows just `Input` + `Primary forest`. When a category is
+        // declared, the input layer carries the declared name (Tree cover,
+        // Forest, etc.).
+        var mapShowInput = (mapDeclCat === INPUT_CATEGORY_NONE
+                            || !mapDeclCat || mapDeclCat === '');
         var mapShowTreeCover = (mapDeclCat === INPUT_CATEGORY_ALL);
         var mapShowForest = (mapDeclCat === INPUT_CATEGORY_ALL && mapOlwtcApplied) ||
                             (mapDeclCat === INPUT_CATEGORY_FOREST);
@@ -6437,6 +6466,10 @@
                           mapDeclCat === INPUT_CATEGORY_FOREST) && mapPlantedApplied) ||
                         (mapDeclCat === INPUT_CATEGORY_NATREG);
 
+        if (mapShowInput) {
+          pffAddLayer(tree_cover_clip.selfMask(), binary_palegreen_palette,
+            "Input", visibleLayers.treeCover, 1);
+        }
         if (mapShowTreeCover) {
           pffAddLayer(tree_cover_clip.selfMask(), binary_palegreen_palette,
             "Input: Tree cover", visibleLayers.treeCover, 1);
