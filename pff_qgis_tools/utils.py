@@ -255,13 +255,23 @@ def clip_raster_by_mask(raster_path, mask_path, output_path,
     res_x = abs(_gt[1])
     ds = None
 
+    # Use 255 as NoData (safe for Byte rasters: outside data range).
+    # Workshop bug (2026-05-12): using NODATA=0 conflicted with binary
+    # rasters that legitimately use 0 for "absent". GDAL would flip
+    # source 0-pixels to 1 in the destination to "avoid them being
+    # treated as NoData", silently corrupting the mask — runs on
+    # macOS produced empty primary-forest output (0.0 kha) because
+    # built-up / agriculture rasters got fully inverted in the clip
+    # and the country sat entirely inside the human-influence buffer.
+    # 255 is outside the data range (binary 0/1) so source values
+    # round-trip cleanly.
     try:
         return run_processing("gdal:warpreproject", {
             "INPUT": raster_path,
             "TARGET_RESOLUTION": res_x,
             "CROP_TO_CUTLINE": True,
             "CUTLINE": mask_path,
-            "NODATA": 0,
+            "NODATA": 255,
             "OPTIONS": "COMPRESS=LZW|TILED=YES",
             "OUTPUT": output_path,
         }, context=context, feedback=feedback)
@@ -275,7 +285,7 @@ def clip_raster_by_mask(raster_path, mask_path, output_path,
         return run_processing("gdal:cliprasterbymasklayer", {
             "INPUT": raster_path,
             "MASK": mask_path,
-            "NODATA": 0,
+            "NODATA": 255,
             "CROP_TO_CUTLINE": True,
             "KEEP_RESOLUTION": True,
             "OUTPUT": output_path,
