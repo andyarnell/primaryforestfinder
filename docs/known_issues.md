@@ -72,6 +72,24 @@ If 30m is genuinely needed (e.g. detecting small patches < 90m), expect run time
 
 ---
 
+## ✅ Resolved (v0.16.0-beta.11): NoData=0 silently zeroed primary forest output
+
+**Symptom (pre-beta.11):** Some runs produced empty stats — `forest: 0.0 kha`, `primary_forest: 0.0 kha` — even with correct inputs. GDAL log showed:
+
+> *Warning 1: Value 0 in the source dataset has been changed to 1 in the destination dataset to avoid being treated as NoData.*
+
+**Cause:** `clip_raster_by_mask()` in `pff_qgis_tools/utils.py` passed `NODATA=0` to GDAL's clip step. The binary driver rasters (built-up, agriculture) legitimately use 0 for "absent". Some GDAL builds (notably macOS's bundled GDAL) defensively flipped source 0-pixels to 1 in the destination to disambiguate them from NoData — silently inverting the entire mask. Whole country then read as "built-up" or "agriculture", the 1 km human-influence buffer covered everything, no primary forest survived.
+
+This bug was present in `pff_qgis_tools/utils.py` from at least plugin v0.8.40 (months before the workshop). It only manifested on GDAL versions that took the "flip 0→1" path. Windows-bundled GDAL typically did NOT flip, so the bug went unnoticed in dev.
+
+**Fix:** `NODATA` changed from `0` to `255` (outside the binary 0/1 data range, so source values round-trip cleanly).
+
+**Affected versions:** ALL plugin versions before `0.16.0-beta.11`. If you have a pre-beta.11 zip installed, update to beta.12+ via the [`dist/`](../dist/) folder.
+
+**How to detect if you were hit:** look for the "Value 0 ... changed to 1" warning in your run log, or `primary_forest: 0.0 kha` in the stats with non-empty input data. Either is a red flag.
+
+---
+
 ## 🟢 Planned: separate "Run preprocessing" step (replace dangerous cache toggle)
 
 **Background:** the dock has a "Reuse preprocessing cache" toggle in Config that, when on, skips the Stage 1 prepare step and uses already-prepared rasters from the intermediates folder. Workshop feedback (2026-05-12) flagged this as **very dangerous**: cached files can carry latent bugs (e.g. the NoData=0 mask-flipping fixed in v0.16.0-beta.11) and silently produce wrong stats long after the source fix lands. The reuse toggle's default was flipped to OFF in beta.11 to mitigate this.
