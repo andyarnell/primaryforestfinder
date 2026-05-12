@@ -72,6 +72,25 @@ If 30m is genuinely needed (e.g. detecting small patches < 90m), expect run time
 
 ---
 
+## 🟢 Planned: separate "Run preprocessing" step (replace dangerous cache toggle)
+
+**Background:** the dock has a "Reuse preprocessing cache" toggle in Config that, when on, skips the Stage 1 prepare step and uses already-prepared rasters from the intermediates folder. Workshop feedback (2026-05-12) flagged this as **very dangerous**: cached files can carry latent bugs (e.g. the NoData=0 mask-flipping fixed in v0.16.0-beta.11) and silently produce wrong stats long after the source fix lands. The reuse toggle's default was flipped to OFF in beta.11 to mitigate this.
+
+**Better approach (planned):** turn the cache reuse into an **explicit "Run preprocessing" step**:
+- User clicks **Preprocess inputs** once (Stage 1 only).
+- Plugin writes the prepared rasters to a known location with a version stamp.
+- User can then **Run analysis only** as many times as they want with different thresholds — the prepared rasters are reused explicitly, NOT silently.
+- Plugin checks the version stamp on the cached files; if from an older plugin version, refuses to reuse and forces a fresh preprocess.
+
+**Why this is better than a checkbox:**
+- Explicit user action — no accidental reuse.
+- Version-stamped cache — bug fixes invalidate stale caches automatically.
+- Speeds up workflow for power users (only the analysis stages re-run on threshold changes).
+
+**Effort:** ~half a day. New Processing algorithm + dock button + version-stamp logic. Post-workshop work.
+
+---
+
 ## ℹ️ Conventions for this page
 
 - 🔴 Critical — blocks core workflow or corrupts headline result

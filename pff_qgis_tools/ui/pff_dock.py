@@ -1952,8 +1952,21 @@ class PffDockWidget(QgsDockWidget):
         self._reuse_distance = QCheckBox("Reuse cached distance surfaces")
         form.addRow("", self._reuse_distance)
 
+        # Default OFF (was ON). Workshop feedback 2026-05-12: cached
+        # preprocessed rasters can carry bugs from earlier versions
+        # (e.g. the beta.10 NoData=0 mask-flipping issue fixed in
+        # beta.11). Reusing them silently produces wrong stats long
+        # after the source bug is patched. Fresh preprocessing each
+        # run is safer; opt-in is rare anyway (only valuable when
+        # re-running large countries with only threshold changes).
         self._reuse_prepared = QCheckBox("Reuse preprocessing cache")
-        self._reuse_prepared.setChecked(True)
+        self._reuse_prepared.setChecked(False)
+        self._reuse_prepared.setToolTip(
+            "Reuse already-prepared rasters from the intermediates "
+            "folder.\n\nDefault OFF for safety — fresh preprocessing "
+            "each run guarantees the latest fixes apply. Tick only "
+            "when you're confident the cached files are from the "
+            "current plugin version and the same source data.")
         form.addRow("", self._reuse_prepared)
 
         sec.set_content_layout(form)
@@ -4798,7 +4811,7 @@ class PffDockWidget(QgsDockWidget):
         # to restore on the dock side. Saved value is still in params
         # dict (preserved through _record_run_history) for fidelity.
         self._reuse_distance.setChecked(b(FW.REUSE_DISTANCE_SURFACES))
-        self._reuse_prepared.setChecked(b(FW.REUSE_PREPARED, True))
+        self._reuse_prepared.setChecked(b(FW.REUSE_PREPARED, False))
         self._add_main_to_map.setChecked(b(FW.ADD_MAIN_OUTPUTS_TO_MAP, True))
         self._add_human_layers_to_map.setChecked(
             b(FW.ADD_HUMAN_INFLUENCE_LAYERS_TO_MAP))
