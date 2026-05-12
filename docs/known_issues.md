@@ -72,6 +72,62 @@ If 30m is genuinely needed (e.g. detecting small patches < 90m), expect run time
 
 ---
 
+## 🟢 Planned: in-plugin reproject to coarser resolution (for quick runs)
+
+**Background:** today the plugin uses the forest raster's native resolution as the reference grid for everything else ([`full_workflow.py:744`](../pff_qgis_tools/algorithms/full_workflow.py)). If a user supplies their own 30m forest raster, the whole pipeline runs at 30m — 5–10× slower than the 90m GEE batch exports. Current workaround documented in this file: resample the forest raster externally (`gdalwarp -tr 90 90 -r mode ...`) before loading.
+
+**Proposed:** add an optional **Target resolution** field in §2 Tree Cover. When set, the plugin resamples the forest raster as Stage 1's first step; all other inputs then align to this coarser grid automatically.
+
+### UI
+
+Inside the "Tree-cover input definition" group box, just below the input raster picker:
+
+```
+Target resolution (m):  [    ] (blank = use native)
+```
+
+- Empty / 0 → current behaviour (use native)
+- > 0 → resample forest raster to this resolution before becoming the reference grid
+
+### Algorithm changes
+
+1. **New param** `FW.TARGET_RESOLUTION_OVERRIDE` (float, default 0 = "off").
+2. **Stage 1 prepare step** (in `prepare_inputs.py` or near the forest reproject in `full_workflow.py`): if override > native, resample with `gdalwarp -tr X X -r mode` (binary mask) before reproject. If override <= native, skip (don't upsample — warn the user).
+3. **Reference grid** then comes from the resampled forest, so DEM / built-up / agriculture / OLTC / planted all align to the coarsened grid automatically. No other code changes.
+
+### Resampling method
+
+- **Mode** for binary 0/1 rasters (current forest input convention).
+- **Nearest** as fallback for older GDAL builds.
+- Continuous rasters not applicable — forest is binary.
+
+### Edge cases
+
+- **Override = native** → no-op, log "target equals native, skipping resample".
+- **Override < native** → reject with clear error ("won't upsample low-res input").
+- **Override much coarser than reasonable** (e.g. 5000 m) → run anyway but warn.
+- **Multi-year mode** → each year's forest input gets resampled separately with the same target resolution.
+
+### Performance impact
+
+For a Thailand 30m input at default settings:
+- 30m native → ~10 min total runtime (per workshop log)
+- 90m via this feature → ~2 min total (estimated, matches GEE-export experience)
+
+### Backward compat
+
+New param defaults to 0 in saved settings. Old settings.json files don't have it → 0 → current behaviour preserved.
+
+### Effort
+
+~30–45 min. Single Stage 1 addition + one new dock widget + tooltip + sanity checks. Low risk because the resampling produces a standard binary raster that the existing pipeline already handles.
+
+### Why this matters
+
+The current workaround (external gdalwarp) requires the user to know how to use GDAL + know the workflow's "Mode resampling is best for binary" detail. Most workshop participants will just feed in their 30m data and wait the extra time. This feature gives them an in-plugin one-line knob.
+
+---
+
 ## ✅ Resolved (v0.16.0-beta.11): NoData=0 silently zeroed primary forest output
 
 **Symptom (pre-beta.11):** Some runs produced empty stats — `forest: 0.0 kha`, `primary_forest: 0.0 kha` — even with correct inputs. GDAL log showed:
