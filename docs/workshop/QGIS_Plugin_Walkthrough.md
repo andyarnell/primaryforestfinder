@@ -194,7 +194,7 @@ The plugin can generate a set of random sample points inside your primary forest
 
 **Use the results from your most recent run (the 2020 run from Step 7).**
 
-1. In the dock panel, expand **§6 Outputs → Validation sampling (experimental)**.
+1. In the dock panel, expand **§7 Validation sampling (experimental)**.
 2. Set the fields as follows:
 
 | Field | Setting |
