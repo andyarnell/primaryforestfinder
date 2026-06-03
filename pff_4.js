@@ -1376,6 +1376,20 @@
     return parts.join('.');
   }
 
+  // #15: format an area given in m² into the user-selected display unit
+  // (kha / ha / km²). Default 'kha' preserves the prior behaviour. The
+  // selector (areaUnitSelect) lives in the Area Statistics panel and is
+  // defined further down; guarded so an early call can't throw.
+  function formatAreaFromM2(m2) {
+    var unit = (typeof areaUnitSelect !== 'undefined' && areaUnitSelect)
+      ? areaUnitSelect.getValue() : 'kha';
+    var val, label;
+    if (unit === 'ha')       { val = m2 / 1e4;  label = 'ha';  }
+    else if (unit === 'km²') { val = m2 / 1e6;  label = 'km²'; }
+    else                     { val = m2 / 1e7;  label = 'kha'; }
+    return formatWithCommas(Number(val).toFixed(1)) + ' ' + label;
+  }
+
   function processForestAreaStats(image, name, year, scale, exportToDrive, country, panel, onComplete) {
     var pixelArea = ee.Image.pixelArea();
     var forestArea = image.multiply(pixelArea);
@@ -1401,8 +1415,7 @@
       totalArea.evaluate(function(result) {
         var msg;
         if (result !== null && result !== undefined) {
-          var formattedResultKha = formatWithCommas(Number(result / 1e7).toFixed(1));
-          msg = "✓ " + name + ": " + formattedResultKha + " kha";
+          msg = "✓ " + name + ": " + formatAreaFromM2(result);
         } else {
           msg = "✗ " + name + " (" + year + "): No valid data / processing timeout";
         }
@@ -1725,6 +1738,20 @@
     }
   });
   var statsScaleLabel = ui.Label('Resolution (m):', {margin: '0 8px 0 0'});
+
+  // #15: area-unit selector for the on-the-fly statistics display.
+  // Default 'kha' preserves prior behaviour. Marks the Stats button
+  // stale on change (same pattern as the resolution slider) so the
+  // user re-runs Show Area Statistics to see the new unit.
+  var areaUnitSelect = ui.Select({
+    items: ['kha', 'ha', 'km²'],
+    value: 'kha',
+    style: {margin: '0', stretch: 'horizontal'},
+    onChange: function() {
+      showStatsButton.setLabel('↻ Show Area\nStatistics *');
+    }
+  });
+  var areaUnitLabel = ui.Label('Area unit:', {margin: '0 8px 0 0'});
 
   // Label for export status message
   var exportStatusLabel = ui.Label('', {margin: '4px 0 0 8px', width: '280px'});
@@ -4604,6 +4631,7 @@
     statsInfoContent,
     clearStatsButton,
     ui.Panel([statsScaleLabel, statsScaleSlider], ui.Panel.Layout.flow('horizontal'), {stretch: 'horizontal', margin: '0 0 0 8px'}),
+    ui.Panel([areaUnitLabel, areaUnitSelect], ui.Panel.Layout.flow('horizontal'), {stretch: 'horizontal', margin: '0 0 0 8px'}),
     areaStatsPanel
   ];
   if (!IS_PUBLISHED_APP) {
@@ -5035,7 +5063,8 @@
       'Enable Protected Areas': enableProtectedAreas.getValue(),
       'Enable Refine Output': enableRefineOutput.getValue(),
       'Add Input Layers To Map': addInputLayersToMap.getValue(),
-      'Export Run Metadata JSON': exportChk_runMetadata.getValue()
+      'Export Run Metadata JSON': exportChk_runMetadata.getValue(),
+      'Area Unit': areaUnitSelect.getValue()
     };
 
     // P1.23: Custom forest asset is now serialised via the standard
@@ -5191,6 +5220,7 @@
     if (settings['Enable Refine Output'] !== undefined) enableRefineOutput.setValue(settings['Enable Refine Output']);
     if (settings['Add Input Layers To Map'] !== undefined) addInputLayersToMap.setValue(settings['Add Input Layers To Map']);
     if (settings['Export Run Metadata JSON'] !== undefined) exportChk_runMetadata.setValue(settings['Export Run Metadata JSON']);
+    if (settings['Area Unit'] !== undefined) areaUnitSelect.setValue(settings['Area Unit']);
     slopeToKeepSlider.setValue(settings['Slope to keep (degrees)']);
     // otherNatBufferSlider.setValue(settings['Other Natural Buffer (m)']);
     smoothRadiusForestSlider.setValue(settings['Forest Smoothing Radius (m)']);
