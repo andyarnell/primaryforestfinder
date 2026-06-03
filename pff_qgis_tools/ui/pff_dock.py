@@ -24,13 +24,13 @@ import os
 import re
 
 import processing
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import QEvent, QObject, Qt
 from qgis.PyQt.QtGui import QStandardItem, QStandardItemModel, QTextCursor
 from qgis.PyQt.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
-    QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-    QTextEdit, QToolButton, QVBoxLayout, QWidget
+    QAbstractSlider, QAbstractSpinBox, QApplication, QCheckBox, QComboBox,
+    QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
+    QSplitter, QTextEdit, QToolButton, QVBoxLayout, QWidget
 )
 from qgis.core import (
     QgsApplication, QgsCoordinateReferenceSystem, QgsMapLayer,
@@ -111,6 +111,43 @@ INPUT_CATEGORY_ITEMS = [
     INPUT_CATEGORY_NRF,
     INPUT_CATEGORY_PRIMARY,
 ]
+
+
+class _WheelToScrollFilter(QObject):
+    """Redirect wheel events from value-changing widgets to the dock scrollbar.
+
+    Combos / spinboxes / sliders consume wheel events by default to change
+    their value, which traps users trying to scroll the dock. We forward
+    wheel events from those widgets to the page scrollbar instead -- except
+    when a combo's popup is open (then the wheel should scroll the popup
+    list, as expected). Keyboard navigation (arrows, tab) is unaffected.
+    """
+
+    _TARGETS = (QComboBox, QAbstractSpinBox, QAbstractSlider)
+
+    def __init__(self, scroll_area):
+        super().__init__(scroll_area)
+        self._scroll_area = scroll_area
+
+    def eventFilter(self, obj, ev):
+        if ev.type() != QEvent.Wheel:
+            return False
+        if not isinstance(obj, self._TARGETS):
+            return False
+        if isinstance(obj, QComboBox) and obj.view().isVisible():
+            return False
+        viewport = self._scroll_area.viewport()
+        # Only swallow when the cursor is over the dock's scroll viewport,
+        # so we don't interfere with other QGIS panels (Layers, Browser,
+        # Processing toolbox, etc.) when their wheel events bubble up.
+        try:
+            global_pos = ev.globalPosition().toPoint()
+        except AttributeError:
+            global_pos = ev.globalPos()
+        if not viewport.rect().contains(viewport.mapFromGlobal(global_pos)):
+            return False
+        QApplication.sendEvent(viewport, ev)
+        return True
 
 
 class _DockFeedback(QgsProcessingFeedback):
@@ -418,6 +455,19 @@ class PffDockWidget(QgsDockWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setMinimumHeight(120)
+
+        # Workshop feedback (2026-05-12): scrolling the dock often changes
+        # whatever dropdown/spinbox/slider the cursor is over instead of
+        # scrolling the page. Install one application-level filter that
+        # reroutes wheel events from value-changing widgets back to this
+        # scroll area's viewport. Scoped by cursor-in-viewport so other
+        # QGIS panels are unaffected.
+        # TEMPORARILY DISABLED (2026-05-13): app-level wheel filter
+        # caused QGIS 4 crashes when opening Validation section
+        # (confirmed by user). Re-enable after diagnosis. See dock log
+        # message.
+        # self._wheel_filter = _WheelToScrollFilter(scroll)
+        # QApplication.instance().installEventFilter(self._wheel_filter)
 
         body = QWidget(scroll)
         self._sections_layout = QVBoxLayout(body)
@@ -2347,6 +2397,7 @@ class PffDockWidget(QgsDockWidget):
         form.addRow("Plots from:", self._ceo_domain)
 
         self._ceo_stratified = QCheckBox("Set counts per class (stratified)")
+        self._ceo_stratified.setChecked(True)
         self._ceo_stratified.setToolTip(
             "When ticked, you set the primary count + the other-forest "
             "count independently — they don't have to be equal "
@@ -2450,7 +2501,7 @@ class PffDockWidget(QgsDockWidget):
 
         self._ceo_n_primary = QSpinBox()
         self._ceo_n_primary.setRange(0, 100000)
-        self._ceo_n_primary.setValue(25)
+        self._ceo_n_primary.setValue(50)
         self._ceo_n_primary.setMaximumWidth(80)
         self._ceo_n_primary.setToolTip(
             "Plots to draw inside primary-forest polygons. Used when "
@@ -2459,7 +2510,7 @@ class PffDockWidget(QgsDockWidget):
             "primary candidate count.")
         self._ceo_n_other = QSpinBox()
         self._ceo_n_other.setRange(0, 100000)
-        self._ceo_n_other.setValue(25)
+        self._ceo_n_other.setValue(50)
         self._ceo_n_other.setMaximumWidth(80)
         self._ceo_n_other.setToolTip(
             "Plots to draw inside other-forest polygons. Used when "
@@ -2501,6 +2552,9 @@ class PffDockWidget(QgsDockWidget):
         self._ceo_method.addItems(
             ["Simple (CEO draws default)",
              "Custom ring boundary"])
+        # Default to custom ring boundary so the uploaded plot has a
+        # visible 2 km annulus regardless of CEO project defaults.
+        self._ceo_method.setCurrentIndex(1)
         self._ceo_method.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         self._ceo_method.setToolTip(
@@ -2516,14 +2570,16 @@ class PffDockWidget(QgsDockWidget):
 
         self._ceo_radius = QDoubleSpinBox()
         self._ceo_radius.setRange(1, 100000)
-        self._ceo_radius.setValue(2000)
+        self._ceo_radius.setValue(1000)
         self._ceo_radius.setSuffix(" m")
         self._ceo_radius.setDecimals(0)
         self._ceo_radius.setMaximumWidth(110)
         self._ceo_radius.setToolTip(
             "Half-width of the interpretation area for each plot. The "
-            "ring's inner radius. Default 2000 m matches a 2 km plot "
-            "used in many CEO workshops.")
+            "ring's inner radius. Default 1000 m matches the default "
+            "human-influence buffer distance (§3) so each validation "
+            "plot's interpretation footprint aligns with the analysis "
+            "decision unit.")
         self._ceo_ring_w = QDoubleSpinBox()
         self._ceo_ring_w.setRange(0.1, 1000)
         self._ceo_ring_w.setValue(1)
@@ -2539,11 +2595,12 @@ class PffDockWidget(QgsDockWidget):
             "Ring:", self._ceo_ring_w))
 
         self._ceo_sample_point = QCheckBox("Centre point")
-        self._ceo_sample_point.setChecked(True)
+        self._ceo_sample_point.setChecked(False)
         self._ceo_sample_point.setToolTip(
             "Emit a centre-point sample layer. Each row's "
             "PLOTID == SAMPLEID.")
         self._ceo_sample_square = QCheckBox("Square")
+        self._ceo_sample_square.setChecked(True)
         self._ceo_sample_square.setToolTip(
             "Emit a square sample layer (separate file). Centred on "
             "the random point. PLOTID and SAMPLEID match per row. "
@@ -2721,6 +2778,7 @@ class PffDockWidget(QgsDockWidget):
         self._on_ceo_stratified_toggled(self._ceo_stratified.isChecked())
         self._on_ceo_sample_square_toggled(
             self._ceo_sample_square.isChecked())
+        self._on_ceo_source_changed(self._ceo_source.currentIndex())
         # Batch 29: initial visibility for existing-points rows + wire
         # stale-count invalidation so a change to anything that affects
         # counts resets the cache + spinbox maxes.
@@ -4201,6 +4259,21 @@ class PffDockWidget(QgsDockWidget):
         multi_year_stats = {}
         _multi_year_t0 = _time.time()
 
+        # Baseline-forest constraint (issue: dynamic forest layers
+        # inflate later-year primary forest). Iterate chronologically
+        # so the earliest year produces a 02c_forest output that later
+        # years can be intersected against. The "anchor" year (for
+        # filename substitution) is independent and stays as detected.
+        year_list = sorted(year_list, key=lambda y: int(y))
+        feedback.pushInfo(
+            f"Iteration order (chronological): {', '.join(year_list)}")
+        from ..utils import generate_layer_name, PLATFORM_QGIS
+        _output_folder = base_params.get(FW.OUTPUT_FOLDER, "")
+        _iso3_base = (base_params.get(FW.ISO3_PREFIX) or "").upper().strip()
+        _aoi_label_base = base_params.get(FW.REGION_LABEL) or ""
+        baseline_year = year_list[0]
+        baseline_forest_mask_path = None
+
         # Iterate.
         for i, year in enumerate(year_list, start=1):
             if feedback.isCanceled():
@@ -4224,6 +4297,16 @@ class PffDockWidget(QgsDockWidget):
                     else:
                         year_params[name] = base_params.get(name)
             year_params[FW.YEAR] = year
+            # Inject baseline forest mask for non-baseline years so the
+            # algorithm intersects this year's forest with the earliest
+            # year's forest extent (see comment above the year-sort).
+            if year != baseline_year and baseline_forest_mask_path:
+                year_params[FW.BASELINE_FOREST_MASK] = (
+                    baseline_forest_mask_path)
+                feedback.pushInfo(
+                    f"  (forest will be constrained to baseline "
+                    f"{baseline_year} mask: "
+                    f"{os.path.basename(baseline_forest_mask_path)})")
             try:
                 # P1.30 batch 20j: per-iteration project-bound context
                 # so each year's outputs land in the project as that
@@ -4244,6 +4327,24 @@ class PffDockWidget(QgsDockWidget):
                 _stats = self._read_year_totals_from_csv(year_params, year)
                 if _stats:
                     multi_year_stats[year] = _stats
+                # Baseline-forest hand-off: after the earliest year
+                # completes, capture its 02c_forest output path so the
+                # remaining iterations can intersect against it.
+                if year == baseline_year and baseline_forest_mask_path is None:
+                    _bn = generate_layer_name(
+                        _iso3_base, PLATFORM_QGIS, "02c", "forest", "tif",
+                        year=year, aoi_label=_aoi_label_base)
+                    _cand = os.path.join(_output_folder, _bn)
+                    if os.path.exists(_cand):
+                        baseline_forest_mask_path = _cand
+                        feedback.pushInfo(
+                            f"Captured baseline forest mask for "
+                            f"year {baseline_year}: {_bn}")
+                    else:
+                        feedback.pushWarning(
+                            f"Expected baseline forest mask not found "
+                            f"({_cand}); later years will NOT be "
+                            f"constrained.")
             except Exception as e:
                 if feedback.isCanceled():
                     feedback.pushWarning(

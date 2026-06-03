@@ -18,15 +18,67 @@
 
 // ═══ 1. CONFIGURATION ═══════════════════════════════════════════════
 
-var SCRIPT_VERSION = '1.0.0';
+var SCRIPT_VERSION = '1.2.0';
 var EXPORT_SCALE = 90;
 var EXPORT_CRS = 'EPSG:4326';
 
+// Baseline-forest constraint: when set to a 4-digit year (e.g. 2000),
+// every per-year forest_map is AND-ed with that year's forest mask
+// before the tier cascade + exports. Prevents dynamic-input layers
+// (e.g. GLAD year-on-year additions) from injecting "new forest"
+// pixels into later-year exports — which would propagate into the
+// downstream QGIS primary-forest detection. Set to null to disable.
+//   - When analysisYear === BASELINE_FOREST_YEAR, the AND is a no-op.
+//   - Affects 02a forest_raw, 02b OLWTC, 02d planted, primary tiers.
+var BASELINE_FOREST_YEAR = 2000;
+
+// Narrow per-year exports for years OTHER than BASELINE_FOREST_YEAR.
+// When the baseline constraint is active, only forest-derived layers
+// actually change between runs (02a forest_raw + 02b OLWTC which
+// includes urban-tree-cover from forest_map). DEM, slope, built-up,
+// agriculture, roads, planted_forest don't depend on forest_map at
+// all, so re-exporting them is wasted compute + Drive duplicates.
+// Baseline-year exports are always full bundle (needed for gap-fill).
+// Set NARROW_NON_BASELINE_EXPORTS = false to export everything for
+// every year (original v1.0 behaviour).
+var NARROW_NON_BASELINE_EXPORTS = true;
+var NON_BASELINE_EXPORT_LAYERS = [
+  '02a_forest_raw',
+  '02b_other_land_with_tree_cover'
+];
+
+// Per-country export configuration. Optional fields:
+//   skipDem        : true  — don't queue the 03b DEM export (already on Drive).
+//   skipSlope      : true  — don't queue the 03b slope export (already on Drive).
+//   extraExports   : [{year, step, stem}, ...] — one-off file gap-fills
+//                    not produced by the normal `years` × narrow filter.
+//                    Only supports static-data layers right now:
+//                    '02d:planted_forest', '03b:protection_natural_dem',
+//                    '03b:protection_natural_slope'.
+//                    The image data is built once per country, then queued
+//                    with the requested year suffix (or no year for statics).
+// Minimum run to unblock the 2020 CEO outputs: queue ONLY the
+// constrained 02a/02b for 2020 across all 6 countries. The 2020
+// anthro/DEM/slope inputs already exist on disk and don't need
+// re-exporting. 2000 gap-fill (IDN/PNG/VNM full bundle + THA
+// 02d_planted) is deferred to a follow-up run when needed.
 var COUNTRIES = [
-  // BTN, LAO, THA already have year-2000 exports — only gap-fill below
-  {name: 'Indonesia',                           iso3: 'IDN', years: [2000]},
-  {name: 'Papua New Guinea',                    iso3: 'PNG', years: [2000]},
-  {name: 'Viet Nam',                            iso3: 'VNM', years: [2000]}
+  // BTN: also re-do 2010 forest_raw + OLTC so the existing 2010 anthro
+  // stack on disk can be used in a 3-year multi-year QGIS run with the
+  // baseline constraint applied. Other countries don't have 2010 anthro
+  // inputs so re-exporting 2010 forest_raw for them would be unusable.
+  {name: 'Bhutan',                              iso3: 'BTN', years: [2010, 2020],
+    skipDem: true, skipSlope: true},
+  {name: "Lao People's Democratic Republic",    iso3: 'LAO', years: [2020],
+    skipDem: true, skipSlope: true},
+  {name: 'Thailand',                            iso3: 'THA', years: [2020],
+    skipDem: true, skipSlope: true},
+  {name: 'Indonesia',                           iso3: 'IDN', years: [2020],
+    skipDem: true, skipSlope: true},
+  {name: 'Papua New Guinea',                    iso3: 'PNG', years: [2020],
+    skipDem: true, skipSlope: true},
+  {name: 'Viet Nam',                            iso3: 'VNM', years: [2020],
+    skipDem: true, skipSlope: true}
 ];
 
 // Analysis parameters (all defaults except slope + PA = ON)
@@ -59,6 +111,12 @@ var timeseriesAnthroModule = require('users/andyarnellgee/apps:modules/timeserie
 // ═══ 3. SHARED ASSETS ═══════════════════════════════════════════════
 
 var countries = ee.FeatureCollection('projects/sat-io/open-datasets/FAO/GAUL/GAUL_2024_L0');
+// dice10k variant of the simplified GAUL asset. Emits multiple chunks
+// per country with visible seams in the exported AOI vector — annoying
+// but works. Tried switching to the un-diced
+// 'GAUL_2024_L0_simplify_0_001deg' asset but its schema doesn't
+// include 'iso3_code', so the country filter returned empty. Reverted
+// until that asset's field names are known.
 var countries_simple = ee.FeatureCollection(
     'projects/ee-andyarnellgee/assets/crosscutting/GAUL_2024_L0_simplify_0_001deg_dice10k');
 var gaul_raster = ee.Image('projects/ee-andyarnellgee/assets/gaul_2024_level_0_code_500m');
@@ -179,9 +237,42 @@ function gladLulcForestPrep(analysisYear, treeHeightThreshold) {
 
 // ═══ 5. EXPORT HELPERS ══════════════════════════════════════════════
 
+// Returns true if a given per-year export should be queued. For the
+// baseline year (or when narrowing is off), always true; for other
+// years, true only when '{step}_{stem}' is in NON_BASELINE_EXPORT_LAYERS.
+function shouldExportYear(analysisYear, step, stem) {
+  if (!NARROW_NON_BASELINE_EXPORTS) return true;
+  if (analysisYear === BASELINE_FOREST_YEAR) return true;
+  return NON_BASELINE_EXPORT_LAYERS.indexOf(step + '_' + stem) >= 0;
+}
+
+// Per-country (year-independent) exports — DEM/slope. Skip them when
+// every year in this country's list is non-baseline AND narrowing is
+// active, because narrowing implies "only the forest-changing layers
+// need re-exporting; everything else is fine as-is on Drive".
+function shouldExportCountryLevel(analysisYears) {
+  if (!NARROW_NON_BASELINE_EXPORTS) return true;
+  for (var i = 0; i < analysisYears.length; i++) {
+    if (analysisYears[i] === BASELINE_FOREST_YEAR) return true;
+  }
+  return false;
+}
+
+
 var runNow = new Date();
 var runPad = function(n) { return n < 10 ? '0' + n : n; };
-var runTag = '_' + runPad(runNow.getHours()) + 'h' + runPad(runNow.getMinutes()) + 'm';
+// ISO-8601 basic UTC timestamp: _YYYYMMDDTHHMMZ
+// (e.g. 2026-05-13 23:12 UTC -> '_20260513T2312Z')
+// Sortable lexicographically + unambiguous across timezones + no
+// filesystem-invalid characters. Replaces the old _HHhMMm tag which
+// collided across days and wasn't sortable.
+var runTag = '_' + runNow.getUTCFullYear()
+  + runPad(runNow.getUTCMonth() + 1)
+  + runPad(runNow.getUTCDate())
+  + 'T'
+  + runPad(runNow.getUTCHours())
+  + runPad(runNow.getUTCMinutes())
+  + 'Z';
 var taskCount = 0;
 
 function mkExportName(iso3, step, name) {
@@ -225,7 +316,14 @@ function doExportInt16(image, description, folder, exportRegion) {
 
 // ═══ 6. ANALYSIS PIPELINE ═══════════════════════════════════════════
 
-function runCountry(countryName, iso3, analysisYears) {
+function runCountry(country) {
+  var countryName = country.name;
+  var iso3 = country.iso3;
+  var analysisYears = country.years;
+  var skipDem = country.skipDem === true;
+  var skipSlope = country.skipSlope === true;
+  var extraExports = country.extraExports || [];
+
   var countryClean = cleanCountryName(countryName);
   var folder = 'PFF_export_' + countryClean;
   var s = EXPORT_SCALE + 'm';
@@ -239,13 +337,25 @@ function runCountry(countryName, iso3, analysisYears) {
   var country_and_buffer_mask = country_buffer.where(country_clip, 1).selfMask();
 
   // ── DEM + slope (once per country, not per year) ──
+  // Independently gated: per-country skipDem/skipSlope flags first
+  // (honour explicit "I already have this on disk"), then the
+  // narrowing rule (if no baseline year in this country's run, no
+  // forest-dependent layer needs DEM/slope anyway).
   var alos_mosaic = alos_30m_elev.mosaic();
-  doExportInt16(alos_mosaic.updateMask(country_and_buffer_mask).unmask(0),
-    mkExportName(iso3, '03b', 'protection_natural_dem_' + s), folder, exportRegion);
-
   var slopeImage = calculateSlope(alos_30m_elev, country_and_buffer_mask);
-  doExport(slopeImage.updateMask(country_and_buffer_mask).unmask(0).toByte(),
-    mkExportName(iso3, '03b', 'protection_natural_slope_' + s), folder, exportRegion);
+  var countryLevelAllowed = shouldExportCountryLevel(analysisYears);
+  if (!skipDem && countryLevelAllowed) {
+    doExportInt16(alos_mosaic.updateMask(country_and_buffer_mask).unmask(0),
+      mkExportName(iso3, '03b', 'protection_natural_dem_' + s), folder, exportRegion);
+  } else {
+    print(iso3 + ' — DEM skipped (' + (skipDem ? 'skipDem=true' : 'narrowing') + ')');
+  }
+  if (!skipSlope && countryLevelAllowed) {
+    doExport(slopeImage.updateMask(country_and_buffer_mask).unmask(0).toByte(),
+      mkExportName(iso3, '03b', 'protection_natural_slope_' + s), folder, exportRegion);
+  } else {
+    print(iso3 + ' — slope skipped (' + (skipSlope ? 'skipSlope=true' : 'narrowing') + ')');
+  }
 
   // ── Slope areas for tier analysis ──
   var slopeAreasToKeep = slopeImage.gt(SLOPE_THRESHOLD);
@@ -263,11 +373,27 @@ function runCountry(countryName, iso3, analysisYears) {
   wdpa_filt_by_date_image = wdpa_filt_by_date_image.selfMask()
     .updateMask(country_and_buffer_mask);
 
+  // ── Baseline forest mask (for cross-year constraint, see config) ──
+  // Built once per country, reused across every analysisYear.
+  var baselineForestMask = null;
+  if (BASELINE_FOREST_YEAR) {
+    baselineForestMask = gladLulcForestPrep(
+      BASELINE_FOREST_YEAR, TREE_HEIGHT_THRESHOLD);
+  }
+
   // ── Per-year layers ──
   analysisYears.forEach(function(analysisYear) {
 
     // 1. Forest source (GLAD LULC)
     var forest_map = gladLulcForestPrep(analysisYear, TREE_HEIGHT_THRESHOLD);
+
+    // Baseline constraint: AND year-N forest with baseline-year forest
+    // so pixels that became forest after BASELINE_FOREST_YEAR are
+    // dropped. No-op when analysisYear === BASELINE_FOREST_YEAR.
+    if (baselineForestMask !== null && analysisYear !== BASELINE_FOREST_YEAR) {
+      forest_map = forest_map.and(baselineForestMask).selfMask()
+        .rename('forest_constrained_to_' + BASELINE_FOREST_YEAR);
+    }
 
     // GLAD raw tree height
     var gladLandcoverLand = ee.Image('projects/glad/GLCLU2020/v2/LCLUC_' + analysisYear)
@@ -282,8 +408,10 @@ function runCountry(countryName, iso3, analysisYears) {
     ];
     var gladTreeHeight = gladLandcoverLand.remap(heightFrom, heightTo)
       .updateMask(country_and_buffer_mask).unmask(0).toByte().rename('tree_height_m');
-    doExport(gladTreeHeight,
-      mkExportName(iso3, '02a', 'glad_tree_height_m_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '02a', 'glad_tree_height_m')) {
+      doExport(gladTreeHeight,
+        mkExportName(iso3, '02a', 'glad_tree_height_m_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // 2. Anthropogenic layers
     // Built-up
@@ -302,10 +430,14 @@ function runCountry(countryName, iso3, analysisYears) {
       builtUpSmall = builtUpSmall.or(ghslSel.eq(1));
       builtUpLargeImg = ghslSel.eq(2);
     }
-    doExport(builtUpSmall.updateMask(country_and_buffer_mask).unmask(0),
-      mkExportName(iso3, '03a', 'builtup_small_' + analysisYear + '_' + s), folder, exportRegion);
-    doExport(builtUpLargeImg.updateMask(country_and_buffer_mask).unmask(0),
-      mkExportName(iso3, '03a', 'builtup_large_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '03a', 'builtup_small')) {
+      doExport(builtUpSmall.updateMask(country_and_buffer_mask).unmask(0),
+        mkExportName(iso3, '03a', 'builtup_small_' + analysisYear + '_' + s), folder, exportRegion);
+    }
+    if (shouldExportYear(analysisYear, '03a', 'builtup_large')) {
+      doExport(builtUpLargeImg.updateMask(country_and_buffer_mask).unmask(0),
+        mkExportName(iso3, '03a', 'builtup_large_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // Agriculture components
     var pastureDataset = ee.ImageCollection('projects/global-pasture-watch/assets/ggc-30m/v1/grassland_c');
@@ -343,16 +475,22 @@ function runCountry(countryName, iso3, analysisYears) {
       : forest_map;
 
     // OLWTC (02b) — other land with tree cover (FRA Note 10)
-    doExport(olwtc.updateMask(country_and_buffer_mask).unmask(0).toByte(),
-      mkExportName(iso3, '02b', 'other_land_with_tree_cover_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '02b', 'other_land_with_tree_cover')) {
+      doExport(olwtc.updateMask(country_and_buffer_mask).unmask(0).toByte(),
+        mkExportName(iso3, '02b', 'other_land_with_tree_cover_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // Export 02a forest raw — thresholded tree cover (GLAD LULC ≥ 5 m)
-    doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-      mkExportName(iso3, '02a', 'forest_raw_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '02a', 'forest_raw')) {
+      doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
+        mkExportName(iso3, '02a', 'forest_raw_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // Planted forest (02d)
-    doExport(allPlantationsSel.unmask(0).toByte(),
-      mkExportName(iso3, '02d', 'planted_forest_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '02d', 'planted_forest')) {
+      doExport(allPlantationsSel.unmask(0).toByte(),
+        mkExportName(iso3, '02d', 'planted_forest_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // Agriculture aggregation
     var croplandGladCollection = timeseriesAnthroModule.processingCroplandsGlad();
@@ -366,8 +504,10 @@ function runCountry(countryName, iso3, analysisYears) {
       .or(treeCropsSDPT.unmask())
       .or(oilPalmDescalsSel.unmask())
       .or(croplandGladSel);
-    doExport(agriculture.unmask(0),
-      mkExportName(iso3, '03a', 'agriculture_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '03a', 'agriculture')) {
+      doExport(agriculture.unmask(0),
+        mkExportName(iso3, '03a', 'agriculture_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // 3. Analysis pipeline — tier cascade
     // Forest baseline for tier analysis
@@ -439,8 +579,10 @@ function runCountry(countryName, iso3, analysisYears) {
     var all_forest_pre_refinement = combined_map.eq(2).or(combined_map.eq(3)).or(combined_map.eq(5));
 
     // Export pre-refinement (03c)
-    doExport(all_forest_pre_refinement.updateMask(country_clip).unmask(0),
-      mkExportName(iso3, '03c', 'pre_refinement_primary_forest_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '03c', 'pre_refinement_primary_forest')) {
+      doExport(all_forest_pre_refinement.updateMask(country_clip).unmask(0),
+        mkExportName(iso3, '03c', 'pre_refinement_primary_forest_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     // Connectivity refinement (04a)
     var primaryForest;
@@ -455,8 +597,10 @@ function runCountry(countryName, iso3, analysisYears) {
     } else {
       primaryForest = all_forest_pre_refinement;
     }
-    doExport(primaryForest.updateMask(country_clip).unmask(0),
-      mkExportName(iso3, '04a', 'primary_forest_' + analysisYear + '_' + s), folder, exportRegion);
+    if (shouldExportYear(analysisYear, '04a', 'primary_forest')) {
+      doExport(primaryForest.updateMask(country_clip).unmask(0),
+        mkExportName(iso3, '04a', 'primary_forest_' + analysisYear + '_' + s), folder, exportRegion);
+    }
 
     print(iso3 + ' ' + analysisYear + ' — raster tasks queued');
   }); // end per-year loop
@@ -519,7 +663,7 @@ print('Queueing exports for ' + COUNTRIES.length + ' countries at ' + EXPORT_SCA
 print('');
 
 COUNTRIES.forEach(function(c) {
-  runCountry(c.name, c.iso3, c.years);
+  runCountry(c);
 });
 
 print('');

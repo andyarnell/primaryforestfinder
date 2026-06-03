@@ -48,7 +48,10 @@ STEM_RX = re.compile(
     r"^(?P<iso3>[A-Z]{3})_gee_"
     r"(?P<step>\d{2}[a-z]?)_"
     r"(?P<body>.+)_"
-    r"(?P<timestamp>\d{2}h\d{2}m)"
+    # Timestamp tag — accepts both:
+    #   legacy local time: HHhMMm (e.g. '16h03m')
+    #   ISO-8601 basic UTC: YYYYMMDDTHHMMZ (e.g. '20260513T2312Z')
+    r"(?P<timestamp>\d{2}h\d{2}m|\d{8}T\d{4}Z)"
     r"(?P<tiles>(?:-\d{10,})+)?$"
 )
 

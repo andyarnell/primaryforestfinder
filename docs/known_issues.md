@@ -128,6 +128,34 @@ The current workaround (external gdalwarp) requires the user to know how to use 
 
 ---
 
+## ✅ Resolved (v0.16.0-beta.13): Dynamic forest layers inflated later-year primary forest
+
+**Symptom (pre-beta.13):** In multi-year runs using a dynamic tree-cover input (e.g. GLAD annual forest, Hansen treecover with year-specific gain), candidate primary forest could appear to **grow** between baseline and later years — e.g. Indonesia / Kalimantan showed more "primary" pixels in 2020 than in 2000. Visually striking; methodologically misleading because the FRA definition of primary forest does not allow new primary pixels to appear.
+
+**Cause:** Each year iteration in `_run_multi_year()` ran fully independently. The forest raster for year N was substituted by filename token and fed to the algorithm with no reference to year-0's forest extent. Any pixel that GLAD newly classified as forest in year N, if it happened to fall in a low-anthropogenic-pressure zone, became candidate primary in year N even though it was not forest in year 0.
+
+**Fix:**
+1. Multi-year iteration now sorts the year list chronologically (earliest first) regardless of input order.
+2. After the earliest year's run, the dock captures the path to its `02c_forest.tif` output.
+3. For each subsequent year, the dock passes that path as a new (hidden) `BASELINE_FOREST_MASK` parameter.
+4. The algorithm ANDs the year-N forest array with the baseline-year forest mask before Tier 1/2/3 derivation. Newly-detected forest pixels are dropped from the primary candidate.
+
+**What this allows / disallows:**
+- A pixel that was forest in year 0 but later got cut → can still drop OUT of primary in year N (correct).
+- A pixel that was non-primary forest in year 0 (e.g. inside a 1 km road buffer) → can BECOME primary in year N if the buffer no longer reaches it (correct — "recovery" within stable forest is allowed).
+- A pixel that was NOT forest in year 0 but is forest in year N (GLAD's "new forest") → cannot become primary in year N (the new behaviour).
+
+**User-visible cues in the log:**
+- `Iteration order (chronological): 2000, 2010, 2020`
+- `Captured baseline forest mask for year 2000: BTN_2000_qgis_02c_forest.tif`
+- `Constrained forest to baseline mask (...): 1,234,567 -> 1,180,432 forest pixels (54,135 newly-detected pixels excluded).`
+
+**Opt-out:** None in the UI yet. If a user genuinely wants each year's primary forest to reflect a refreshed baseline (e.g. methodology revision rather than ecological continuity), run each year as a separate single-year run with a fresh output folder. A future release can add a §4 Refine Output checkbox if demand surfaces.
+
+**Affected versions:** Pre-`beta.13` multi-year runs with dynamic forest layers. Single-year runs were never affected.
+
+---
+
 ## ✅ Resolved (v0.16.0-beta.11): NoData=0 silently zeroed primary forest output
 
 **Symptom (pre-beta.11):** Some runs produced empty stats — `forest: 0.0 kha`, `primary_forest: 0.0 kha` — even with correct inputs. GDAL log showed:

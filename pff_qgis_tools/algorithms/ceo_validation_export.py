@@ -135,14 +135,20 @@ def _zip_shapefile_outputs(gpkg_path: str, zip_path: str,
         if err and isinstance(err, tuple) and err[0]:
             raise QgsProcessingException(
                 f"Shapefile write failed for {layer_name}: {err[1]}")
-        # Zip the family.
+        # Zip the family. arcname uses the ZIP's filename stem (not the
+        # generic layer name) so multi-country / multi-seed unzips into
+        # the same folder don't collide. E.g. for a zip called
+        # 'BTN_2020_qgis_07a_ceo_validation_plot_boundaries_seed_1_<ts>.zip',
+        # internal members become
+        # 'BTN_2020_qgis_07a_ceo_validation_plot_boundaries_seed_1_<ts>.shp/.shx/...'
         with zipfile.ZipFile(zip_path, "w",
                              zipfile.ZIP_DEFLATED) as zf:
             base = os.path.splitext(shp_path)[0]
+            arc_base = os.path.splitext(os.path.basename(zip_path))[0]
             for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg"):
                 p = base + ext
                 if os.path.exists(p):
-                    zf.write(p, arcname=layer_name + ext)
+                    zf.write(p, arcname=arc_base + ext)
     # Release the source layer so any caller-driven cleanup of
     # `gpkg_path` (option A) can succeed on Windows.
     del src
@@ -432,27 +438,44 @@ class CeoValidationExportAlgorithm(QgsProcessingAlgorithm):
         existing_pts_layer = self.parameterAsVectorLayer(
             parameters, self.EXISTING_POINTS, context)
 
-        # Batch 28.8 item 8: shared run signature so all outputs of one
-        # invocation share the same _seed_<N>_<HHhMMm> tail. Disambiguates
-        # multiple same-day runs and groups one bundle visually in the
-        # file listing.
-        run_tag = datetime.datetime.now().strftime("%Hh%Mm")
-        seed_part = f"_seed_{seed_int}" if seed_int is not None else ""
+        # Shared run signature so all outputs of one invocation share
+        # the same _<run_tag> tail. Disambiguates multiple same-day runs
+        # and groups one bundle visually in the file listing.
+        # ISO-8601 basic UTC: YYYYMMDDTHHMMZ. Strict standard (S3,
+        # Sentinel, etc.). Sortable + unambiguous + no FS-invalid chars.
+        # NOTE: seed value lives in the attribute table (`seed` column);
+        # we no longer also encode it in the filename — keeps names
+        # shorter and the file listing readable.
+        run_tag = datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y%m%dT%H%MZ")
+
+        # CEO-aligned naming. CEO has two upload slots: "Plot file" and
+        # "Sample file". The symmetric `plot_<shape>` / `sample_<shape>`
+        # suffix makes it obvious at a glance which file goes where.
+        # Old verbose -> new short:
+        #   point_plots     -> plot_points     (CEO plot upload, centres)
+        #   plot_boundaries -> plot_rings      (CEO plot upload, rings)
+        #   samples_points  -> sample_points   (CEO sample upload, centres)
+        #   samples_squares -> sample_squares  (CEO sample upload, squares)
+        _ROLE_SHORT = {
+            "point_plots": "plot_points",
+            "plot_boundaries": "plot_rings",
+            "samples_points": "sample_points",
+            "samples_squares": "sample_squares",
+        }
 
         def _ceo_filename(role: str, substep: str, ext: str) -> str:
             """Build a canonical CEO-output filename per the PFF schema.
 
-            Result: <ISO3>_<year>_qgis_<substep>_ceo_validation_<role>
-                    [_seed_<N>]_<HHhMMm>.<ext>
+            Result: <ISO3>_<year>_qgis_<substep>_<short_descriptor>_<run_tag>.<ext>
 
-            ISO3 / year drop out when empty. The role token (e.g.
-            "plot_boundaries", "samples_points") is the canonical
-            output-role identifier; seed + run_tag are appended so the
-            full bundle of one run shares one signature.
+            Seed is no longer in the filename (it's in the attribute
+            table). ISO3 / year drop out when empty.
             """
+            short = _ROLE_SHORT.get(role, role)
             return generate_layer_name(
                 iso3, PLATFORM_QGIS, substep,
-                f"ceo_validation_{role}{seed_part}_{run_tag}",
+                f"{short}_{run_tag}",
                 ext=ext, year=year)
 
         # P1.30 batch 21.1: target output CRS. CEO ingests WGS84, so the

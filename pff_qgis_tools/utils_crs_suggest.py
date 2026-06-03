@@ -35,6 +35,37 @@ except ImportError:
 _SUPPORTS_AOI_KWARG = None  # tri-state: None (untested), True, False
 
 
+# Curated ISO3 → preferred projected EPSG.
+#
+# Entries below have been validated against ≥3 distinct sources (epsg.io,
+# spatialreference.org, ASPRS Grids-and-Datums, national mapping-agency
+# pages, expertgps, gis.stackexchange). All sources had to agree on the
+# UTM zone NUMBER. Where datum picks varied (national vs WGS84), we choose
+# WGS84-UTM (32xxx) for global-pipeline consistency: Hansen / GLAD / WDPA /
+# OSM / WorldPop all ship in WGS84, and at 30-90 m forest resolution the
+# cm-level differences between current national datums and WGS84 are
+# below pixel size.
+#
+# Methodology + cite trail logged in the validation session 2026-05-14.
+# Add new entries only after running the same multi-source consensus check.
+_ISO3_TO_PREFERRED_EPSG = {
+    # Asia-Pacific PFF workshop set — all validated 2026-05-14.
+    "LAO":  32648,  # WGS84 / UTM 48N — 4/4 sources agree, unanimous
+    "THA":  32647,  # WGS84 / UTM 47N — 3 sources for 32647 + 4 sources
+                    # for the older Indian 1975/UTM 47N (24047). UTM 47N
+                    # consensus is unanimous (5/5).
+    "VNM":  32648,  # WGS84 / UTM 48N — 3/3 sources agree on zone 48N;
+                    # datum tied 3-3 between VN-2000 (EPSG:3405) and WGS84.
+    "PNG":  32755,  # WGS84 / UTM 55S — 3-source consensus on zone 55;
+                    # alt PNG94 (EPSG:5551) for national-datum runs.
+    "BTN":  32645,  # WGS84 / UTM 45N — country straddles 90°E so 45N
+                    # (84-90°E) covers the central + western half;
+                    # eastern strip is in 46N. 3 sources prefer 45N.
+    # Indonesia OMITTED: no single-EPSG consensus (country spans zones
+    # 47-54, BIG uses 16 different TM-3 zones). User must set per-region.
+}
+
+
 # Minimal ISO3 → country name lookup. Used by the name-match boost. Kept
 # small (~80 entries — common FRA reporting countries + commonly tested);
 # unmapped ISO3 codes just skip the boost. The 20b.2 batch will replace
@@ -145,6 +176,25 @@ def aoi_bbox_from_path(aoi_path: str) -> Optional[Tuple[float, float, float, flo
         return None
 
 
+def _lookup_curated_epsg(iso3: Optional[str]):
+    """If ISO3 has a curated preferred EPSG, return (code, name, reason)
+    using pyproj for the human-readable name. Else None."""
+    if not iso3:
+        return None
+    code = _ISO3_TO_PREFERRED_EPSG.get(iso3.upper())
+    if not code:
+        return None
+    try:
+        from pyproj import CRS
+        crs = CRS.from_epsg(code)
+        name = crs.name
+    except Exception:
+        name = f"EPSG:{code}"
+    return (code, name,
+            f"Curated default for {iso3.upper()} "
+            f"(≥3-source consensus, WGS84-UTM family)")
+
+
 def suggest_crses(aoi_path: Optional[str] = None,
                   iso3: Optional[str] = None,
                   max_results: int = 5) -> List[Tuple[int, str, str]]:
@@ -152,13 +202,15 @@ def suggest_crses(aoi_path: Optional[str] = None,
     for projected CRSes appropriate for the given AOI / country.
 
     Strategy:
-      - When ``aoi_path`` is set, query pyproj for projected CRSes whose
-        registered area-of-use intersects the AOI bbox; rank by overlap-
-        area ratio.
-      - When ``iso3`` is set, boost CRSes whose name contains the country
-        name (catches national grids that have over-broad areas-of-use).
-      - Skip deprecated CRSes.
-      - Cap at ``max_results`` (default 5).
+      1. If ``iso3`` is in the curated _ISO3_TO_PREFERRED_EPSG table, use
+         that as the top result (validated against ≥3 published sources).
+      2. When ``aoi_path`` is set, query pyproj for projected CRSes whose
+         registered area-of-use intersects the AOI bbox; rank by overlap-
+         area ratio. Use as fallback / for runner-up suggestions.
+      3. When ``iso3`` is set, boost CRSes whose name contains the country
+         name (catches national grids that have over-broad areas-of-use).
+      4. Skip deprecated CRSes.
+      5. Cap at ``max_results`` (default 5).
 
     Returns an empty list if pyproj is not available or no candidates
     were found. The dock falls back to its existing manual CRS picker
@@ -166,6 +218,9 @@ def suggest_crses(aoi_path: Optional[str] = None,
     """
     if not _HAS_PYPROJ:
         return []
+
+    # Step 1: curated lookup. Top result if ISO3 known.
+    curated = _lookup_curated_epsg(iso3)
 
     bbox = aoi_bbox_from_path(aoi_path) if aoi_path else None
     country_name = (_ISO3_TO_NAME.get(iso3.upper())
@@ -244,6 +299,10 @@ def suggest_crses(aoi_path: Optional[str] = None,
     candidates.sort(key=lambda c: c[3], reverse=True)
     seen = set()
     out = []
+    # Step 1 result: curated pick always wins the top slot.
+    if curated:
+        out.append(curated)
+        seen.add(curated[0])
     for code, name, reason, _ in candidates:
         if code in seen:
             continue

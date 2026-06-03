@@ -8,8 +8,10 @@ silently zero out the primary-forest output on some GDAL builds (see
 
 ## Current
 
-- [`pff_qgis_tools_0.16.0-beta.12.zip`](pff_qgis_tools_0.16.0-beta.12.zip)
-  — all bug fixes through 2026-05-12 workshop.
+- [`pff_qgis_tools_0.16.0-beta.13.zip`](pff_qgis_tools_0.16.0-beta.13.zip)
+  — all bug fixes through 2026-05-12 workshop, plus scroll-wheel trap fix
+  and multi-year baseline-forest constraint (see
+  [../docs/known_issues.md](../docs/known_issues.md)).
 
 ## Install
 

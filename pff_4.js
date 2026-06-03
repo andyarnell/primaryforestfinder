@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.7";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.8";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -47,6 +47,11 @@
   var property_name = "gaul0_name"
   // Simplified geometries (0.001° tolerance, diced to 10k vertices) for countries
   // whose original GAUL polygons exceed the GEE vertex limit on .geometry().
+  // NOTE: tried switching to the un-diced
+  // 'GAUL_2024_L0_simplify_0_001deg' asset to remove dice seams; that
+  // asset's field names don't include 'iso3_code' so the filter
+  // returned an empty collection. Reverted until the un-diced asset's
+  // schema is verified.
   var countries_simple = ee.FeatureCollection(
       "projects/ee-andyarnellgee/assets/crosscutting/GAUL_2024_L0_simplify_0_001deg_dice10k");
   var gaul_raster = ee.Image("projects/ee-andyarnellgee/assets/gaul_2024_level_0_code_500m");
@@ -1997,7 +2002,16 @@
     // Unique run tag so GEE doesn't reject duplicate task descriptions
     var runNow = new Date();
     var runPad = function(n) { return n < 10 ? '0' + n : n; };
-    var runTag = '_' + runPad(runNow.getHours()) + 'h' + runPad(runNow.getMinutes()) + 'm';
+    // ISO-8601 basic UTC: _YYYYMMDDTHHMMZ. Sortable + unambiguous +
+    // no FS-invalid characters. Replaces the legacy _HHhMMm which
+    // collided across days and wasn't lex-sortable.
+    var runTag = '_' + runNow.getUTCFullYear()
+      + runPad(runNow.getUTCMonth() + 1)
+      + runPad(runNow.getUTCDate())
+      + 'T'
+      + runPad(runNow.getUTCHours())
+      + runPad(runNow.getUTCMinutes())
+      + 'Z';
     var countryClean = cleanCountryName(selectedCountry);
     var countryInfo = gaulLut.GAUL_LUT[gaulLut.nameToCode(selectedCountry)];
     var iso3 = countryInfo ? countryInfo.iso3 : countryClean.substring(0, 3).toUpperCase();
@@ -2152,7 +2166,18 @@
     //  0 — AOI & reference layers
     // ══════════════════════════════════════════════════════
     if (exportChk_aoi.getValue()) {
-      doExportTable(country_sel, mkExportName('00a', 'aoi_' + countryClean + '_vector'), folder);
+      // Big countries (IDN, THA, CHN, AUS, DZA) come from the dice10k
+      // simplified GAUL asset which splits each country into many
+      // chunks. Exporting `country_sel` directly produces a shapefile
+      // with one feature per chunk → visible dice seams. Wrap as a
+      // single-feature collection whose geometry is the union of all
+      // chunks (FeatureCollection.geometry() already returns that
+      // union). Result: one clean multipolygon per country in the
+      // exported AOI vector.
+      var aoi_one_feature = ee.FeatureCollection([
+        ee.Feature(country_sel.geometry(), {gaul0_name: selectedCountry})
+      ]);
+      doExportTable(aoi_one_feature, mkExportName('00a', 'aoi_' + countryClean + '_vector'), folder);
     }
 
     // ══════════════════════════════════════════════════════
@@ -2801,9 +2826,11 @@
 
     var now = new Date();
     var pad = function(n) { return n < 10 ? '0' + n : n; };
+    // ISO-8601 basic UTC: pff_<country>_YYYYMMDDTHHMMZ. Sortable +
+    // unambiguous + no FS-invalid characters.
     downloadFolder = 'pff_' + countryClean + '_' +
-      now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + '_' +
-      pad(now.getHours()) + 'h' + pad(now.getMinutes()) + 'm';
+      now.getUTCFullYear() + pad(now.getUTCMonth()+1) + pad(now.getUTCDate()) +
+      'T' + pad(now.getUTCHours()) + pad(now.getUTCMinutes()) + 'Z';
 
     downloadStatusLabel.setValue('Calculating tiles…');
     downloadStatusLabel.style().set('color', '#888');
@@ -5429,6 +5456,15 @@
     var useSplitScreen = enableSplitScreenCheckbox.getValue();
     var analysisYear1 = parseInt(yearSelector1.getValue());
     var analysisYear2 = parseInt(yearSelector2.getValue());
+    // Multi-year baseline-forest constraint (closure-scoped so
+    // addLayersToMap can read these). When split-screen is active and the
+    // two years differ, the later year's forest_map is intersected with
+    // the earliest year's forest mask so dynamic forest layers (e.g.
+    // GLAD) can't inflate later-year primary forest with newly-detected
+    // forest pixels. Built later in this function once the forest source
+    // toggles are resolved.
+    var baselineForestMask = null;
+    var baselineForestYear = null;
 
     // Reset stored forest data so only currently-active years appear in stats
     latestMaskedTreeCover = {};
@@ -5887,6 +5923,15 @@
       }
 
       forest_map = applyCustomForestMerge(forest_map, analysisYear);
+
+      // Multi-year baseline-forest constraint: when split-screen is on
+      // and this is the later year, intersect the year-N forest with the
+      // baseline-year forest mask so newly-detected forest pixels (e.g.
+      // GLAD year-on-year additions) can't be classified as primary.
+      if (baselineForestMask !== null &&
+          analysisYear !== baselineForestYear && forest_map) {
+        forest_map = forest_map.and(baselineForestMask).rename('forest');
+      }
 
       // Final check: If no forest dataset was selected, print a warning
       if (!forest_map) {
@@ -6630,6 +6675,31 @@
     
     // print('Cached distance keys:', Object.keys(cachedState.distanceImages));
     
+    // Baseline forest construction for the multi-year constraint:
+    // mirror the per-year forest derivation but force it to the earliest
+    // year. addLayersToMap will AND each non-baseline year's forest_map
+    // with this mask so primary forest can't expand into pixels that were
+    // not forest at baseline.
+    if (useSplitScreen && analysisYear1 !== analysisYear2) {
+      baselineForestYear = Math.min(analysisYear1, analysisYear2);
+      var _bf = null;
+      if (useAgreementForest) {
+        _bf = agreementForestPrep(baselineForestYear, treecoverPercentThreshold, treecoverHeightThreshold);
+      } else if (useUnionForest) {
+        _bf = unionForestPrep(baselineForestYear, treecoverPercentThreshold, treecoverHeightThreshold);
+      } else if (useGladLulcForest) {
+        _bf = gladLulcForestPrep(baselineForestYear, treecoverHeightThreshold);
+      } else if (useHansenTreecover) {
+        _bf = gfcHansenTreecoverPrep(baselineForestYear, treecoverPercentThreshold);
+      }
+      if (_bf !== null) {
+        _bf = applyCustomForestMerge(_bf, baselineForestYear);
+        baselineForestMask = _bf;
+        print('Baseline forest constraint active: year ' + baselineForestYear +
+              ' mask will be intersected with the other year\'s forest.');
+      }
+    }
+
     // Add layers to maps
     if (useSplitScreen) {
       addLayersToMap(map1, analysisYear1);

@@ -559,6 +559,14 @@ def _check_input_slot_filename_hints(input_paths, feedback):
 class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     # -- Inputs --
     FOREST_RASTER = "FOREST_RASTER"
+    # Baseline-year forest mask (set automatically by the dock during
+    # multi-year runs; later-year iterations constrain their forest to
+    # pixels that were ALSO forest in the earliest year of the run).
+    # Stops dynamic forest layers (e.g. GLAD) from inflating later-year
+    # primary forest with newly-detected forest pixels. See
+    # docs/known_issues.md: "Dynamic forest layers — primary forest
+    # appears to grow across years".
+    BASELINE_FOREST_MASK = "BASELINE_FOREST_MASK"
     ROADS = "ROADS"
     ROADS_RASTER = "ROADS_RASTER"
     BUILTUP_SMALL_RASTER = "BUILTUP_SMALL_RASTER"
@@ -1013,6 +1021,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.FOREST_RASTER,
             "02 Tree Cover: Forest raster (REQUIRED; binary 1/0; defines reference grid)"))
+        # Hidden param: set automatically by the dock during multi-year
+        # runs to the baseline (earliest) year's 02c_forest output. Later
+        # years intersect their forest with this mask so dynamic forest
+        # layers (GLAD etc.) can't inflate later-year primary candidates.
+        # Not exposed in the UI — single-year users never need this.
+        baseline_param = QgsProcessingParameterRasterLayer(
+            self.BASELINE_FOREST_MASK,
+            "02 Tree Cover: Baseline forest mask (internal, multi-year only)",
+            optional=True)
+        baseline_param.setFlags(
+            baseline_param.flags()
+            | QgsProcessingParameterDefinition.FlagHidden)
+        self.addParameter(baseline_param)
         # P1.22: paired plantations + planted-forest exclusions follow
         # the FRA forest-derivation flow:
         #   tree cover - plantations    = Forest (FRA Note 10 baseline)
@@ -1369,7 +1390,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.16.0-beta.12"
+    PFF_VERSION = "0.16.0-beta.13"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -2656,6 +2677,35 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
         forest_ds = gdal.Open(reference, gdal.GA_ReadOnly)
         forest = forest_ds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
         forest_ds = None
+
+        # Multi-year baseline forest constraint: when the dock has set
+        # BASELINE_FOREST_MASK (i.e. this is a later-year iteration in a
+        # multi-year run), AND the current-year forest with the baseline-
+        # year forest mask. Stops dynamic forest layers (GLAD etc.) from
+        # adding newly-detected forest pixels to later-year primary
+        # candidates -- FRA primary forest should not grow over time.
+        baseline_mask_layer = self.parameterAsRasterLayer(
+            parameters, self.BASELINE_FOREST_MASK, context)
+        if baseline_mask_layer is not None:
+            baseline_mask_path = baseline_mask_layer.source()
+            _bds = gdal.Open(baseline_mask_path, gdal.GA_ReadOnly)
+            _barr = _bds.GetRasterBand(1).ReadAsArray().astype(np.uint8)
+            _bds = None
+            if _barr.shape == forest.shape:
+                _before = int((forest == 1).sum())
+                forest = (forest & (_barr == 1).astype(np.uint8)).astype(
+                    np.uint8)
+                _after = int((forest == 1).sum())
+                feedback.pushInfo(
+                    f"Constrained forest to baseline mask "
+                    f"({os.path.basename(baseline_mask_path)}): "
+                    f"{_before:,} -> {_after:,} forest pixels "
+                    f"({_before - _after:,} newly-detected pixels excluded).")
+            else:
+                feedback.pushWarning(
+                    f"Baseline forest mask shape {_barr.shape} does not "
+                    f"match current forest shape {forest.shape}; "
+                    f"constraint skipped for this year.")
 
         # Tier 1 -- undisturbed forest (GEE canonical name: tier1_undisturbed)
         feedback.pushInfo("Tier 1 -- undisturbed forest...")
