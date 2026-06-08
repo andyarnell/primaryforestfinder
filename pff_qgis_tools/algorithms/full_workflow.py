@@ -217,6 +217,19 @@ def _run_preflight_checks(output_folder, feedback):
     """
     feedback.pushInfo("=== PREFLIGHT CHECKS ===")
 
+    # (a0) 32-bit architecture warning. A 32-bit QGIS process is capped at
+    # ~2 GB address space regardless of installed RAM, so reading rasters
+    # into memory (the AOI clip / masking steps) can fail with MemoryError
+    # even on small areas. 64-bit QGIS is required for reliable runs.
+    import sys as _sys
+    if _sys.maxsize <= 2 ** 32:
+        feedback.pushWarning(
+            "Running on 32-BIT QGIS (Python "
+            f"{_sys.version_info.major}.{_sys.version_info.minor}). "
+            "32-bit processes are limited to ~2 GB memory and can fail with "
+            "'MemoryError' even on small rasters. Please switch to a 64-bit "
+            "QGIS install (current LTR recommended).")
+
     # (a) Cloud-sync detection
     provider = _is_cloud_synced_path(output_folder)
     if provider:
