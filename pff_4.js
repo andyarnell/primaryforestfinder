@@ -4398,7 +4398,7 @@
   // LEGEND PANEL (floating on map, bottom-left)
   // =============================================================================
 
-  function createLegendItem(color, label) {
+  function createLegendItem(color, label, indent) {
     var colorBox = ui.Label({
       style: {
         backgroundColor: color,
@@ -4414,7 +4414,7 @@
     return ui.Panel({
       widgets: [colorBox, description],
       layout: ui.Panel.Layout.flow('horizontal'),
-      style: {margin: '2px 0'}
+      style: {margin: indent ? '1px 0 1px 14px' : '2px 0'}
     });
   }
 
@@ -4442,9 +4442,11 @@
     {key: 'inputAgriculture',    color: '#b38f00', label: 'Input: Agriculture',     group: 'Human Influence'},
     {key: 'protectedAreas',      color: '#00cccc', label: 'Input: Protected Areas', group: 'Buffer Exceptions'},
     {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'},
-    {key: 'flii',                color: '#0000ff', label: 'Reference: FLII (high)',                group: 'Reference'},
-    {key: 'flii',                color: '#ffa500', label: 'Reference: FLII (medium)',              group: 'Reference'},
-    {key: 'fdap',                color: '#0000ff', label: 'Reference: Forest Persistence (FDaP)', group: 'Reference'},
+    {key: 'flii', group: 'Reference', title: 'FLII (forest integrity)', classes: [
+      {color: '#0000ff', label: 'high (≥ 9.6)'},
+      {color: '#ffa500', label: 'medium (6.0–9.6)'}
+    ]},
+    {key: 'fdap',                color: '#0000ff', label: 'Forest Persistence (FDaP)  >0.90', group: 'Reference'},
     {key: 'refCustom1',          color: '#e377c2', label: 'Reference: Custom 1',                  group: 'Reference'},
     {key: 'refCustom2',          color: '#17becf', label: 'Reference: Custom 2',                  group: 'Reference'}
   ];
@@ -4529,7 +4531,16 @@
             legendItemsPanel.add(ui.Label(entry.group + ':', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}));
             lastGroup = entry.group;
           }
-          legendItemsPanel.add(createLegendItem(entry.color, entry.label));
+          if (entry.classes) {
+            // Multi-class layer: title row, then indented class swatches
+            // (GIS-style) so it reads as one layer with its categories.
+            legendItemsPanel.add(ui.Label(entry.title, {fontSize: '11px', margin: '2px 0 0 4px'}));
+            entry.classes.forEach(function(c) {
+              legendItemsPanel.add(createLegendItem(c.color, c.label, true));
+            });
+          } else {
+            legendItemsPanel.add(createLegendItem(entry.color, entry.label));
+          }
           anyShown = true;
         }
       });
