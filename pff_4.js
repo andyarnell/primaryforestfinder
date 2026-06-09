@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.10";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.11";
 
   // Changelog: see CHANGELOG_GEE.md
 

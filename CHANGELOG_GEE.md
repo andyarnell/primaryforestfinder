@@ -1,5 +1,12 @@
 # Changelog — pff_4.js (GEE app)
 
+## v4.16.0-beta.11 (Refine input / FRA definitions overhaul, PR #45)
+- ⓘ FRA-definitions popup rebuilt as two tabs (Definitions / Hierarchy; simulated with toggle buttons). Definitions lists the FRA categories (Tree cover dropped — universally understood — so no group-headers/"not a FRA category" notes needed). Hierarchy shows the real FRA taxonomy by indentation (Forest and Other land as separate top-level branches; Tree cover only as a muted footnote). ⓘ button now shows open/closed state ("ⓘ ▾" + highlight when open).
+- "Refine input" section polish: experimental flag moved off the toggle (now just "(optional)") into a muted-grey "⚠ Experimental" marker at the top; short description "Helps align outputs with FRA categories." (expanded-only) + ⓘ on one row; dropdown relabelled "Treat input as:"; inline hints removed (ⓘ does the work). Forest definition shows the FRA thresholds (≥5 m, ≥10% canopy, ≥0.5 ha).
+- Output integrity: OLTC<->planted exclusions are coupled when a category is declared (NRF = Forest − planted, so 02e_naturally_regenerating_forest can't be produced with OLTC still in); independent for "Non FRA aligned". Status line is declaration-aware. FRA-threshold warning when a category is declared but tree height/canopy is below the FRA minimum.
+- Legend: empty before a country is picked (was listing forest-layer defaults that weren't on the map).
+- Both "⚠ Experimental" markers (Refine input + Validation) recoloured to muted grey #777.
+
 ## v4.16.0-beta.10 (Refine input UX — §2 Tree Cover, PR #44)
 - "Refine input" sub-section toggle restyled to match the "Buffer Exceptions" sub-section (▸/▾ arrows, grey #555 text, #f0f0f0, no full-width stretch).
 - Exclusion toggles ("Exclude other land with tree cover" / "Exclude planted forest") now ship UNTICKED — refinement is opt-in (opening the section no longer silently refines). Selecting an FRA category still auto-ticks them.
