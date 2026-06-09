@@ -1,5 +1,13 @@
 # Changelog — pff_4.js (GEE app)
 
+## v4.16.0-beta.10 (Refine input UX — §2 Tree Cover, PR #44)
+- "Refine input" sub-section toggle restyled to match the "Buffer Exceptions" sub-section (▸/▾ arrows, grey #555 text, #f0f0f0, no full-width stretch).
+- Exclusion toggles ("Exclude other land with tree cover" / "Exclude planted forest") now ship UNTICKED — refinement is opt-in (opening the section no longer silently refines). Selecting an FRA category still auto-ticks them.
+- Single source of truth: removed the collapsed-section gate from exclusionActive() — the checkbox now controls refinement whether the panel is open or collapsed.
+- Always-visible status line under the toggle (like Buffer Exceptions): "Refinement: none (output = tree-cover input)" / "Refining to: Forest" / "Refining to: Naturally regenerating forest".
+- "FRA category:" dropdown relabelled "Declare input as:" with a clarifying hint (workshop feedback: users read it as picking the output); default option "No FRA alignment" → "Non FRA aligned".
+- Dropped the redundant "Tree-cover input definition" header; "ⓘ FRA definitions" button shortened to "ⓘ"; "Other land with tree cover" → "... (OLTC)" in the ⓘ definitions.
+
 ## v4.16.0-beta.9 (validation overlays + download UX)
 About panel (PR #42):
 - Added two links after "Source code on GitHub": "Data inputs (global datasets)" (→ docs/datasets_global.md) and "Report an issue / request a feature" (→ GitHub issues).
