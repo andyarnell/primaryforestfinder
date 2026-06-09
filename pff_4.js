@@ -4143,18 +4143,18 @@
   }
 
   var refineSubsectionToggle = ui.Button({
-    label: '▸ Refine input (optional)',
+    label: '▶ Refine input (optional)',
     onClick: function() {
       appState.ui.refineInputCollapsed = !appState.ui.refineInputCollapsed;
       refineSubsectionContent.style().set({
         shown: !appState.ui.refineInputCollapsed});
       refineSubsectionToggle.setLabel(
-        (appState.ui.refineInputCollapsed ? '▸ ' : '▾ ')
+        (appState.ui.refineInputCollapsed ? '▶ ' : '▼ ')
         + 'Refine input (optional)');
       // Collapse no longer affects exclusionActive() (the checkbox is the
       // single source of truth now), so no stale-mark needed on toggle.
     },
-    style: {fontSize: '14px', color: '#555', margin: '6px 0 2px 0',
+    style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0',
             padding: '2px 4px', backgroundColor: '#f0f0f0'}
   });
 
@@ -4389,14 +4389,14 @@
   updateBufferExceptionsStatus();
 
   var bufferExceptionsToggle = ui.Button({
-    label: '▸ Buffer Exceptions',
+    label: '▶ Buffer Exceptions',
     onClick: function() {
       var s = bufferExceptionsContent.style().get('shown');
       bufferExceptionsContent.style().set({shown: !s});
-      bufferExceptionsToggle.setLabel(s ? '▸ Buffer Exceptions' : '▾ Buffer Exceptions');
+      bufferExceptionsToggle.setLabel(s ? '▶ Buffer Exceptions' : '▼ Buffer Exceptions');
       updateLeftPanelWidth();
     },
-    style: {fontSize: '14px', color: '#555', margin: '6px 0 2px 0', padding: '2px 4px', backgroundColor: '#f0f0f0'}
+    style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0', padding: '2px 4px', backgroundColor: '#f0f0f0'}
   });
 
   // Helper: create a combined checkbox + slider row for a buffer type
