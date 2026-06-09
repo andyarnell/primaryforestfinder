@@ -917,6 +917,9 @@
     slope: false,
     protectedAreas: false,
     flii: false,
+    fdap: false,
+    refCustom1: false,
+    refCustom2: false,
     countryOutline: true
   };
 
@@ -1198,6 +1201,16 @@
         value: 'Source code on GitHub',
         style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
         targetUrl: 'https://github.com/andyarnell/primaryforestfinder'
+      }),
+      ui.Label({
+        value: 'Data inputs (global datasets)',
+        style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
+        targetUrl: 'https://github.com/andyarnell/primaryforestfinder/blob/main/docs/datasets_global.md'
+      }),
+      ui.Label({
+        value: 'Report an issue / request a feature',
+        style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
+        targetUrl: 'https://github.com/andyarnell/primaryforestfinder/issues'
       }),
       ui.Label('Contact — andrew.arnell@fao.org', {fontSize: '11px', margin: '0 0 0 4px'})
     ],
@@ -4428,7 +4441,11 @@
     {key: 'inputBuiltupLarge',   color: '#1a1a80', label: 'Input: Large Built-up',  group: 'Human Influence'},
     {key: 'inputAgriculture',    color: '#b38f00', label: 'Input: Agriculture',     group: 'Human Influence'},
     {key: 'protectedAreas',      color: '#00cccc', label: 'Input: Protected Areas', group: 'Buffer Exceptions'},
-    {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'}
+    {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'},
+    {key: 'flii',                color: '#1f78b4', label: 'Reference: FLII (high/med)',           group: 'Reference'},
+    {key: 'fdap',                color: '#0000ff', label: 'Reference: Forest Persistence (FDaP)', group: 'Reference'},
+    {key: 'refCustom1',          color: '#e377c2', label: 'Reference: Custom 1',                  group: 'Reference'},
+    {key: 'refCustom2',          color: '#17becf', label: 'Reference: Custom 2',                  group: 'Reference'}
   ];
 
   function createLegendPanel() {
@@ -4482,6 +4499,9 @@
         if (name.indexOf('Input: Slope') === 0) visibleLayers.slope = true;
         if (name.indexOf('Input: Protected') === 0) visibleLayers.protectedAreas = true;
         if (name.indexOf('Reference: FLII') === 0) visibleLayers.flii = true;
+        if (name.indexOf('Reference: Forest Persistence') === 0) visibleLayers.fdap = true;
+        if (name === 'Reference: Custom 1') visibleLayers.refCustom1 = true;
+        if (name === 'Reference: Custom 2') visibleLayers.refCustom2 = true;
         if (name.indexOf('Input: Tree cover') === 0) visibleLayers.treeCover = true;
         // 'Forest' handled by exact match in NAME_TO_KEY above -- no
         // prefix here, would over-match 'Forest outside buffers'.
@@ -4791,7 +4811,7 @@
   // =============================================================================
 
   var saveDataWidgets = [
-    ui.Label('Save to computer', {fontWeight: 'bold', fontSize: '13px', margin: '6px 0 4px 0', color: '#222'}),
+    ui.Label('Save to computer (experimental)', {fontWeight: 'bold', fontSize: '13px', margin: '6px 0 4px 0', color: '#222'}),
     downloadPanel
   ];
   if (!IS_PUBLISHED_APP) {
@@ -4855,16 +4875,24 @@
   // VALIDATION PANEL (collapsible, right side)
   // =============================================================================
 
+  // Validation reference layers are added/removed inside addLayersToMap,
+  // so toggling one re-runs the analysis to add (or drop) it on the map
+  // immediately. Only re-run when a country is selected; otherwise just
+  // mark the analysis stale.
+  function refreshOnValidationToggle() {
+    if (countrySelector.getValue()) { updateMap(); } else { markNeedsUpdate(); }
+  }
+
   var validationFliiCheckbox = ui.Checkbox({
     label: 'FLII (high/medium integrity)',
     value: false,
-    onChange: function() { markNeedsUpdate(); }
+    onChange: refreshOnValidationToggle
   });
 
   var validationFdapCheckbox = ui.Checkbox({
     label: 'Forest Persistence (FDaP)',
     value: false,
-    onChange: function() { markNeedsUpdate(); }
+    onChange: refreshOnValidationToggle
   });
 
   // -- Custom reference layer input factory --
@@ -4873,7 +4901,7 @@
     var enableCheckbox = ui.Checkbox({
       label: label,
       value: false,
-      onChange: function() { markNeedsUpdate(); },
+      onChange: refreshOnValidationToggle,
       style: {fontWeight: 'bold', fontSize: '10px', margin: '6px 0 2px 0'}
     });
     var assetInput = ui.Textbox({
@@ -4914,6 +4942,8 @@
 
   var validationContent = ui.Panel({
     widgets: [
+      ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
+        color: '#b35900', margin: '0 0 4px 0'}),
       ui.Label(
         'Compare outputs to existing maps. ' +
         'For validation and sampling see the QGIS plugin ' +
