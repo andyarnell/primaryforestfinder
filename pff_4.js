@@ -3679,7 +3679,7 @@
 
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('Declare input as:', inputCategorySelect),
+      createCompactRow('Declare input as (optional):', inputCategorySelect),
       fraInputHint,
       fraDefLabel
     ],
