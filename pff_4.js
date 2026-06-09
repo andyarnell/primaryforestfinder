@@ -1096,7 +1096,7 @@
     value: '2000', 
     onChange: function(value) {
       updateVisibleAssetInputs();
-      updateMap({skipAnalysis: true});
+      updateMap();
     },
     style: {width: '80px', margin: '4px 8px'}
   });
@@ -1110,7 +1110,7 @@
     value: '2020', 
     onChange: function(value) {
       updateVisibleAssetInputs();
-      updateMap({skipAnalysis: true});
+      updateMap();
     },
     style: {width: '80px', margin: '4px 8px'}
   });
@@ -1123,7 +1123,7 @@
       yearSelector1.style().set({shown: checked});
       yearSelector2Label.setValue(checked ? 'Year 2:' : 'Year:');
       updateVisibleAssetInputs();
-      updateMap({skipAnalysis: true});
+      updateMap();
     },
     style: {margin: '4px 8px'}
   });
