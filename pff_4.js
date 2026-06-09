@@ -2836,6 +2836,11 @@
     downloadStatusLabel.style().set('color', '#888');
     downloadButton.setLabel('Working…');
 
+    // Defer the heavy/blocking work (autoGrid + bounds.getInfo() + tiling)
+    // one tick so the "Calculating tiles…" message paints BEFORE the GUI
+    // thread blocks -- otherwise the click looks like it just hangs.
+    ui.util.setTimeout(function() {
+
     var dlRegion = userDrawnAoi || region;
     var yearsArr = Object.keys(sourceDict);
 
@@ -2904,13 +2909,29 @@
           }));
           psScriptPanel.add(ui.Label(
             'Save as .py file (rename extension from .txt to .py) and run:\n' +
-            '  python download_tiles.py\n\n' +
-            '⚠ Links expire ~2 hours after generation.',
+            '  python download_tiles.py',
             {fontSize: '10px', margin: '2px 0', whiteSpace: 'pre'}));
-          psScriptPanel.add(ui.Label(script, {
-            fontSize: '10px', whiteSpace: 'pre', margin: '4px 0',
-            border: '1px solid #ccc', padding: '4px'
-          }));
+          // Mosaic step comes AFTER the run instruction (logical order:
+          // run script -> tiles downloaded -> mosaic them).
+          if (useTiled) {
+            psScriptPanel.add(ui.Label(
+              'After downloading, mosaic the .tif tiles in QGIS ' +
+              '(Raster > Miscellaneous > Merge) or with gdal_merge.py ' +
+              'to produce a single file.',
+              {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '4px 0 0 0'}));
+          }
+          psScriptPanel.add(ui.Label(
+            '⚠ Links expire ~2 hours after generation.',
+            {fontSize: '10px', margin: '4px 0 2px 0'}));
+          // Optional code preview (Advanced -> Preview Python code).
+          if (previewPythonCheckbox.getValue()) {
+            psScriptPanel.add(ui.Label('Code preview:', {fontSize: '10px',
+              fontWeight: 'bold', color: '#555', margin: '6px 0 2px 0'}));
+            psScriptPanel.add(ui.Label(script, {
+              fontSize: '10px', whiteSpace: 'pre', margin: '0 0 4px 0',
+              border: '1px solid #ccc', padding: '4px'
+            }));
+          }
           psScriptPanel.style().set('shown', true);
         } catch (e) {
           psScriptPanel.add(ui.Label('Error generating script: ' + e.message,
@@ -2924,8 +2945,9 @@
           linksReady + ' link(s) ready. ⚠ Links expire in ~2 hours — download soon.');
       }
 
-      // Mosaic suggestion for tiled downloads
-      if (useTiled) {
+      // Mosaic suggestion for tiled NON-script downloads (script mode adds
+      // it to psScriptPanel above, right after the run instruction).
+      if (useTiled && !useScriptMode) {
         downloadLinksPanel.add(ui.Label(
           'After downloading, mosaic the .tif tiles in QGIS ' +
           '(Raster > Miscellaneous > Merge) or with gdal_merge.py ' +
@@ -2982,6 +3004,7 @@
         });
       });
     });
+    }, 0);
   }
 
   var downloadButton = ui.Button({
@@ -3047,6 +3070,15 @@
     onChange: function(val) { DOWNLOAD_LINK_THRESHOLD = val; }
   });
 
+  // When script mode triggers, optionally show the generated Python code
+  // inline (under a "Code preview:" header) so a user can inspect it before
+  // running. Off by default -- most users just want the download link.
+  var previewPythonCheckbox = ui.Checkbox({
+    label: 'Preview Python code',
+    value: false,
+    style: {fontSize: '11px', margin: '4px 0 0 0'}
+  });
+
   var downloadResolutionRow = ui.Panel(
     [ui.Label('Resolution (m):', {margin: '0 8px 0 0', fontSize: '11px'}), downloadScaleSlider, downloadScaleInput],
     ui.Panel.Layout.flow('horizontal'), {stretch: 'horizontal'});
@@ -3064,6 +3096,7 @@
         'When download links exceed this number, a Python script is ' +
         'generated instead of individual links.',
         {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 0'}),
+      previewPythonCheckbox,
       clearDownloadLinksButton
     ],
     layout: ui.Panel.Layout.flow('vertical'),
