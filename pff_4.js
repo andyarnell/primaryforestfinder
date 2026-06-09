@@ -1308,8 +1308,8 @@
   // SLIDERS (using pff2 values)
   // =============================================================================
 
-  var treecoverThresholdSlider = ui.Slider({min: 0, max: 100, value: 10, step: 5, onChange: markNeedsUpdate});
-  var treecoverHeightThresholdSlider = ui.Slider({min: 3, max: 25, value: 5, step: 1, onChange: markNeedsUpdate});
+  var treecoverThresholdSlider = ui.Slider({min: 0, max: 100, value: 10, step: 5, onChange: function() { markNeedsUpdate(); updateRefineFraWarning(); }});
+  var treecoverHeightThresholdSlider = ui.Slider({min: 3, max: 25, value: 5, step: 1, onChange: function() { markNeedsUpdate(); updateRefineFraWarning(); }});
   var roadSmallBufferSlider = ui.Slider({min: 0, max: 5000, value: 1000, step: 50, onChange: markNeedsUpdate});
   // roadLargeBufferSlider removed — single roads category only
   var builtUpSmallBufferSlider = ui.Slider({min: 0, max: 5000, value: 1000, step: 50, onChange: markNeedsUpdate});
@@ -3287,6 +3287,7 @@
       // P1.24: visibility branching (source -> threshold panels, plus
       // hide-on-Replace-global) is owned by updateGlobalForestInputsVisibility().
       updateGlobalForestInputsVisibility();
+      updateRefineFraWarning();  // height vs canopy relevance changes with source
       markNeedsUpdate();
     }
   });
@@ -3316,7 +3317,18 @@
     // doesn't silently start refining. Selecting an FRA category
     // auto-ticks it via updateRefineVisibility() (a deliberate opt-in).
     value: false,
-    onChange: function() { markNeedsUpdate(); updateRefineStatus(); },
+    onChange: function(checked) {
+      // Couple (FRA-aligned only): unticking OLTC also unticks planted,
+      // since NRF needs Forest first. Skipped for "Non FRA aligned" (the
+      // exclusions are independent there) and when OLTC is hidden.
+      if (!checked
+          && inputCategorySelect.getValue() !== INPUT_CATEGORY_NONE
+          && excludeAgriPanel.style().get('shown') !== false
+          && includePlantationsCheckbox.getValue()) {
+        includePlantationsCheckbox.setValue(false, false);
+      }
+      markNeedsUpdate(); updateRefineStatus();
+    },
     style: {fontSize: '11px'}
   });
   // Hint text removed (2026-05-12 workshop) — checkbox label now
@@ -3334,7 +3346,18 @@
     label: 'Refine to naturally regenerating forest',
     // Opt-in: ships UNTICKED (see excludeAgricultureFromForestCheckbox).
     value: false,
-    onChange: function() { markNeedsUpdate(); updateRefineStatus(); },
+    onChange: function(checked) {
+      // Couple (FRA-aligned only): excluding planted (-> NRF) needs OLTC
+      // excluded first (NRF = Forest - planted), so auto-tick OLTC. For
+      // "Non FRA aligned" the exclusions stay independent (no FRA claim).
+      if (checked
+          && inputCategorySelect.getValue() !== INPUT_CATEGORY_NONE
+          && excludeAgriPanel.style().get('shown') !== false
+          && !excludeAgricultureFromForestCheckbox.getValue()) {
+        excludeAgricultureFromForestCheckbox.setValue(true, false);
+      }
+      markNeedsUpdate(); updateRefineStatus();
+    },
     style: {fontSize: '11px'}
   });
   // Hint text removed (2026-05-12 workshop) — checkbox label now
@@ -3619,8 +3642,11 @@
   var inputCategoryFraInfo = ui.Button({
     label: 'ⓘ',
     onClick: function() {
-      var shown = fraDefsPanel.style().get('shown');
-      fraDefsPanel.style().set('shown', !shown);
+      var nowShown = !fraDefsPanel.style().get('shown');
+      fraDefsPanel.style().set('shown', nowShown);
+      // Make the on/off state obvious: caret + highlight when open.
+      inputCategoryFraInfo.setLabel(nowShown ? 'ⓘ ▾' : 'ⓘ');
+      inputCategoryFraInfo.style().set('backgroundColor', nowShown ? '#d0e0ff' : '#f4f8ff');
     },
     style: {fontSize: '10px', padding: '2px 6px', margin: '0 0 0 4px',
             backgroundColor: '#f4f8ff'}
@@ -3640,18 +3666,24 @@
   }
   updateFraDefLabel();
 
-  var fraDefsPanel = ui.Panel({
+  // ── ⓘ FRA definitions popup: two tabs (Definitions / Hierarchy) ──
+  // GEE has no native tab widget, so simulate it with two toggle buttons
+  // that show/hide their content panel and highlight the active one.
+  //
+  // Definitions tab: flat one-line FRA-category defs. Tree cover is
+  // deliberately omitted (universally understood) -- so every entry here
+  // IS an FRA category (no group headers / "(not a FRA category)" needed).
+  // Hierarchy tab: the real FRA taxonomy by indentation (Forest and Other
+  // land are SEPARATE top-level categories); Tree cover appears only as a
+  // muted footnote because it is not an FRA category.
+  var defsTabContent = ui.Panel({
     widgets: [
-      ui.Label('FRA 2025 definitions:', {fontWeight: 'bold', fontSize: '10px', margin: '2px 0 2px 4px'}),
-      ui.Label('Tree cover (FRA cascade entry — not a FRA category)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Sum of Forest + OLTC. FRA threshold (≥5 m, ≥10% canopy, ≥0.5 ha) applied without a land-use filter.', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('As above, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Land use is forest; ≥5 m, ≥10% canopy, ≥0.5 ha (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Forest established through natural regeneration', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
-      ui.Label('─────', {fontSize: '8px', color: '#ccc', margin: '2px 0 2px 8px'}),
       ui.Label('Other land with tree cover (OLTC)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Tree cover on non-forest land use: oil palm, orchards, agroforestry', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Planted forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
@@ -3662,26 +3694,67 @@
         targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
       })
     ],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {shown: true, margin: '2px 0 0 0'}
+  });
+
+  var hierTabContent = ui.Panel({
+    widgets: [
+      ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '2px 0 0 8px'}),
+      ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 20px'}),
+      ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 32px'}),
+      ui.Label('Planted forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 20px'}),
+      ui.Label('Other land', {fontWeight: 'bold', fontSize: '10px', margin: '4px 0 0 8px'}),
+      ui.Label('Other land with tree cover (OLTC)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 20px'}),
+      ui.Label('Tree cover (tool input) = Forest + OLTC pixels — not a FRA category.',
+        {fontSize: '10px', fontStyle: 'italic', color: '#999', margin: '6px 0 0 8px'})
+    ],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {shown: false, margin: '2px 0 0 0'}
+  });
+
+  function setFraDefsTab(tab) {
+    var isDefs = (tab === 'defs');
+    defsTabContent.style().set('shown', isDefs);
+    hierTabContent.style().set('shown', !isDefs);
+    defsTabBtn.style().set('backgroundColor', isDefs ? '#d0e0ff' : '#f0f0f0');
+    hierTabBtn.style().set('backgroundColor', isDefs ? '#f0f0f0' : '#d0e0ff');
+  }
+  var defsTabBtn = ui.Button({
+    label: 'Definitions',
+    onClick: function() { setFraDefsTab('defs'); },
+    style: {fontSize: '10px', padding: '1px 6px', margin: '0 2px 0 0', backgroundColor: '#d0e0ff'}
+  });
+  var hierTabBtn = ui.Button({
+    label: 'Hierarchy',
+    onClick: function() { setFraDefsTab('hier'); },
+    style: {fontSize: '10px', padding: '1px 6px', margin: '0', backgroundColor: '#f0f0f0'}
+  });
+  var fraDefsTabBar = ui.Panel({
+    widgets: [defsTabBtn, hierTabBtn],
+    layout: ui.Panel.Layout.flow('horizontal'),
+    style: {margin: '0 0 2px 0'}
+  });
+
+  var fraDefsPanel = ui.Panel({
+    widgets: [fraDefsTabBar, defsTabContent, hierTabContent],
     style: {shown: false, backgroundColor: '#f8f9fa', border: '1px solid #e0e0e0',
             margin: '4px 0 4px 4px', padding: '4px'}
   });
+  setFraDefsTab('defs');  // initial tab state
 
   // fraInputSection now contains just the dropdown + the contextual
   // FRA-def label. The ⓘ FRA definitions button + the collapsible
   // defs panel are mounted at the TOP of the Refine subsection
   // (workshop feedback 2026-05-12).
-  // Clarifies the dropdown declares the INPUT (not picks an output) --
-  // workshop feedback: users read "FRA category:" as "choose my output".
-  var fraInputHint = ui.Label(
-    "Declares what your input already is — not the output you'll get.",
-    {fontSize: '10px', color: '#888', fontStyle: 'italic',
-     margin: '0 0 2px 4px'});
-
+  // Inline hints removed (fraInputHint + fraDefLabel) -- the ⓘ tabbed
+  // definitions popup now carries the definitional detail, so the dropdown
+  // just needs its label. fraDefLabel var + updateFraDefLabel() are kept
+  // as harmless no-ops (label no longer mounted) to avoid touching their
+  // callers in updateRefineVisibility / init.
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('Declare input as (optional):', inputCategorySelect),
-      fraInputHint,
-      fraDefLabel
+      createCompactRow('Treat input as:', inputCategorySelect)
     ],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {margin: '0 0 0 0'}
@@ -3946,7 +4019,21 @@
 
   var refineSubsectionContent = ui.Panel({
     widgets: [
-      inputCategoryFraInfo,       // ⓘ FRA definitions button (top)
+      // Experimental marker -- section-level flag at the top. Muted grey
+      // so it doesn't jar; the ⚠ glyph flags it.
+      ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
+        color: '#777', margin: '0 0 4px 0'}),
+      // Short description + ⓘ on one row; the ⓘ popup (fraDefsPanel) opens
+      // directly beneath this row.
+      ui.Panel({
+        widgets: [
+          ui.Label('Helps align outputs with FRA categories.',
+            {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '5px 4px 0 4px'}),
+          inputCategoryFraInfo
+        ],
+        layout: ui.Panel.Layout.flow('horizontal'),
+        style: {margin: '0 0 4px 0'}
+      }),
       fraDefsPanel,               // collapsible definitions panel
       fraInputSection,            // dropdown + contextual FRA-def label
       excludeAgriPanel,
@@ -3970,29 +4057,92 @@
   var refineStatusLabel = ui.Label('', {fontSize: '10px', color: '#888',
     fontStyle: 'italic', margin: '0 0 4px 4px'});
 
+  // FRA-threshold guardrail: when a category IS declared (FRA-aligned) but
+  // the tree-cover thresholds are below the FRA minimums (height ≥5 m,
+  // canopy ≥10%), warn the user to raise the threshold or pick Non FRA
+  // aligned. Always hidden for "Non FRA aligned" (sub-FRA is fine there).
+  var refineFraWarningLabel = ui.Label('', {fontSize: '10px', color: '#b35900',
+    fontWeight: 'bold', margin: '0 0 4px 4px', shown: false});
+
+  function updateRefineFraWarning() {
+    var cat = inputCategorySelect.getValue();
+    var declared = !!cat && cat !== '' && cat !== INPUT_CATEGORY_NONE;
+    if (!declared) { refineFraWarningLabel.style().set('shown', false); return; }
+    var src = treecoverSourceSelect.getValue();
+    var usesHeight = (src !== 'Hansen GFC');   // GLAD / Agreement / Combined use height
+    var usesCanopy = (src !== 'GLAD LULC');    // Hansen / Agreement / Combined use canopy
+    var heightBelow = usesHeight && treecoverHeightThresholdSlider.getValue() < 5;
+    var canopyBelow = usesCanopy && treecoverThresholdSlider.getValue() < 10;
+    if (!heightBelow && !canopyBelow) {
+      refineFraWarningLabel.style().set('shown', false);
+      return;
+    }
+    var parts = [];
+    if (heightBelow) parts.push('tree height ≥5 m');
+    if (canopyBelow) parts.push('canopy cover ≥10%');
+    refineFraWarningLabel.setValue(
+      '⚠ For FRA alignment, ' + parts.join(' and ') + ' is required. ' +
+      'Raise the threshold, or choose "Non FRA aligned".');
+    refineFraWarningLabel.style().set('shown', true);
+  }
+
   function updateRefineStatus() {
     var olwtc   = excludeAgricultureFromForestCheckbox.getValue();
     var planted = includePlantationsCheckbox.getValue();
+    var cat = inputCategorySelect.getValue();
+    var declared = !!cat && cat !== '' && cat !== INPUT_CATEGORY_NONE;
     var msg;
-    if (planted) {
-      msg = 'Refining to: Naturally regenerating forest';
-    } else if (olwtc) {
-      msg = 'Refining to: Forest';
+    if (!declared) {
+      // Non FRA aligned -- describe the exclusions; don't name FRA categories.
+      if (olwtc && planted) {
+        msg = 'Excluding: other land with tree cover + planted forest';
+      } else if (olwtc) {
+        msg = 'Excluding: other land with tree cover';
+      } else if (planted) {
+        msg = 'Excluding: planted forest';
+      } else {
+        msg = 'Refinement: none (output = input)';
+      }
     } else {
-      msg = 'Refinement: none (output = tree-cover input)';
+      // FRA-aligned. NRF needs Forest first: planted advances to NRF only
+      // once OLTC is removed (or the input is already Forest+). Otherwise
+      // the output would be "tree cover minus planted" (still OLTC) -- not
+      // real NRF -- so nudge rather than mislabel. (Coupling normally
+      // prevents this; this is a safety net.)
+      // Levels: 0 tree cover, 1 Forest, 2 NRF, 3 Primary.
+      var inputLevel = (cat === INPUT_CATEGORY_FOREST)  ? 1
+                     : (cat === INPUT_CATEGORY_NATREG)  ? 2
+                     : (cat === INPUT_CATEGORY_PRIMARY) ? 3 : 0;
+      var atForest = (inputLevel >= 1) || olwtc;  // OLTC removed, or input already Forest+
+      if (planted && !atForest) {
+        msg = '⚠ For NRF, also exclude other land with tree cover';
+      } else {
+        var level = inputLevel;
+        if (olwtc && level < 1) level = 1;
+        if (planted && atForest && level < 2) level = 2;
+        var names = {1: 'Forest', 2: 'Naturally regenerating forest', 3: 'Primary forest'};
+        if (level === 0) {
+          msg = 'Refinement: none (output = tree cover)';
+        } else if (level > inputLevel) {
+          msg = 'Refining to: ' + names[level];
+        } else {
+          msg = 'Input declared: ' + names[level];
+        }
+      }
     }
     refineStatusLabel.setValue(msg);
+    updateRefineFraWarning();
   }
 
   var refineSubsectionToggle = ui.Button({
-    label: '▸ Refine input (optional, experimental)',
+    label: '▸ Refine input (optional)',
     onClick: function() {
       appState.ui.refineInputCollapsed = !appState.ui.refineInputCollapsed;
       refineSubsectionContent.style().set({
         shown: !appState.ui.refineInputCollapsed});
       refineSubsectionToggle.setLabel(
         (appState.ui.refineInputCollapsed ? '▸ ' : '▾ ')
-        + 'Refine input (optional, experimental)');
+        + 'Refine input (optional)');
       // Collapse no longer affects exclusionActive() (the checkbox is the
       // single source of truth now), so no stale-mark needed on toggle.
     },
@@ -4007,7 +4157,8 @@
       inputDefinitionPanel,
       refineSubsectionToggle,
       refineSubsectionContent,
-      refineStatusLabel
+      refineStatusLabel,
+      refineFraWarningLabel
     ],
     style: {shown: false, padding: '8px'}
   });
@@ -4599,14 +4750,21 @@
 
     // Rebuild legend from visibleLayers state
     function refreshLegend() {
-      if (!_initialBuild) {
-        syncVisibleLayersFromMap();
-      }
-      _initialBuild = false;
       // Clear all except the title label
       while (legendItemsPanel.widgets().length() > 1) {
         legendItemsPanel.remove(legendItemsPanel.widgets().get(1));
       }
+      // Starter state (e.g. before a country is picked): nothing is on the
+      // map yet, so show an empty legend rather than the visibleLayers
+      // defaults (which would list forest layers that aren't drawn). Don't
+      // syncVisibleLayersFromMap() here -- it would clobber the
+      // visibleLayers defaults updateMap relies on for initial visibility.
+      if (_initialBuild) {
+        _initialBuild = false;
+        legendItemsPanel.add(ui.Label('(no layers visible)', {fontSize: '11px', color: '#888'}));
+        return;
+      }
+      syncVisibleLayersFromMap();
       var lastGroup = '';
       var anyShown = false;
       LEGEND_ENTRIES.forEach(function(entry) {
@@ -4633,7 +4791,7 @@
       }
     }
 
-    // Initial build (just show Primary Forest since that's the default)
+    // Initial build -- empty legend until the first analysis runs.
     refreshLegend();
 
     // Store refresh callback globally so toggleLayerByName can trigger it
@@ -5106,7 +5264,7 @@
   var validationContent = ui.Panel({
     widgets: [
       ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
-        color: '#b35900', margin: '0 0 4px 0'}),
+        color: '#777', margin: '0 0 4px 0'}),
       ui.Label(
         'Compare outputs to existing maps. ' +
         'For validation and sampling see the QGIS plugin ' +
