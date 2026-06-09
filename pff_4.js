@@ -3589,7 +3589,7 @@
   // the dropdown so users can undo a previous category pick. Workshop
   // feedback (2026-05-12): the placeholder-only approach trapped users
   // on whatever category they first picked.
-  var INPUT_CATEGORY_NONE = 'No FRA alignment';
+  var INPUT_CATEGORY_NONE = 'Non FRA aligned';
 
   var inputCategorySelect = ui.Select({
     items: [INPUT_CATEGORY_NONE,
