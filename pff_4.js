@@ -3312,8 +3312,11 @@
   // wrapper and exclusionActive(checkbox, wrapper) keeps working.
   var excludeAgricultureFromForestCheckbox = ui.Checkbox({
     label: 'Refine to forest',
-    value: true,
-    onChange: function() { markNeedsUpdate(); },
+    // Opt-in: ships UNTICKED so opening the "Refine input" sub-section
+    // doesn't silently start refining. Selecting an FRA category
+    // auto-ticks it via updateRefineVisibility() (a deliberate opt-in).
+    value: false,
+    onChange: function() { markNeedsUpdate(); updateRefineStatus(); },
     style: {fontSize: '11px'}
   });
   // Hint text removed (2026-05-12 workshop) — checkbox label now
@@ -3329,8 +3332,9 @@
 
   var includePlantationsCheckbox = ui.Checkbox({
     label: 'Refine to naturally regenerating forest',
-    value: true,
-    onChange: function() { markNeedsUpdate(); },
+    // Opt-in: ships UNTICKED (see excludeAgricultureFromForestCheckbox).
+    value: false,
+    onChange: function() { markNeedsUpdate(); updateRefineStatus(); },
     style: {fontSize: '11px'}
   });
   // Hint text removed (2026-05-12 workshop) — checkbox label now
@@ -3585,7 +3589,7 @@
   // the dropdown so users can undo a previous category pick. Workshop
   // feedback (2026-05-12): the placeholder-only approach trapped users
   // on whatever category they first picked.
-  var INPUT_CATEGORY_NONE = 'No FRA alignment';
+  var INPUT_CATEGORY_NONE = 'Non FRA aligned';
 
   var inputCategorySelect = ui.Select({
     items: [INPUT_CATEGORY_NONE,
@@ -3613,7 +3617,7 @@
   // actions. Style is kept understated so it reads as a link, not a
   // chunky action button.
   var inputCategoryFraInfo = ui.Button({
-    label: 'ⓘ FRA definitions',
+    label: 'ⓘ',
     onClick: function() {
       var shown = fraDefsPanel.style().get('shown');
       fraDefsPanel.style().set('shown', !shown);
@@ -3648,7 +3652,7 @@
       ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('─────', {fontSize: '8px', color: '#ccc', margin: '2px 0 2px 8px'}),
-      ui.Label('Other land with tree cover', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
+      ui.Label('Other land with tree cover (OLTC)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Tree cover on non-forest land use: oil palm, orchards, agroforestry', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Planted forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Trees established by planting/seeding: eucalyptus, pine, teak, rubber', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
@@ -3666,9 +3670,17 @@
   // FRA-def label. The ⓘ FRA definitions button + the collapsible
   // defs panel are mounted at the TOP of the Refine subsection
   // (workshop feedback 2026-05-12).
+  // Clarifies the dropdown declares the INPUT (not picks an output) --
+  // workshop feedback: users read "FRA category:" as "choose my output".
+  var fraInputHint = ui.Label(
+    "Declares what your input already is — not the output you'll get.",
+    {fontSize: '10px', color: '#888', fontStyle: 'italic',
+     margin: '0 0 2px 4px'});
+
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('FRA category:', inputCategorySelect),
+      createCompactRow('Declare input as (optional):', inputCategorySelect),
+      fraInputHint,
       fraDefLabel
     ],
     layout: ui.Panel.Layout.flow('vertical'),
@@ -3773,6 +3785,7 @@
     noRefineNote.style().set('shown', false);
     refineSep.style().set('shown', false);
 
+    updateRefineStatus();
     _updatingRefineVis = false;
   }
 
@@ -3792,14 +3805,12 @@
   // on the wrapper (so checkbox + hint label hide together), so we must
   // read the wrapper's shown state, not the bare checkbox.
   function exclusionActive(checkbox, wrapper) {
-    // Change F (GEE port): exclusions inside the collapsed "Refine
-    // input (optional, experimental)" subsection should never count
-    // as active. The wrapper panel's `shown` flag is per-widget and
-    // doesn't inherit from the collapsed ancestor, so check the
-    // subsection state explicitly.
-    if (appState && appState.ui && appState.ui.refineInputCollapsed) {
-      return false;
-    }
+    // Single source of truth = the checkbox value (gated only by its
+    // wrapper's FRA-driven visibility). Collapsing the "Refine input"
+    // sub-section no longer disables refinement -- the opt-in default
+    // (checkboxes ship unticked) covers the safety concern, and the
+    // status label can then reflect the checkbox state honestly whether
+    // the panel is open or collapsed (matches Buffer Exceptions).
     var visTarget = wrapper || checkbox;
     return visTarget.style().get('shown') !== false && checkbox.getValue();
   }
@@ -3904,9 +3915,8 @@
 
   var inputDefinitionPanel = ui.Panel({
     widgets: [
-      ui.Label('Tree-cover input definition', {
-        fontWeight: 'bold', fontSize: '11px',
-        margin: '0 0 4px 0', color: '#444'}),
+      // (Removed redundant "Tree-cover input definition" header -- the
+      // section's "Define Tree Cover:" title sits directly above this box.)
       treecoverSourceRow,
       treecoverPanel,
       treecoverHeightPanel,
@@ -3947,25 +3957,47 @@
       nationalPlantations.panel
     ],
     layout: ui.Panel.Layout.flow('vertical'),
-    style: {shown: false, margin: '0 0 0 6px'}
+    style: {shown: false, margin: '0 0 0 4px'}
   });
 
+  // Styling mirrors the "Buffer Exceptions" sub-section toggle (▸/▾
+  // arrows, grey #555 text, #f0f0f0 background) so the two optional
+  // sub-sections read as the same kind of control.
+  // Always-visible status line (mirrors the Buffer Exceptions status
+  // label) so the user can see what refinement is active without opening
+  // the sub-section. Kept in sync by the exclusion checkboxes' onChange
+  // and by updateRefineVisibility (the FRA dropdown drives the boxes).
+  var refineStatusLabel = ui.Label('', {fontSize: '10px', color: '#888',
+    fontStyle: 'italic', margin: '0 0 4px 4px'});
+
+  function updateRefineStatus() {
+    var olwtc   = excludeAgricultureFromForestCheckbox.getValue();
+    var planted = includePlantationsCheckbox.getValue();
+    var msg;
+    if (planted) {
+      msg = 'Refining to: Naturally regenerating forest';
+    } else if (olwtc) {
+      msg = 'Refining to: Forest';
+    } else {
+      msg = 'Refinement: none (output = tree-cover input)';
+    }
+    refineStatusLabel.setValue(msg);
+  }
+
   var refineSubsectionToggle = ui.Button({
-    label: '▶ Refine input (optional, experimental)',
+    label: '▸ Refine input (optional, experimental)',
     onClick: function() {
       appState.ui.refineInputCollapsed = !appState.ui.refineInputCollapsed;
       refineSubsectionContent.style().set({
         shown: !appState.ui.refineInputCollapsed});
       refineSubsectionToggle.setLabel(
-        (appState.ui.refineInputCollapsed ? '▶ ' : '▼ ')
+        (appState.ui.refineInputCollapsed ? '▸ ' : '▾ ')
         + 'Refine input (optional, experimental)');
-      // Re-evaluate downstream visibility — collapsed state changes
-      // exclusionActive() results, so stats / map gating must refresh.
-      if (typeof markNeedsUpdate === 'function') markNeedsUpdate();
+      // Collapse no longer affects exclusionActive() (the checkbox is the
+      // single source of truth now), so no stale-mark needed on toggle.
     },
-    style: {stretch: 'horizontal', textAlign: 'left',
-            padding: '2px 6px', margin: '2px 0',
-            backgroundColor: '#f6f6f6'}
+    style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0',
+            padding: '2px 4px', backgroundColor: '#f0f0f0'}
   });
 
   var treeCoverContent = ui.Panel({
@@ -3974,7 +4006,8 @@
                {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}),
       inputDefinitionPanel,
       refineSubsectionToggle,
-      refineSubsectionContent
+      refineSubsectionContent,
+      refineStatusLabel
     ],
     style: {shown: false, padding: '8px'}
   });
@@ -4810,8 +4843,8 @@
     smallPixelThresholdForestSlider.setValue(0.5);
     
     // Reset plantations and custom assets
-    includePlantationsCheckbox.setValue(true);
-    excludeAgricultureFromForestCheckbox.setValue(true);
+    includePlantationsCheckbox.setValue(false);
+    excludeAgricultureFromForestCheckbox.setValue(false);
     inputCategorySelect.setValue(null);
     fraAlignedCheckbox.setValue(false);
     refineInputCheckbox.setValue(false);
