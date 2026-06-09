@@ -3312,7 +3312,10 @@
   // wrapper and exclusionActive(checkbox, wrapper) keeps working.
   var excludeAgricultureFromForestCheckbox = ui.Checkbox({
     label: 'Refine to forest',
-    value: true,
+    // Opt-in: ships UNTICKED so opening the "Refine input" sub-section
+    // doesn't silently start refining. Selecting an FRA category
+    // auto-ticks it via updateRefineVisibility() (a deliberate opt-in).
+    value: false,
     onChange: function() { markNeedsUpdate(); },
     style: {fontSize: '11px'}
   });
@@ -3329,7 +3332,8 @@
 
   var includePlantationsCheckbox = ui.Checkbox({
     label: 'Refine to naturally regenerating forest',
-    value: true,
+    // Opt-in: ships UNTICKED (see excludeAgricultureFromForestCheckbox).
+    value: false,
     onChange: function() { markNeedsUpdate(); },
     style: {fontSize: '11px'}
   });
@@ -3613,7 +3617,7 @@
   // actions. Style is kept understated so it reads as a link, not a
   // chunky action button.
   var inputCategoryFraInfo = ui.Button({
-    label: 'ⓘ FRA definitions',
+    label: 'ⓘ',
     onClick: function() {
       var shown = fraDefsPanel.style().get('shown');
       fraDefsPanel.style().set('shown', !shown);
@@ -4812,8 +4816,8 @@
     smallPixelThresholdForestSlider.setValue(0.5);
     
     // Reset plantations and custom assets
-    includePlantationsCheckbox.setValue(true);
-    excludeAgricultureFromForestCheckbox.setValue(true);
+    includePlantationsCheckbox.setValue(false);
+    excludeAgricultureFromForestCheckbox.setValue(false);
     inputCategorySelect.setValue(null);
     fraAlignedCheckbox.setValue(false);
     refineInputCheckbox.setValue(false);
