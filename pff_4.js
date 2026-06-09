@@ -4442,7 +4442,8 @@
     {key: 'inputAgriculture',    color: '#b38f00', label: 'Input: Agriculture',     group: 'Human Influence'},
     {key: 'protectedAreas',      color: '#00cccc', label: 'Input: Protected Areas', group: 'Buffer Exceptions'},
     {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'},
-    {key: 'flii',                color: '#1f78b4', label: 'Reference: FLII (high/med)',           group: 'Reference'},
+    {key: 'flii',                color: '#0000ff', label: 'Reference: FLII (high)',                group: 'Reference'},
+    {key: 'flii',                color: '#ffa500', label: 'Reference: FLII (medium)',              group: 'Reference'},
     {key: 'fdap',                color: '#0000ff', label: 'Reference: Forest Persistence (FDaP)', group: 'Reference'},
     {key: 'refCustom1',          color: '#e377c2', label: 'Reference: Custom 1',                  group: 'Reference'},
     {key: 'refCustom2',          color: '#17becf', label: 'Reference: Custom 2',                  group: 'Reference'}
