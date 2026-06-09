@@ -3640,18 +3640,24 @@
   }
   updateFraDefLabel();
 
-  var fraDefsPanel = ui.Panel({
+  // ── ⓘ FRA definitions popup: two tabs (Definitions / Hierarchy) ──
+  // GEE has no native tab widget, so simulate it with two toggle buttons
+  // that show/hide their content panel and highlight the active one.
+  //
+  // Definitions tab: flat one-line FRA-category defs. Tree cover is
+  // deliberately omitted (universally understood) -- so every entry here
+  // IS an FRA category (no group headers / "(not a FRA category)" needed).
+  // Hierarchy tab: the real FRA taxonomy by indentation (Forest and Other
+  // land are SEPARATE top-level categories); Tree cover appears only as a
+  // muted footnote because it is not an FRA category.
+  var defsTabContent = ui.Panel({
     widgets: [
-      ui.Label('FRA 2025 definitions:', {fontWeight: 'bold', fontSize: '10px', margin: '2px 0 2px 4px'}),
-      ui.Label('Tree cover (FRA cascade entry — not a FRA category)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Sum of Forest + OLTC. FRA threshold (≥5 m, ≥10% canopy, ≥0.5 ha) applied without a land-use filter.', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('As above, but land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Forest established through natural regeneration', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Naturally regenerating, native species, no visible human activity', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
-      ui.Label('─────', {fontSize: '8px', color: '#ccc', margin: '2px 0 2px 8px'}),
       ui.Label('Other land with tree cover (OLTC)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Tree cover on non-forest land use: oil palm, orchards, agroforestry', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Planted forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
@@ -3662,24 +3668,70 @@
         targetUrl: 'https://fra-data.fao.org/definitions/fra/2025/en/tad#1b'
       })
     ],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {shown: true, margin: '2px 0 0 0'}
+  });
+
+  var hierTabContent = ui.Panel({
+    widgets: [
+      ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '2px 0 0 8px'}),
+      ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 20px'}),
+      ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 32px'}),
+      ui.Label('Planted forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 20px'}),
+      ui.Label('Other land', {fontWeight: 'bold', fontSize: '10px', margin: '4px 0 0 8px'}),
+      ui.Label('Other land with tree cover (OLTC)', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 20px'}),
+      ui.Label('Tree cover (tool input) = Forest + OLTC pixels — not a FRA category.',
+        {fontSize: '10px', fontStyle: 'italic', color: '#999', margin: '6px 0 0 8px'})
+    ],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {shown: false, margin: '2px 0 0 0'}
+  });
+
+  function setFraDefsTab(tab) {
+    var isDefs = (tab === 'defs');
+    defsTabContent.style().set('shown', isDefs);
+    hierTabContent.style().set('shown', !isDefs);
+    defsTabBtn.style().set('backgroundColor', isDefs ? '#d0e0ff' : '#f0f0f0');
+    hierTabBtn.style().set('backgroundColor', isDefs ? '#f0f0f0' : '#d0e0ff');
+  }
+  var defsTabBtn = ui.Button({
+    label: 'Definitions',
+    onClick: function() { setFraDefsTab('defs'); },
+    style: {fontSize: '10px', padding: '1px 6px', margin: '0 2px 0 0', backgroundColor: '#d0e0ff'}
+  });
+  var hierTabBtn = ui.Button({
+    label: 'Hierarchy',
+    onClick: function() { setFraDefsTab('hier'); },
+    style: {fontSize: '10px', padding: '1px 6px', margin: '0', backgroundColor: '#f0f0f0'}
+  });
+  var fraDefsTabBar = ui.Panel({
+    widgets: [defsTabBtn, hierTabBtn],
+    layout: ui.Panel.Layout.flow('horizontal'),
+    style: {margin: '0 0 2px 0'}
+  });
+
+  var fraDefsPanel = ui.Panel({
+    widgets: [fraDefsTabBar, defsTabContent, hierTabContent],
     style: {shown: false, backgroundColor: '#f8f9fa', border: '1px solid #e0e0e0',
             margin: '4px 0 4px 4px', padding: '4px'}
   });
+  setFraDefsTab('defs');  // initial tab state
 
   // fraInputSection now contains just the dropdown + the contextual
   // FRA-def label. The ⓘ FRA definitions button + the collapsible
   // defs panel are mounted at the TOP of the Refine subsection
   // (workshop feedback 2026-05-12).
-  // Clarifies the dropdown declares the INPUT (not picks an output) --
-  // workshop feedback: users read "FRA category:" as "choose my output".
+  // Purpose line for the FRA-category dropdown. The "Declare input as:"
+  // label now carries the input-vs-output framing, so this explains WHY
+  // you'd declare a category.
   var fraInputHint = ui.Label(
-    "Declares what your input already is — not the output you'll get.",
+    "Helps align results with official FRA statistics.",
     {fontSize: '10px', color: '#888', fontStyle: 'italic',
      margin: '0 0 2px 4px'});
 
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('Declare input as (optional):', inputCategorySelect),
+      createCompactRow('Declare input as:', inputCategorySelect),
       fraInputHint,
       fraDefLabel
     ],
@@ -3946,6 +3998,10 @@
 
   var refineSubsectionContent = ui.Panel({
     widgets: [
+      // Experimental marker -- same style as the Validation panel's, moved
+      // here from the toggle label so the toggle reads just "(optional)".
+      ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
+        color: '#b35900', margin: '0 0 4px 0'}),
       inputCategoryFraInfo,       // ⓘ FRA definitions button (top)
       fraDefsPanel,               // collapsible definitions panel
       fraInputSection,            // dropdown + contextual FRA-def label
@@ -3985,14 +4041,14 @@
   }
 
   var refineSubsectionToggle = ui.Button({
-    label: '▸ Refine input (optional, experimental)',
+    label: '▸ Refine input (optional)',
     onClick: function() {
       appState.ui.refineInputCollapsed = !appState.ui.refineInputCollapsed;
       refineSubsectionContent.style().set({
         shown: !appState.ui.refineInputCollapsed});
       refineSubsectionToggle.setLabel(
         (appState.ui.refineInputCollapsed ? '▸ ' : '▾ ')
-        + 'Refine input (optional, experimental)');
+        + 'Refine input (optional)');
       // Collapse no longer affects exclusionActive() (the checkbox is the
       // single source of truth now), so no stale-mark needed on toggle.
     },
