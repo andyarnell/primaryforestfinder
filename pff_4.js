@@ -1308,8 +1308,8 @@
   // SLIDERS (using pff2 values)
   // =============================================================================
 
-  var treecoverThresholdSlider = ui.Slider({min: 0, max: 100, value: 10, step: 5, onChange: markNeedsUpdate});
-  var treecoverHeightThresholdSlider = ui.Slider({min: 3, max: 25, value: 5, step: 1, onChange: markNeedsUpdate});
+  var treecoverThresholdSlider = ui.Slider({min: 0, max: 100, value: 10, step: 5, onChange: function() { markNeedsUpdate(); updateRefineFraWarning(); }});
+  var treecoverHeightThresholdSlider = ui.Slider({min: 3, max: 25, value: 5, step: 1, onChange: function() { markNeedsUpdate(); updateRefineFraWarning(); }});
   var roadSmallBufferSlider = ui.Slider({min: 0, max: 5000, value: 1000, step: 50, onChange: markNeedsUpdate});
   // roadLargeBufferSlider removed — single roads category only
   var builtUpSmallBufferSlider = ui.Slider({min: 0, max: 5000, value: 1000, step: 50, onChange: markNeedsUpdate});
@@ -3287,6 +3287,7 @@
       // P1.24: visibility branching (source -> threshold panels, plus
       // hide-on-Replace-global) is owned by updateGlobalForestInputsVisibility().
       updateGlobalForestInputsVisibility();
+      updateRefineFraWarning();  // height vs canopy relevance changes with source
       markNeedsUpdate();
     }
   });
@@ -4021,6 +4022,35 @@
   var refineStatusLabel = ui.Label('', {fontSize: '10px', color: '#888',
     fontStyle: 'italic', margin: '0 0 4px 4px'});
 
+  // FRA-threshold guardrail: when a category IS declared (FRA-aligned) but
+  // the tree-cover thresholds are below the FRA minimums (height ≥5 m,
+  // canopy ≥10%), warn the user to raise the threshold or pick Non FRA
+  // aligned. Always hidden for "Non FRA aligned" (sub-FRA is fine there).
+  var refineFraWarningLabel = ui.Label('', {fontSize: '10px', color: '#b35900',
+    fontWeight: 'bold', margin: '0 0 4px 4px', shown: false});
+
+  function updateRefineFraWarning() {
+    var cat = inputCategorySelect.getValue();
+    var declared = !!cat && cat !== '' && cat !== INPUT_CATEGORY_NONE;
+    if (!declared) { refineFraWarningLabel.style().set('shown', false); return; }
+    var src = treecoverSourceSelect.getValue();
+    var usesHeight = (src !== 'Hansen GFC');   // GLAD / Agreement / Combined use height
+    var usesCanopy = (src !== 'GLAD LULC');    // Hansen / Agreement / Combined use canopy
+    var heightBelow = usesHeight && treecoverHeightThresholdSlider.getValue() < 5;
+    var canopyBelow = usesCanopy && treecoverThresholdSlider.getValue() < 10;
+    if (!heightBelow && !canopyBelow) {
+      refineFraWarningLabel.style().set('shown', false);
+      return;
+    }
+    var parts = [];
+    if (heightBelow) parts.push('tree height ≥5 m');
+    if (canopyBelow) parts.push('canopy cover ≥10%');
+    refineFraWarningLabel.setValue(
+      '⚠ For FRA alignment, ' + parts.join(' and ') + ' is required. ' +
+      'Raise the threshold, or choose "Non FRA aligned".');
+    refineFraWarningLabel.style().set('shown', true);
+  }
+
   function updateRefineStatus() {
     var olwtc   = excludeAgricultureFromForestCheckbox.getValue();
     var planted = includePlantationsCheckbox.getValue();
@@ -4056,6 +4086,7 @@
       }
     }
     refineStatusLabel.setValue(msg);
+    updateRefineFraWarning();
   }
 
   var refineSubsectionToggle = ui.Button({
@@ -4081,7 +4112,8 @@
       inputDefinitionPanel,
       refineSubsectionToggle,
       refineSubsectionContent,
-      refineStatusLabel
+      refineStatusLabel,
+      refineFraWarningLabel
     ],
     style: {shown: false, padding: '8px'}
   });
