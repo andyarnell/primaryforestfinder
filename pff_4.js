@@ -2698,65 +2698,83 @@
     }
   });
 
+  // Result of "Check tile count" -- shown directly under the button so the
+  // estimate appears where the user clicked (not in the far-down status
+  // label). Set by the button's onClick.
+  var downloadTileEstimateLabel = ui.Label('', {fontSize: '11px', margin: '2px 0 4px 0', color: '#333'});
+
   var downloadAutoGridButton = ui.Button({
-    label: 'Preview tiles',
-    style: {width: '100px', fontSize: '11px', margin: '0 0 4px 0'},
+    label: 'Check tile count',
+    style: {width: '120px', fontSize: '11px', margin: '0 0 2px 0'},
     onClick: function() {
       var selectedCountry = countrySelector.getValue();
       if (!selectedCountry) {
-        downloadStatusLabel.setValue('Please select a country first.');
+        downloadTileEstimateLabel.style().set('color', 'red');
+        downloadTileEstimateLabel.setValue('Please select a country first.');
         return;
       }
       var country_sel = getCountryFeatures(selectedCountry);
       var dlRegion = userDrawnAoi || country_sel.geometry();
       var dlScale = downloadScaleSlider.getValue();
-      downloadStatusLabel.setValue('Calculating grid…');
-      downloadStatusLabel.style().set('color', '#888');
+      downloadTileEstimateLabel.style().set('color', '#888');
+      downloadTileEstimateLabel.setValue('Calculating…');
       downloadAutoGridButton.setLabel('Working…');
 
-      var grid = dlModule.autoGrid(dlRegion, dlScale);
+      // Defer the blocking bounds.getInfo() one tick so "Working…" /
+      // "Calculating…" paints before the GUI thread blocks (same fix as
+      // the Save-to-computer button).
+      ui.util.setTimeout(function() {
+        var grid = dlModule.autoGrid(dlRegion, dlScale);
 
-      // Safety: ensure each tile fits within GEE's 32768px hard limit
-      var MAX_PX = 30000;
-      var bounds = dlRegion.bounds();
-      var coords = bounds.coordinates().get(0).getInfo();
-      if (coords) {
-        var lons = coords.map(function(c) { return c[0]; });
-        var lats = coords.map(function(c) { return c[1]; });
-        var lonSpan = Math.max.apply(null, lons) - Math.min.apply(null, lons);
-        var latSpan = Math.max.apply(null, lats) - Math.min.apply(null, lats);
-        var metersPerDeg = 111320;
-        var widthPx = (lonSpan * metersPerDeg / dlScale) / grid.cols;
-        var heightPx = (latSpan * metersPerDeg / dlScale) / grid.rows;
-        while (widthPx > MAX_PX) { grid.cols += 1; widthPx = (lonSpan * metersPerDeg / dlScale) / grid.cols; }
-        while (heightPx > MAX_PX) { grid.rows += 1; heightPx = (latSpan * metersPerDeg / dlScale) / grid.rows; }
-      }
+        // Safety: ensure each tile fits within GEE's 32768px hard limit
+        var MAX_PX = 30000;
+        var bounds = dlRegion.bounds();
+        var coords = bounds.coordinates().get(0).getInfo();
+        if (coords) {
+          var lons = coords.map(function(c) { return c[0]; });
+          var lats = coords.map(function(c) { return c[1]; });
+          var lonSpan = Math.max.apply(null, lons) - Math.min.apply(null, lons);
+          var latSpan = Math.max.apply(null, lats) - Math.min.apply(null, lats);
+          var metersPerDeg = 111320;
+          var widthPx = (lonSpan * metersPerDeg / dlScale) / grid.cols;
+          var heightPx = (latSpan * metersPerDeg / dlScale) / grid.rows;
+          while (widthPx > MAX_PX) { grid.cols += 1; widthPx = (lonSpan * metersPerDeg / dlScale) / grid.cols; }
+          while (heightPx > MAX_PX) { grid.rows += 1; heightPx = (latSpan * metersPerDeg / dlScale) / grid.rows; }
+        }
 
-      downloadAutoGridButton.setLabel('Preview tiles');
-      if (!grid.feasible) {
-        downloadStatusLabel.setValue(grid.message);
-        downloadStatusLabel.style().set('color', 'red');
-      } else {
-        downloadStatusLabel.style().set('color', '#333');
-        var result = dlModule.makeTiles(dlRegion, grid.rows, grid.cols);
-        var msg = grid.rows + '×' + grid.cols;
-        if (grid.rows === 1 && grid.cols === 1) {
-          msg = 'Single file download (area fits in one tile)';
-        } else if (result.skipped > 0) {
-          msg += ' → ' + result.tiles.length + ' tiles overlap boundary' +
-            ' (skipped ' + result.skipped + ' empty)';
+        downloadAutoGridButton.setLabel('Check tile count');
+        if (!grid.feasible) {
+          downloadTileEstimateLabel.style().set('color', 'red');
+          downloadTileEstimateLabel.setValue(grid.message);
         } else {
-          msg += ' = ' + result.tiles.length + ' tiles';
+          downloadTileEstimateLabel.style().set('color', '#333');
+          var result = dlModule.makeTiles(dlRegion, grid.rows, grid.cols);
+          var msg = grid.rows + '×' + grid.cols;
+          if (grid.rows === 1 && grid.cols === 1) {
+            msg = 'Single file (area fits in one tile)';
+          } else if (result.skipped > 0) {
+            msg += ' → ' + result.tiles.length + ' tiles overlap boundary' +
+              ' (skipped ' + result.skipped + ' empty)';
+          } else {
+            msg += ' = ' + result.tiles.length + ' tiles';
+          }
+          if (grid.rows > 1 || grid.cols > 1) {
+            msg += ' [~' + Math.round(grid.tileAreaKm2) + ' km² each]';
+          }
+          downloadTileEstimateLabel.setValue(msg);
         }
-        if (grid.rows > 1 || grid.cols > 1) {
-          msg += ' [~' + Math.round(grid.tileAreaKm2) + ' km² each]';
-        }
-        downloadStatusLabel.setValue(msg);
-      }
+      }, 0);
     }
   });
   var downloadTileGridPanel = ui.Panel({
-    widgets: [downloadAutoGridButton],
+    widgets: [
+      downloadAutoGridButton,
+      ui.Label(
+        'Previews the number of download links/tiles that would be ' +
+        'created for the AOI extent at the chosen resolution.',
+        {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 2px 0'}),
+      downloadTileEstimateLabel
+    ],
     layout: ui.Panel.Layout.flow('vertical')
   });
   var downloadStatusLabel = ui.Label('', {margin: '4px 0 0 8px', width: '280px', fontSize: '11px'});
@@ -2849,6 +2867,11 @@
     downloadStatusLabel.style().set('color', '#888');
     downloadButton.setLabel('Working…');
 
+    // Defer the heavy/blocking work (autoGrid + bounds.getInfo() + tiling)
+    // one tick so the "Calculating tiles…" message paints BEFORE the GUI
+    // thread blocks -- otherwise the click looks like it just hangs.
+    ui.util.setTimeout(function() {
+
     var dlRegion = userDrawnAoi || region;
     var yearsArr = Object.keys(sourceDict);
 
@@ -2917,13 +2940,29 @@
           }));
           psScriptPanel.add(ui.Label(
             'Save as .py file (rename extension from .txt to .py) and run:\n' +
-            '  python download_tiles.py\n\n' +
-            '⚠ Links expire ~2 hours after generation.',
+            '  python download_tiles.py',
             {fontSize: '10px', margin: '2px 0', whiteSpace: 'pre'}));
-          psScriptPanel.add(ui.Label(script, {
-            fontSize: '10px', whiteSpace: 'pre', margin: '4px 0',
-            border: '1px solid #ccc', padding: '4px'
-          }));
+          // Mosaic step comes AFTER the run instruction (logical order:
+          // run script -> tiles downloaded -> mosaic them).
+          if (useTiled) {
+            psScriptPanel.add(ui.Label(
+              'After downloading, mosaic the .tif tiles in QGIS ' +
+              '(Raster > Miscellaneous > Merge) or with gdal_merge.py ' +
+              'to produce a single file.',
+              {fontSize: '10px', color: '#666', fontStyle: 'italic', margin: '4px 0 0 0'}));
+          }
+          psScriptPanel.add(ui.Label(
+            '⚠ Links expire ~2 hours after generation.',
+            {fontSize: '10px', margin: '4px 0 2px 0'}));
+          // Optional code preview (Advanced -> Preview Python code).
+          if (previewPythonCheckbox.getValue()) {
+            psScriptPanel.add(ui.Label('Code preview:', {fontSize: '10px',
+              fontWeight: 'bold', color: '#555', margin: '6px 0 2px 0'}));
+            psScriptPanel.add(ui.Label(script, {
+              fontSize: '10px', whiteSpace: 'pre', margin: '0 0 4px 0',
+              border: '1px solid #ccc', padding: '4px'
+            }));
+          }
           psScriptPanel.style().set('shown', true);
         } catch (e) {
           psScriptPanel.add(ui.Label('Error generating script: ' + e.message,
@@ -2937,8 +2976,9 @@
           linksReady + ' link(s) ready. ⚠ Links expire in ~2 hours — download soon.');
       }
 
-      // Mosaic suggestion for tiled downloads
-      if (useTiled) {
+      // Mosaic suggestion for tiled NON-script downloads (script mode adds
+      // it to psScriptPanel above, right after the run instruction).
+      if (useTiled && !useScriptMode) {
         downloadLinksPanel.add(ui.Label(
           'After downloading, mosaic the .tif tiles in QGIS ' +
           '(Raster > Miscellaneous > Merge) or with gdal_merge.py ' +
@@ -2995,6 +3035,7 @@
         });
       });
     });
+    }, 0);
   }
 
   var downloadButton = ui.Button({
@@ -3060,6 +3101,15 @@
     onChange: function(val) { DOWNLOAD_LINK_THRESHOLD = val; }
   });
 
+  // When script mode triggers, optionally show the generated Python code
+  // inline (under a "Code preview:" header) so a user can inspect it before
+  // running. Off by default -- most users just want the download link.
+  var previewPythonCheckbox = ui.Checkbox({
+    label: 'Preview Python code',
+    value: false,
+    style: {fontSize: '11px', margin: '4px 0 0 0'}
+  });
+
   var downloadResolutionRow = ui.Panel(
     [ui.Label('Resolution (m):', {margin: '0 8px 0 0', fontSize: '11px'}), downloadScaleSlider, downloadScaleInput],
     ui.Panel.Layout.flow('horizontal'), {stretch: 'horizontal'});
@@ -3077,6 +3127,7 @@
         'When download links exceed this number, a Python script is ' +
         'generated instead of individual links.',
         {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 0'}),
+      previewPythonCheckbox,
       clearDownloadLinksButton
     ],
     layout: ui.Panel.Layout.flow('vertical'),
