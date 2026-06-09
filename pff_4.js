@@ -4705,14 +4705,21 @@
 
     // Rebuild legend from visibleLayers state
     function refreshLegend() {
-      if (!_initialBuild) {
-        syncVisibleLayersFromMap();
-      }
-      _initialBuild = false;
       // Clear all except the title label
       while (legendItemsPanel.widgets().length() > 1) {
         legendItemsPanel.remove(legendItemsPanel.widgets().get(1));
       }
+      // Starter state (e.g. before a country is picked): nothing is on the
+      // map yet, so show an empty legend rather than the visibleLayers
+      // defaults (which would list forest layers that aren't drawn). Don't
+      // syncVisibleLayersFromMap() here -- it would clobber the
+      // visibleLayers defaults updateMap relies on for initial visibility.
+      if (_initialBuild) {
+        _initialBuild = false;
+        legendItemsPanel.add(ui.Label('(no layers visible)', {fontSize: '11px', color: '#888'}));
+        return;
+      }
+      syncVisibleLayersFromMap();
       var lastGroup = '';
       var anyShown = false;
       LEGEND_ENTRIES.forEach(function(entry) {
@@ -4739,7 +4746,7 @@
       }
     }
 
-    // Initial build (just show Primary Forest since that's the default)
+    // Initial build -- empty legend until the first analysis runs.
     refreshLegend();
 
     // Store refresh callback globally so toggleLayerByName can trigger it
