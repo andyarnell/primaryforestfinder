@@ -3670,9 +3670,17 @@
   // FRA-def label. The ⓘ FRA definitions button + the collapsible
   // defs panel are mounted at the TOP of the Refine subsection
   // (workshop feedback 2026-05-12).
+  // Clarifies the dropdown declares the INPUT (not picks an output) --
+  // workshop feedback: users read "FRA category:" as "choose my output".
+  var fraInputHint = ui.Label(
+    "Declares what your input already is — not the output you'll get.",
+    {fontSize: '10px', color: '#888', fontStyle: 'italic',
+     margin: '0 0 2px 4px'});
+
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('FRA category:', inputCategorySelect),
+      createCompactRow('Declare input as:', inputCategorySelect),
+      fraInputHint,
       fraDefLabel
     ],
     layout: ui.Panel.Layout.flow('vertical'),
