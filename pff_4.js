@@ -3908,9 +3908,8 @@
 
   var inputDefinitionPanel = ui.Panel({
     widgets: [
-      ui.Label('Tree-cover input definition', {
-        fontWeight: 'bold', fontSize: '11px',
-        margin: '0 0 4px 0', color: '#444'}),
+      // (Removed redundant "Tree-cover input definition" header -- the
+      // section's "Define Tree Cover:" title sits directly above this box.)
       treecoverSourceRow,
       treecoverPanel,
       treecoverHeightPanel,
