@@ -917,6 +917,9 @@
     slope: false,
     protectedAreas: false,
     flii: false,
+    fdap: false,
+    refCustom1: false,
+    refCustom2: false,
     countryOutline: true
   };
 
@@ -1198,6 +1201,16 @@
         value: 'Source code on GitHub',
         style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
         targetUrl: 'https://github.com/andyarnell/primaryforestfinder'
+      }),
+      ui.Label({
+        value: 'Data inputs (global datasets)',
+        style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
+        targetUrl: 'https://github.com/andyarnell/primaryforestfinder/blob/main/docs/datasets_global.md'
+      }),
+      ui.Label({
+        value: 'Report an issue / request a feature',
+        style: {fontSize: '11px', color: 'blue', textDecoration: 'underline', margin: '0 0 2px 4px'},
+        targetUrl: 'https://github.com/andyarnell/primaryforestfinder/issues'
       }),
       ui.Label('Contact — andrew.arnell@fao.org', {fontSize: '11px', margin: '0 0 0 4px'})
     ],
@@ -4385,7 +4398,7 @@
   // LEGEND PANEL (floating on map, bottom-left)
   // =============================================================================
 
-  function createLegendItem(color, label) {
+  function createLegendItem(color, label, indent) {
     var colorBox = ui.Label({
       style: {
         backgroundColor: color,
@@ -4401,7 +4414,7 @@
     return ui.Panel({
       widgets: [colorBox, description],
       layout: ui.Panel.Layout.flow('horizontal'),
-      style: {margin: '2px 0'}
+      style: {margin: indent ? '1px 0 1px 14px' : '2px 0'}
     });
   }
 
@@ -4428,7 +4441,14 @@
     {key: 'inputBuiltupLarge',   color: '#1a1a80', label: 'Input: Large Built-up',  group: 'Human Influence'},
     {key: 'inputAgriculture',    color: '#b38f00', label: 'Input: Agriculture',     group: 'Human Influence'},
     {key: 'protectedAreas',      color: '#00cccc', label: 'Input: Protected Areas', group: 'Buffer Exceptions'},
-    {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'}
+    {key: 'slope',               color: '#708090', label: 'Input: Slope',           group: 'Buffer Exceptions'},
+    {key: 'flii', group: 'Reference', title: 'FLII (forest integrity)', classes: [
+      {color: '#0000ff', label: 'high (≥ 9.6)'},
+      {color: '#ffa500', label: 'medium (6.0–9.6)'}
+    ]},
+    {key: 'fdap',                color: '#0000ff', label: 'Forest Persistence (FDaP)  >0.90', group: 'Reference'},
+    {key: 'refCustom1',          color: '#e377c2', label: 'Reference: Custom 1',                  group: 'Reference'},
+    {key: 'refCustom2',          color: '#17becf', label: 'Reference: Custom 2',                  group: 'Reference'}
   ];
 
   function createLegendPanel() {
@@ -4482,6 +4502,9 @@
         if (name.indexOf('Input: Slope') === 0) visibleLayers.slope = true;
         if (name.indexOf('Input: Protected') === 0) visibleLayers.protectedAreas = true;
         if (name.indexOf('Reference: FLII') === 0) visibleLayers.flii = true;
+        if (name.indexOf('Reference: Forest Persistence') === 0) visibleLayers.fdap = true;
+        if (name === 'Reference: Custom 1') visibleLayers.refCustom1 = true;
+        if (name === 'Reference: Custom 2') visibleLayers.refCustom2 = true;
         if (name.indexOf('Input: Tree cover') === 0) visibleLayers.treeCover = true;
         // 'Forest' handled by exact match in NAME_TO_KEY above -- no
         // prefix here, would over-match 'Forest outside buffers'.
@@ -4508,7 +4531,16 @@
             legendItemsPanel.add(ui.Label(entry.group + ':', {fontWeight: 'bold', fontSize: '11px', margin: '4px 0 2px 0'}));
             lastGroup = entry.group;
           }
-          legendItemsPanel.add(createLegendItem(entry.color, entry.label));
+          if (entry.classes) {
+            // Multi-class layer: title row, then indented class swatches
+            // (GIS-style) so it reads as one layer with its categories.
+            legendItemsPanel.add(ui.Label(entry.title, {fontSize: '11px', margin: '2px 0 0 4px'}));
+            entry.classes.forEach(function(c) {
+              legendItemsPanel.add(createLegendItem(c.color, c.label, true));
+            });
+          } else {
+            legendItemsPanel.add(createLegendItem(entry.color, entry.label));
+          }
           anyShown = true;
         }
       });
@@ -4791,7 +4823,7 @@
   // =============================================================================
 
   var saveDataWidgets = [
-    ui.Label('Save to computer', {fontWeight: 'bold', fontSize: '13px', margin: '6px 0 4px 0', color: '#222'}),
+    ui.Label('Save to computer (experimental)', {fontWeight: 'bold', fontSize: '13px', margin: '6px 0 4px 0', color: '#222'}),
     downloadPanel
   ];
   if (!IS_PUBLISHED_APP) {
@@ -4855,16 +4887,91 @@
   // VALIDATION PANEL (collapsible, right side)
   // =============================================================================
 
+  // Validation reference layers (FLII / FDaP / Custom) are comparison
+  // overlays INDEPENDENT of the primary-forest analysis. Toggling one
+  // should add/remove just that overlay -- NOT re-run the whole analysis.
+  // buildReferenceLayers() returns the enabled overlays (shared by the
+  // full run in addLayersToMap and the targeted toggle below).
+  var REFERENCE_LAYER_NAMES = [
+    'Reference: FLII (high/med)',
+    'Reference: Forest Persistence (FDaP)',
+    'Reference: Custom 1',
+    'Reference: Custom 2'
+  ];
+
+  function buildReferenceLayers(country_and_buffer_mask) {
+    var refs = [];
+    if (validationFliiCheckbox.getValue()) {
+      var flii = ee.Image("users/openforisearthmap/World_EarthMap/flii_earth_20190824");
+      var low = 6.0, high = 9.6;
+      var flii_class = flii.expression(
+        "(b1 > low) ? ((b1 < high) ? 2 : 3) : 0", {b1: flii, low: low, high: high}
+      ).updateMask(country_and_buffer_mask).selfMask();
+      refs.push({img: flii_class, vis: {min: 2, max: 3, palette: ["orange", "blue"]},
+                 name: "Reference: FLII (high/med)", opacity: 1});
+    }
+    if (validationFdapCheckbox.getValue()) {
+      var forestPersistence = ee.Image("projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020")
+          .updateMask(country_and_buffer_mask).selfMask();
+      refs.push({img: forestPersistence.gt(.90), vis: {min: 0, max: 1, palette: ["white", "blue"]},
+                 name: "Reference: Forest Persistence (FDaP)", opacity: 1});
+    }
+    if (customRef1.enableCheckbox.getValue()) {
+      var ref1Path = customRef1.assetInput.getValue();
+      if (ref1Path && ref1Path.trim() !== '') {
+        var ref1Img = preprocessAsset(ref1Path.trim(), customRef1.prepUi.getConfig())
+            .updateMask(country_and_buffer_mask).selfMask();
+        refs.push({img: ref1Img, vis: {min: 0, max: 1, palette: ['white', '#e377c2']},
+                   name: 'Reference: Custom 1', opacity: 0.7});
+      }
+    }
+    if (customRef2.enableCheckbox.getValue()) {
+      var ref2Path = customRef2.assetInput.getValue();
+      if (ref2Path && ref2Path.trim() !== '') {
+        var ref2Img = preprocessAsset(ref2Path.trim(), customRef2.prepUi.getConfig())
+            .updateMask(country_and_buffer_mask).selfMask();
+        refs.push({img: ref2Img, vis: {min: 0, max: 1, palette: ['white', '#17becf']},
+                   name: 'Reference: Custom 2', opacity: 0.7});
+      }
+    }
+    return refs;
+  }
+
+  // Targeted toggle: swap only the Reference overlays on the map(s) --
+  // no full re-run. Country mask is cheap to rebuild (lazy EE). Falls
+  // back to markNeedsUpdate when no country / disabled-map mode.
+  function refreshReferenceLayers() {
+    var selectedCountry = countrySelector.getValue();
+    if (!selectedCountry) { markNeedsUpdate(); return; }
+    if (disableMapCheckbox.getValue()) { return; }
+    var country_clip = getCountryClip(selectedCountry);
+    var country_buffer = makeDistanceBuffer(country_clip, country_buffer_threshold, fastBuffer);
+    var country_and_buffer_mask = country_buffer.where(country_clip, 1).selfMask();
+    var refs = buildReferenceLayers(country_and_buffer_mask);
+    [map1, map2].forEach(function(m) {
+      if (!m) return;
+      var layers = m.layers();
+      for (var i = layers.length() - 1; i >= 0; i--) {
+        if (REFERENCE_LAYER_NAMES.indexOf(layers.get(i).getName()) !== -1) {
+          layers.remove(layers.get(i));
+        }
+      }
+      refs.forEach(function(r) { m.addLayer(r.img, r.vis, r.name, true, r.opacity); });
+    });
+    // Keep the legend in sync (reference layers appear in it).
+    _legendRefreshFns.forEach(function(fn) { fn(); });
+  }
+
   var validationFliiCheckbox = ui.Checkbox({
     label: 'FLII (high/medium integrity)',
     value: false,
-    onChange: function() { markNeedsUpdate(); }
+    onChange: refreshReferenceLayers
   });
 
   var validationFdapCheckbox = ui.Checkbox({
     label: 'Forest Persistence (FDaP)',
     value: false,
-    onChange: function() { markNeedsUpdate(); }
+    onChange: refreshReferenceLayers
   });
 
   // -- Custom reference layer input factory --
@@ -4873,7 +4980,7 @@
     var enableCheckbox = ui.Checkbox({
       label: label,
       value: false,
-      onChange: function() { markNeedsUpdate(); },
+      onChange: refreshReferenceLayers,
       style: {fontWeight: 'bold', fontSize: '10px', margin: '6px 0 2px 0'}
     });
     var assetInput = ui.Textbox({
@@ -4914,6 +5021,8 @@
 
   var validationContent = ui.Panel({
     widgets: [
+      ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
+        color: '#b35900', margin: '0 0 4px 0'}),
       ui.Label(
         'Compare outputs to existing maps. ' +
         'For validation and sampling see the QGIS plugin ' +
@@ -6609,38 +6718,13 @@
       
       //for comparison / verification
       
-      if (validationFliiCheckbox.getValue()) {
-        var flii = ee.Image("users/openforisearthmap/World_EarthMap/flii_earth_20190824");
-        var low = 6.0, high = 9.6;
-        var flii_class = flii.expression(
-          "(b1 > low) ? ((b1 < high) ? 2 : 3) : 0", {b1: flii, low: low, high: high}
-        ).updateMask(country_and_buffer_mask).selfMask();
-        pffAddLayer(flii_class, {min: 2, max: 3, palette: ["orange", "blue"]}, "Reference: FLII (high/med)", true, 1);
-      }
-
-      if (validationFdapCheckbox.getValue()) {
-        var forestPersistence = ee.Image("projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020")
-            .updateMask(country_and_buffer_mask).selfMask();
-        pffAddLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)", true, 1);
-      }
-
-      if (customRef1.enableCheckbox.getValue()) {
-        var ref1Path = customRef1.assetInput.getValue();
-        if (ref1Path && ref1Path.trim() !== '') {
-          var ref1Img = preprocessAsset(ref1Path.trim(), customRef1.prepUi.getConfig())
-              .updateMask(country_and_buffer_mask).selfMask();
-          pffAddLayer(ref1Img, {min: 0, max: 1, palette: ['white', '#e377c2']}, 'Reference: Custom 1', true, 0.7);
-        }
-      }
-
-      if (customRef2.enableCheckbox.getValue()) {
-        var ref2Path = customRef2.assetInput.getValue();
-        if (ref2Path && ref2Path.trim() !== '') {
-          var ref2Img = preprocessAsset(ref2Path.trim(), customRef2.prepUi.getConfig())
-              .updateMask(country_and_buffer_mask).selfMask();
-          pffAddLayer(ref2Img, {min: 0, max: 1, palette: ['white', '#17becf']}, 'Reference: Custom 2', true, 0.7);
-        }
-      }
+      // Reference / comparison overlays (FLII / FDaP / Custom). Built via
+      // the shared buildReferenceLayers() so the Validation toggles can
+      // add/remove them standalone (refreshReferenceLayers) without a full
+      // re-run. pffAddLayer respects the disable-map mode.
+      buildReferenceLayers(country_and_buffer_mask).forEach(function(r) {
+        pffAddLayer(r.img, r.vis, r.name, true, r.opacity);
+      });
 
       //european primary forests database    
       // var epfd_2018_polys = ee.FeatureCollection("HU_BERLIN/EPFD/V2/polygons");
