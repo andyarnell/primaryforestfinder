@@ -4875,24 +4875,91 @@
   // VALIDATION PANEL (collapsible, right side)
   // =============================================================================
 
-  // Validation reference layers are added/removed inside addLayersToMap,
-  // so toggling one re-runs the analysis to add (or drop) it on the map
-  // immediately. Only re-run when a country is selected; otherwise just
-  // mark the analysis stale.
-  function refreshOnValidationToggle() {
-    if (countrySelector.getValue()) { updateMap(); } else { markNeedsUpdate(); }
+  // Validation reference layers (FLII / FDaP / Custom) are comparison
+  // overlays INDEPENDENT of the primary-forest analysis. Toggling one
+  // should add/remove just that overlay -- NOT re-run the whole analysis.
+  // buildReferenceLayers() returns the enabled overlays (shared by the
+  // full run in addLayersToMap and the targeted toggle below).
+  var REFERENCE_LAYER_NAMES = [
+    'Reference: FLII (high/med)',
+    'Reference: Forest Persistence (FDaP)',
+    'Reference: Custom 1',
+    'Reference: Custom 2'
+  ];
+
+  function buildReferenceLayers(country_and_buffer_mask) {
+    var refs = [];
+    if (validationFliiCheckbox.getValue()) {
+      var flii = ee.Image("users/openforisearthmap/World_EarthMap/flii_earth_20190824");
+      var low = 6.0, high = 9.6;
+      var flii_class = flii.expression(
+        "(b1 > low) ? ((b1 < high) ? 2 : 3) : 0", {b1: flii, low: low, high: high}
+      ).updateMask(country_and_buffer_mask).selfMask();
+      refs.push({img: flii_class, vis: {min: 2, max: 3, palette: ["orange", "blue"]},
+                 name: "Reference: FLII (high/med)", opacity: 1});
+    }
+    if (validationFdapCheckbox.getValue()) {
+      var forestPersistence = ee.Image("projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020")
+          .updateMask(country_and_buffer_mask).selfMask();
+      refs.push({img: forestPersistence.gt(.90), vis: {min: 0, max: 1, palette: ["white", "blue"]},
+                 name: "Reference: Forest Persistence (FDaP)", opacity: 1});
+    }
+    if (customRef1.enableCheckbox.getValue()) {
+      var ref1Path = customRef1.assetInput.getValue();
+      if (ref1Path && ref1Path.trim() !== '') {
+        var ref1Img = preprocessAsset(ref1Path.trim(), customRef1.prepUi.getConfig())
+            .updateMask(country_and_buffer_mask).selfMask();
+        refs.push({img: ref1Img, vis: {min: 0, max: 1, palette: ['white', '#e377c2']},
+                   name: 'Reference: Custom 1', opacity: 0.7});
+      }
+    }
+    if (customRef2.enableCheckbox.getValue()) {
+      var ref2Path = customRef2.assetInput.getValue();
+      if (ref2Path && ref2Path.trim() !== '') {
+        var ref2Img = preprocessAsset(ref2Path.trim(), customRef2.prepUi.getConfig())
+            .updateMask(country_and_buffer_mask).selfMask();
+        refs.push({img: ref2Img, vis: {min: 0, max: 1, palette: ['white', '#17becf']},
+                   name: 'Reference: Custom 2', opacity: 0.7});
+      }
+    }
+    return refs;
+  }
+
+  // Targeted toggle: swap only the Reference overlays on the map(s) --
+  // no full re-run. Country mask is cheap to rebuild (lazy EE). Falls
+  // back to markNeedsUpdate when no country / disabled-map mode.
+  function refreshReferenceLayers() {
+    var selectedCountry = countrySelector.getValue();
+    if (!selectedCountry) { markNeedsUpdate(); return; }
+    if (disableMapCheckbox.getValue()) { return; }
+    var country_clip = getCountryClip(selectedCountry);
+    var country_buffer = makeDistanceBuffer(country_clip, country_buffer_threshold, fastBuffer);
+    var country_and_buffer_mask = country_buffer.where(country_clip, 1).selfMask();
+    var refs = buildReferenceLayers(country_and_buffer_mask);
+    [map1, map2].forEach(function(m) {
+      if (!m) return;
+      var layers = m.layers();
+      for (var i = layers.length() - 1; i >= 0; i--) {
+        if (REFERENCE_LAYER_NAMES.indexOf(layers.get(i).getName()) !== -1) {
+          layers.remove(layers.get(i));
+        }
+      }
+      refs.forEach(function(r) { m.addLayer(r.img, r.vis, r.name, true, r.opacity); });
+    });
+    // Keep the legend in sync (reference layers appear in it).
+    _legendRefreshFns.forEach(function(fn) { fn(); });
   }
 
   var validationFliiCheckbox = ui.Checkbox({
     label: 'FLII (high/medium integrity)',
     value: false,
-    onChange: refreshOnValidationToggle
+    onChange: refreshReferenceLayers
   });
 
   var validationFdapCheckbox = ui.Checkbox({
     label: 'Forest Persistence (FDaP)',
     value: false,
-    onChange: refreshOnValidationToggle
+    onChange: refreshReferenceLayers
   });
 
   // -- Custom reference layer input factory --
@@ -4901,7 +4968,7 @@
     var enableCheckbox = ui.Checkbox({
       label: label,
       value: false,
-      onChange: refreshOnValidationToggle,
+      onChange: refreshReferenceLayers,
       style: {fontWeight: 'bold', fontSize: '10px', margin: '6px 0 2px 0'}
     });
     var assetInput = ui.Textbox({
@@ -6639,38 +6706,13 @@
       
       //for comparison / verification
       
-      if (validationFliiCheckbox.getValue()) {
-        var flii = ee.Image("users/openforisearthmap/World_EarthMap/flii_earth_20190824");
-        var low = 6.0, high = 9.6;
-        var flii_class = flii.expression(
-          "(b1 > low) ? ((b1 < high) ? 2 : 3) : 0", {b1: flii, low: low, high: high}
-        ).updateMask(country_and_buffer_mask).selfMask();
-        pffAddLayer(flii_class, {min: 2, max: 3, palette: ["orange", "blue"]}, "Reference: FLII (high/med)", true, 1);
-      }
-
-      if (validationFdapCheckbox.getValue()) {
-        var forestPersistence = ee.Image("projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020")
-            .updateMask(country_and_buffer_mask).selfMask();
-        pffAddLayer(forestPersistence.gt(.90), {min: 0, max: 1, palette: ["white", "blue"]},"Reference: Forest Persistence (FDaP)", true, 1);
-      }
-
-      if (customRef1.enableCheckbox.getValue()) {
-        var ref1Path = customRef1.assetInput.getValue();
-        if (ref1Path && ref1Path.trim() !== '') {
-          var ref1Img = preprocessAsset(ref1Path.trim(), customRef1.prepUi.getConfig())
-              .updateMask(country_and_buffer_mask).selfMask();
-          pffAddLayer(ref1Img, {min: 0, max: 1, palette: ['white', '#e377c2']}, 'Reference: Custom 1', true, 0.7);
-        }
-      }
-
-      if (customRef2.enableCheckbox.getValue()) {
-        var ref2Path = customRef2.assetInput.getValue();
-        if (ref2Path && ref2Path.trim() !== '') {
-          var ref2Img = preprocessAsset(ref2Path.trim(), customRef2.prepUi.getConfig())
-              .updateMask(country_and_buffer_mask).selfMask();
-          pffAddLayer(ref2Img, {min: 0, max: 1, palette: ['white', '#17becf']}, 'Reference: Custom 2', true, 0.7);
-        }
-      }
+      // Reference / comparison overlays (FLII / FDaP / Custom). Built via
+      // the shared buildReferenceLayers() so the Validation toggles can
+      // add/remove them standalone (refreshReferenceLayers) without a full
+      // re-run. pffAddLayer respects the disable-map mode.
+      buildReferenceLayers(country_and_buffer_mask).forEach(function(r) {
+        pffAddLayer(r.img, r.vis, r.name, true, r.opacity);
+      });
 
       //european primary forests database    
       // var epfd_2018_polys = ee.FeatureCollection("HU_BERLIN/EPFD/V2/polygons");
