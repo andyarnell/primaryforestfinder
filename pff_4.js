@@ -1005,7 +1005,8 @@
       // Clear red highlight and warning when a country is selected
       countrySelector.style().set({border: '1px solid #ccc', color: 'black'});
       countryWarningLabel.style().set({shown: false});
-      updateMap();
+      // Zoom to the country but DON'T auto-run -- user presses "Run analysis".
+      updateMap({skipAnalysis: true});
     },
     style: {width: '150px', margin: '4px 8px'}
   });
@@ -1095,7 +1096,7 @@
     value: '2000', 
     onChange: function(value) {
       updateVisibleAssetInputs();
-      updateMap();
+      updateMap({skipAnalysis: true});
     },
     style: {width: '80px', margin: '4px 8px'}
   });
@@ -1109,7 +1110,7 @@
     value: '2020', 
     onChange: function(value) {
       updateVisibleAssetInputs();
-      updateMap();
+      updateMap({skipAnalysis: true});
     },
     style: {width: '80px', margin: '4px 8px'}
   });
@@ -1122,7 +1123,7 @@
       yearSelector1.style().set({shown: checked});
       yearSelector2Label.setValue(checked ? 'Year 2:' : 'Year:');
       updateVisibleAssetInputs();
-      updateMap();
+      updateMap({skipAnalysis: true});
     },
     style: {margin: '4px 8px'}
   });
@@ -1179,7 +1180,7 @@
       ui.Label('How to use', {fontWeight: 'bold', fontSize: '11px', margin: '8px 0 2px 0'}),
       ui.Label(
         '1. Select a country and view the map\n' +
-        '2. Adjust parameters, then click Update Analysis\n' +
+        '2. Adjust parameters, then click Run analysis\n' +
         '3. View outputs and statistics in the right panel\n' +
         '4. Save outputs via the Outputs section\n' +
         '5. Save/load your settings via the ⚙ Config button',
@@ -1220,7 +1221,7 @@
 
   // RUN BUTTON - triggers analysis (instead of auto-update on slider change)
   var runButton = ui.Button({
-    label: '↻ Update Analysis',
+    label: '▶ Run analysis',
     onClick: function() {
       // Clear stats when updating to prevent stale data
       if (typeof areaStatsPanel !== 'undefined') {
@@ -1265,7 +1266,7 @@
     style: {fontSize: '11px', margin: '4px 8px 0 8px'}
   });
   var disableMapHint = ui.Label(
-    'Map preview off — Update Analysis + Export to Drive still work. ' +
+    'Map preview off — Run analysis + Export to Drive still work. ' +
     'On-the-fly Show Stats disabled; use Export Statistics to Drive instead.',
     {fontSize: '10px', color: '#666', fontStyle: 'italic',
     margin: '0 8px 4px 24px', shown: false}
@@ -1277,14 +1278,14 @@
   function markNeedsUpdate() {
     if (!needsUpdate) {
       needsUpdate = true;
-      runButton.setLabel('↻ Update Analysis *');
+      runButton.setLabel('▶ Run analysis *');
     }
     showStatsButton.setLabel('↻ Show Area\nStatistics *');
   }
 
   function markUpToDate() {
     needsUpdate = false;
-    runButton.setLabel('↻ Update Analysis');
+    runButton.setLabel('▶ Run analysis');
   }
 
   var topBarRow = ui.Panel({
@@ -1508,7 +1509,7 @@
       if (needsUpdate) {
         areaStatsPanel.add(ui.Label(
           '⚠ Analysis is OUT OF DATE (parameters changed since last run). ' +
-          'Stats below reflect the previous run. Click "↻ Update Analysis" ' +
+          'Stats below reflect the previous run. Click "▶ Run analysis" ' +
           'and re-run "↻ Show Area Statistics" for current numbers.',
           {color: '#b58105', fontSize: '11px', fontWeight: 'bold', margin: '0 0 6px 0'}));
       }
@@ -5800,7 +5801,16 @@
     // with no args -- they keep current behaviour and preserve the user's
     // per-layer toggles.
     opts = opts || {};
-    markUpToDate();
+    // opts.skipAnalysis: update the VIEW only (map mode, country centering,
+    // year labels) and skip the primary-forest analysis -- used when the
+    // user picks a country / year so the map zooms there but nothing
+    // computes until they press "Run analysis". Mark the run stale so the
+    // button prompts.
+    if (opts.skipAnalysis) {
+      markNeedsUpdate();
+    } else {
+      markUpToDate();
+    }
     // Clear stale on-the-fly stats whenever parameters change
     areaStatsPanel.clear();
     exportStatusLabel.setValue('');
@@ -7001,6 +7011,10 @@
     
     // print('Cached distance keys:', Object.keys(cachedState.distanceImages));
     
+    // Skip the whole analysis when only updating the view (country/year
+    // change) -- the user runs it explicitly via "Run analysis".
+    if (!opts.skipAnalysis) {
+
     // Baseline forest construction for the multi-year constraint:
     // mirror the per-year forest derivation but force it to the earliest
     // year. addLayersToMap will AND each non-baseline year's forest_map
@@ -7034,7 +7048,8 @@
       // Single map mode - only render map2
       addLayersToMap(map2, analysisYear2);
     }
-    
+    }  // end if (!opts.skipAnalysis)
+
     // Always print current centers at end for debugging
     if (map1) logCenterExplicit('map1 final', map1Center, map1Zoom);
     if (map2) logCenterExplicit('map2 final', map2Center, map2Zoom);
