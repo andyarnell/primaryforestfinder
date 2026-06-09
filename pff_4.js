@@ -4016,6 +4016,9 @@
 
   var refineSubsectionContent = ui.Panel({
     widgets: [
+      // Short description -- only visible when the section is expanded.
+      ui.Label('Helps align outputs with FRA categories.',
+        {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 4px'}),
       // Experimental marker -- same style as the Validation panel's, moved
       // here from the toggle label so the toggle reads just "(optional)".
       ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
@@ -4143,8 +4146,6 @@
                {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}),
       inputDefinitionPanel,
       refineSubsectionToggle,
-      ui.Label('Helps align outputs with FRA categories.',
-        {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 4px'}),
       refineSubsectionContent,
       refineStatusLabel,
       refineFraWarningLabel
