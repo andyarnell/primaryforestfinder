@@ -3317,7 +3317,18 @@
     // doesn't silently start refining. Selecting an FRA category
     // auto-ticks it via updateRefineVisibility() (a deliberate opt-in).
     value: false,
-    onChange: function() { markNeedsUpdate(); updateRefineStatus(); },
+    onChange: function(checked) {
+      // Couple (FRA-aligned only): unticking OLTC also unticks planted,
+      // since NRF needs Forest first. Skipped for "Non FRA aligned" (the
+      // exclusions are independent there) and when OLTC is hidden.
+      if (!checked
+          && inputCategorySelect.getValue() !== INPUT_CATEGORY_NONE
+          && excludeAgriPanel.style().get('shown') !== false
+          && includePlantationsCheckbox.getValue()) {
+        includePlantationsCheckbox.setValue(false, false);
+      }
+      markNeedsUpdate(); updateRefineStatus();
+    },
     style: {fontSize: '11px'}
   });
   // Hint text removed (2026-05-12 workshop) — checkbox label now
@@ -3335,7 +3346,18 @@
     label: 'Refine to naturally regenerating forest',
     // Opt-in: ships UNTICKED (see excludeAgricultureFromForestCheckbox).
     value: false,
-    onChange: function() { markNeedsUpdate(); updateRefineStatus(); },
+    onChange: function(checked) {
+      // Couple (FRA-aligned only): excluding planted (-> NRF) needs OLTC
+      // excluded first (NRF = Forest - planted), so auto-tick OLTC. For
+      // "Non FRA aligned" the exclusions stay independent (no FRA claim).
+      if (checked
+          && inputCategorySelect.getValue() !== INPUT_CATEGORY_NONE
+          && excludeAgriPanel.style().get('shown') !== false
+          && !excludeAgricultureFromForestCheckbox.getValue()) {
+        excludeAgricultureFromForestCheckbox.setValue(true, false);
+      }
+      markNeedsUpdate(); updateRefineStatus();
+    },
     style: {fontSize: '11px'}
   });
   // Hint text removed (2026-05-12 workshop) — checkbox label now
@@ -4069,20 +4091,30 @@
         msg = 'Refinement: none (output = input)';
       }
     } else {
-      // FRA-aligned -- output level = max(declared input level, exclusions).
+      // FRA-aligned. NRF needs Forest first: planted advances to NRF only
+      // once OLTC is removed (or the input is already Forest+). Otherwise
+      // the output would be "tree cover minus planted" (still OLTC) -- not
+      // real NRF -- so nudge rather than mislabel. (Coupling normally
+      // prevents this; this is a safety net.)
       // Levels: 0 tree cover, 1 Forest, 2 NRF, 3 Primary.
       var inputLevel = (cat === INPUT_CATEGORY_FOREST)  ? 1
                      : (cat === INPUT_CATEGORY_NATREG)  ? 2
                      : (cat === INPUT_CATEGORY_PRIMARY) ? 3 : 0;
-      var exclLevel  = planted ? 2 : (olwtc ? 1 : 0);
-      var outLevel   = Math.max(inputLevel, exclLevel);
-      var names = {1: 'Forest', 2: 'Naturally regenerating forest', 3: 'Primary forest'};
-      if (outLevel === 0) {
-        msg = 'Refinement: none (output = tree cover)';
-      } else if (exclLevel > inputLevel) {
-        msg = 'Refining to: ' + names[outLevel];
+      var atForest = (inputLevel >= 1) || olwtc;  // OLTC removed, or input already Forest+
+      if (planted && !atForest) {
+        msg = '⚠ For NRF, also exclude other land with tree cover';
       } else {
-        msg = 'Input declared: ' + names[outLevel];
+        var level = inputLevel;
+        if (olwtc && level < 1) level = 1;
+        if (planted && atForest && level < 2) level = 2;
+        var names = {1: 'Forest', 2: 'Naturally regenerating forest', 3: 'Primary forest'};
+        if (level === 0) {
+          msg = 'Refinement: none (output = tree cover)';
+        } else if (level > inputLevel) {
+          msg = 'Refining to: ' + names[level];
+        } else {
+          msg = 'Input declared: ' + names[level];
+        }
       }
     }
     refineStatusLabel.setValue(msg);
