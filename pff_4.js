@@ -3653,7 +3653,7 @@
   var defsTabContent = ui.Panel({
     widgets: [
       ui.Label('Forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
-      ui.Label('Land use is forest (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
+      ui.Label('Land use is forest; ≥5 m, ≥10% canopy, ≥0.5 ha (excludes agricultural & urban tree stands)', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Naturally regenerating forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
       ui.Label('Forest established through natural regeneration', {fontSize: '10px', margin: '0 0 2px 16px', color: '#555'}),
       ui.Label('Primary forest', {fontWeight: 'bold', fontSize: '10px', margin: '0 0 0 8px'}),
@@ -3721,19 +3721,14 @@
   // FRA-def label. The ⓘ FRA definitions button + the collapsible
   // defs panel are mounted at the TOP of the Refine subsection
   // (workshop feedback 2026-05-12).
-  // Purpose line for the FRA-category dropdown. The "Declare input as:"
-  // label now carries the input-vs-output framing, so this explains WHY
-  // you'd declare a category.
-  var fraInputHint = ui.Label(
-    "Helps align results with official FRA statistics.",
-    {fontSize: '10px', color: '#888', fontStyle: 'italic',
-     margin: '0 0 2px 4px'});
-
+  // Inline hints removed (fraInputHint + fraDefLabel) -- the ⓘ tabbed
+  // definitions popup now carries the definitional detail, so the dropdown
+  // just needs its label. fraDefLabel var + updateFraDefLabel() are kept
+  // as harmless no-ops (label no longer mounted) to avoid touching their
+  // callers in updateRefineVisibility / init.
   var fraInputSection = ui.Panel({
     widgets: [
-      createCompactRow('Declare input as:', inputCategorySelect),
-      fraInputHint,
-      fraDefLabel
+      createCompactRow('Treat input as:', inputCategorySelect)
     ],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {margin: '0 0 0 0'}
@@ -4029,13 +4024,36 @@
   function updateRefineStatus() {
     var olwtc   = excludeAgricultureFromForestCheckbox.getValue();
     var planted = includePlantationsCheckbox.getValue();
+    var cat = inputCategorySelect.getValue();
+    var declared = !!cat && cat !== '' && cat !== INPUT_CATEGORY_NONE;
     var msg;
-    if (planted) {
-      msg = 'Refining to: Naturally regenerating forest';
-    } else if (olwtc) {
-      msg = 'Refining to: Forest';
+    if (!declared) {
+      // Non FRA aligned -- describe the exclusions; don't name FRA categories.
+      if (olwtc && planted) {
+        msg = 'Excluding: other land with tree cover + planted forest';
+      } else if (olwtc) {
+        msg = 'Excluding: other land with tree cover';
+      } else if (planted) {
+        msg = 'Excluding: planted forest';
+      } else {
+        msg = 'Refinement: none (output = input)';
+      }
     } else {
-      msg = 'Refinement: none (output = tree-cover input)';
+      // FRA-aligned -- output level = max(declared input level, exclusions).
+      // Levels: 0 tree cover, 1 Forest, 2 NRF, 3 Primary.
+      var inputLevel = (cat === INPUT_CATEGORY_FOREST)  ? 1
+                     : (cat === INPUT_CATEGORY_NATREG)  ? 2
+                     : (cat === INPUT_CATEGORY_PRIMARY) ? 3 : 0;
+      var exclLevel  = planted ? 2 : (olwtc ? 1 : 0);
+      var outLevel   = Math.max(inputLevel, exclLevel);
+      var names = {1: 'Forest', 2: 'Naturally regenerating forest', 3: 'Primary forest'};
+      if (outLevel === 0) {
+        msg = 'Refinement: none (output = tree cover)';
+      } else if (exclLevel > inputLevel) {
+        msg = 'Refining to: ' + names[outLevel];
+      } else {
+        msg = 'Input declared: ' + names[outLevel];
+      }
     }
     refineStatusLabel.setValue(msg);
   }
