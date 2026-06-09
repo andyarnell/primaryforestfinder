@@ -3642,8 +3642,11 @@
   var inputCategoryFraInfo = ui.Button({
     label: 'ⓘ',
     onClick: function() {
-      var shown = fraDefsPanel.style().get('shown');
-      fraDefsPanel.style().set('shown', !shown);
+      var nowShown = !fraDefsPanel.style().get('shown');
+      fraDefsPanel.style().set('shown', nowShown);
+      // Make the on/off state obvious: caret + highlight when open.
+      inputCategoryFraInfo.setLabel(nowShown ? 'ⓘ ▾' : 'ⓘ');
+      inputCategoryFraInfo.style().set('backgroundColor', nowShown ? '#d0e0ff' : '#f4f8ff');
     },
     style: {fontSize: '10px', padding: '2px 6px', margin: '0 0 0 4px',
             backgroundColor: '#f4f8ff'}
@@ -4016,7 +4019,12 @@
 
   var refineSubsectionContent = ui.Panel({
     widgets: [
-      // Short description + ⓘ on one row (only visible when expanded).
+      // Experimental marker -- section-level flag at the top. Muted grey
+      // so it doesn't jar; the ⚠ glyph flags it.
+      ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
+        color: '#777', margin: '0 0 4px 0'}),
+      // Short description + ⓘ on one row; the ⓘ popup (fraDefsPanel) opens
+      // directly beneath this row.
       ui.Panel({
         widgets: [
           ui.Label('Helps align outputs with FRA categories.',
@@ -4026,10 +4034,6 @@
         layout: ui.Panel.Layout.flow('horizontal'),
         style: {margin: '0 0 4px 0'}
       }),
-      // Experimental marker -- same style as the Validation panel's, moved
-      // here from the toggle label so the toggle reads just "(optional)".
-      ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
-        color: '#b35900', margin: '0 0 4px 0'}),
       fraDefsPanel,               // collapsible definitions panel
       fraInputSection,            // dropdown + contextual FRA-def label
       excludeAgriPanel,
@@ -5260,7 +5264,7 @@
   var validationContent = ui.Panel({
     widgets: [
       ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
-        color: '#b35900', margin: '0 0 4px 0'}),
+        color: '#777', margin: '0 0 4px 0'}),
       ui.Label(
         'Compare outputs to existing maps. ' +
         'For validation and sampling see the QGIS plugin ' +
