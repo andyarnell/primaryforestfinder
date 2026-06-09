@@ -4016,14 +4016,20 @@
 
   var refineSubsectionContent = ui.Panel({
     widgets: [
-      // Short description -- only visible when the section is expanded.
-      ui.Label('Helps align outputs with FRA categories.',
-        {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 4px'}),
+      // Short description + ⓘ on one row (only visible when expanded).
+      ui.Panel({
+        widgets: [
+          ui.Label('Helps align outputs with FRA categories.',
+            {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '5px 4px 0 4px'}),
+          inputCategoryFraInfo
+        ],
+        layout: ui.Panel.Layout.flow('horizontal'),
+        style: {margin: '0 0 4px 0'}
+      }),
       // Experimental marker -- same style as the Validation panel's, moved
       // here from the toggle label so the toggle reads just "(optional)".
       ui.Label('⚠ Experimental', {fontWeight: 'bold', fontSize: '11px',
         color: '#b35900', margin: '0 0 4px 0'}),
-      inputCategoryFraInfo,       // ⓘ FRA definitions button (top)
       fraDefsPanel,               // collapsible definitions panel
       fraInputSection,            // dropdown + contextual FRA-def label
       excludeAgriPanel,
