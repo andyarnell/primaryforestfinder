@@ -1,5 +1,19 @@
 # Changelog — pff_4.js (GEE app)
 
+## v4.16.0-beta.9 (validation overlays + download UX)
+About panel (PR #42):
+- Added two links after "Source code on GitHub": "Data inputs (global datasets)" (→ docs/datasets_global.md) and "Report an issue / request a feature" (→ GitHub issues).
+- "Save to computer" → "Save to computer (experimental)"; an "⚠ Experimental" note added at the top of the Validation panel.
+
+Validation / reference overlays (PR #42):
+- Toggling a reference overlay (FLII / FDaP / Custom) now adds/removes just that overlay instead of re-running the whole analysis (reference layers are independent of the primary-forest computation). New buildReferenceLayers() (shared with the full run) + refreshReferenceLayers() targeted swap; the Validation checkboxes call the latter. No "Update Analysis" press needed.
+- Legend: reference layers now appear. FLII rendered GIS-style — a "FLII (forest integrity)" title with indented class rows: high (≥ 9.6) blue, medium (6.0–9.6) orange (colours match the map palette). FDaP label gains its >0.90 cutoff. Generic {title, classes:[…]} legend form for any multi-class layer.
+
+Download panel (PR #43):
+- "Save to computer" no longer appears to hang: the blocking work (autoGrid + bounds.getInfo() + tiling) is deferred one tick via ui.util.setTimeout so the "Calculating tiles…" message paints first.
+- Script mode: the "mosaic the tiles" note now follows the run instruction (run script → tiles download → mosaic), then the "links expire" note. The full Python script is no longer dumped inline by default — a new "Preview Python code" toggle in Advanced (off by default) shows it under a "Code preview:" header.
+- "Preview tiles" button → "Check tile count", its result now shows directly beneath the button (was the far-down status label) with a one-line description; its blocking getInfo() is likewise deferred.
+
 ## Changes vs v4.14.0 (Export panel labels + ordering)
 - Every Export-Layers tickbox label now shows the step prefix in parentheses (e.g. "(02c)", "(03a)") so users see which file-name segment the export will produce.
 - Tickbox declaration order, the select-all-toggle list, and the panel widget order all rewritten to follow the schema: 00 -> 02 -> 03 (a then b) -> 03c -> 04 -> sidecar. Matches the production-step order used in mkExportName().
