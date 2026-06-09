@@ -4111,6 +4111,8 @@
                {fontWeight: 'bold', fontSize: '12px', margin: '0 0 4px 0'}),
       inputDefinitionPanel,
       refineSubsectionToggle,
+      ui.Label('Helps align outputs with FRA categories.',
+        {fontSize: '10px', color: '#888', fontStyle: 'italic', margin: '0 0 4px 4px'}),
       refineSubsectionContent,
       refineStatusLabel,
       refineFraWarningLabel
