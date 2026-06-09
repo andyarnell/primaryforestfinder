@@ -3947,25 +3947,27 @@
       nationalPlantations.panel
     ],
     layout: ui.Panel.Layout.flow('vertical'),
-    style: {shown: false, margin: '0 0 0 6px'}
+    style: {shown: false, margin: '0 0 0 4px'}
   });
 
+  // Styling mirrors the "Buffer Exceptions" sub-section toggle (▸/▾
+  // arrows, grey #555 text, #f0f0f0 background) so the two optional
+  // sub-sections read as the same kind of control.
   var refineSubsectionToggle = ui.Button({
-    label: '▶ Refine input (optional, experimental)',
+    label: '▸ Refine input (optional, experimental)',
     onClick: function() {
       appState.ui.refineInputCollapsed = !appState.ui.refineInputCollapsed;
       refineSubsectionContent.style().set({
         shown: !appState.ui.refineInputCollapsed});
       refineSubsectionToggle.setLabel(
-        (appState.ui.refineInputCollapsed ? '▶ ' : '▼ ')
+        (appState.ui.refineInputCollapsed ? '▸ ' : '▾ ')
         + 'Refine input (optional, experimental)');
       // Re-evaluate downstream visibility — collapsed state changes
       // exclusionActive() results, so stats / map gating must refresh.
       if (typeof markNeedsUpdate === 'function') markNeedsUpdate();
     },
-    style: {stretch: 'horizontal', textAlign: 'left',
-            padding: '2px 6px', margin: '2px 0',
-            backgroundColor: '#f6f6f6'}
+    style: {fontSize: '11px', color: '#555', margin: '6px 0 2px 0',
+            padding: '2px 4px', backgroundColor: '#f0f0f0'}
   });
 
   var treeCoverContent = ui.Panel({
