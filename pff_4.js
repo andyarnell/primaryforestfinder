@@ -1241,6 +1241,13 @@
     }
   });
 
+  // Hint under the Run button -- shown after a country is selected but before
+  // the analysis is run (the map zooms but doesn't auto-compute), hidden once
+  // it runs. Guides users who expect auto-run. Toggled in updateMap().
+  var runHintLabel = ui.Label('↑ Press Run analysis to compute',
+    {fontSize: '11px', color: '#2e7d32', fontStyle: 'italic',
+     margin: '0 0 4px 10px', shown: false});
+
   // P1.26: "Disable map" mode for slow internet connections. When ticked,
   // addLayersToMap() skips every map.addLayer() / map.layers().add() call
   // -- no tile fetches at all -- but the analysis cache (latestMasked*)
@@ -5313,7 +5320,7 @@
 
   // Left panel with collapsible sections and scroll
   var leftPanel = ui.Panel({
-    widgets: [runButton, disableMapCheckbox, disableMapHint, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
+    widgets: [runButton, runHintLabel, disableMapCheckbox, disableMapHint, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {width: '310px', backgroundColor: 'rgba(255, 255, 255, 0.95)', padding: '2px', maxHeight: '600px'}
   });
@@ -5808,8 +5815,10 @@
     // button prompts.
     if (opts.skipAnalysis) {
       markNeedsUpdate();
+      runHintLabel.style().set('shown', true);
     } else {
       markUpToDate();
+      runHintLabel.style().set('shown', false);
     }
     // Clear stale on-the-fly stats whenever parameters change
     areaStatsPanel.clear();
