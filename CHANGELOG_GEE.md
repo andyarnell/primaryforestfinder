@@ -1,5 +1,10 @@
 # Changelog — pff_4.js (GEE app)
 
+## v4.16.0-beta.12 (manual Run analysis + Refine-input polish, PR #46)
+- Manual run: selecting a COUNTRY now zooms/centres the map but no longer auto-runs the primary-forest analysis -- nothing computes until "Run analysis" is pressed (year change / Compare Years still auto-run). updateMap gains opts.skipAnalysis. Button renamed "↻ Update Analysis" -> "▶ Run analysis" (one constant label + "*" when stale). A "↑ Press Run analysis to compute" hint shows under the button after a country select, hidden once it runs.
+- "Treat input as:" dropdown: removed "Primary forest" (confusing edge case -- comparing an already-primary map belongs in the Validation section). Still listed in the ⓘ definitions as a real FRA category.
+- Buffer Exceptions + Refine input sub-section toggles: larger ▶/▼ arrow glyphs (label kept at 11px).
+
 ## v4.16.0-beta.11 (Refine input / FRA definitions overhaul, PR #45)
 - ⓘ FRA-definitions popup rebuilt as two tabs (Definitions / Hierarchy; simulated with toggle buttons). Definitions lists the FRA categories (Tree cover dropped — universally understood — so no group-headers/"not a FRA category" notes needed). Hierarchy shows the real FRA taxonomy by indentation (Forest and Other land as separate top-level branches; Tree cover only as a muted footnote). ⓘ button now shows open/closed state ("ⓘ ▾" + highlight when open).
 - "Refine input" section polish: experimental flag moved off the toggle (now just "(optional)") into a muted-grey "⚠ Experimental" marker at the top; short description "Helps align outputs with FRA categories." (expanded-only) + ⓘ on one row; dropdown relabelled "Treat input as:"; inline hints removed (ⓘ does the work). Forest definition shows the FRA thresholds (≥5 m, ≥10% canopy, ≥0.5 ha).
