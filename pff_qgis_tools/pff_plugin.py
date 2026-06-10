@@ -37,6 +37,21 @@ class PffPlugin:
                 f"later.\n\nYour version: {Qgis.QGIS_VERSION}\n\n"
                 f"The plugin will load but some tools may not work correctly."
             )
+
+        # 64-bit requirement. A 32-bit QGIS process is capped at ~2 GB
+        # memory regardless of installed RAM, so raster reads can fail with
+        # MemoryError even on small areas. Warn once at load.
+        import sys
+        if sys.maxsize <= 2 ** 32:
+            from qgis.PyQt.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                None, "PFF Plugin",
+                "Primary Forest Finder is running on 32-bit QGIS, which is "
+                "limited to ~2 GB memory. Rasters may fail to process with "
+                "'MemoryError'. Please use a 64-bit QGIS install (current "
+                "LTR recommended). If the dock panel is unstable, run the "
+                "workflow from Processing Toolbox instead."
+            )
         self.initProcessing()
 
         # Toolbar action + Plugins-menu item that toggle the dock.

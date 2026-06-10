@@ -84,6 +84,29 @@ layers that are not provided.
 
 ---
 
+## System requirements
+
+- **64-bit QGIS is required.** A 32-bit QGIS process is capped at ~2 GB of
+  memory regardless of how much RAM the machine has, so the raster steps
+  (AOI clip / masking) can fail with `MemoryError` even on small areas.
+  Check via *Help → About* — the build should say **64-bit**, and the
+  install path should be `Program Files`, **not** `Program Files (x86)`.
+- **QGIS 3.28 or later** (the plugin shows a warning below 3.28). The
+  current **LTR (3.34+)** is recommended; primarily tested on **3.38**.
+- A few GB of free RAM and disk for intermediates. Large countries at fine
+  (30 m) resolution need more — resample the forest raster to ~90 m first
+  if you don't need sub-90 m detail (see `known_issues.md`).
+
+> If a run dies with `MemoryError` on a small area, you are almost
+> certainly on **32-bit** QGIS — reinstall the 64-bit build.
+
+> If the **dock panel** is unstable on your QGIS build (crashes when
+> setting inputs), run the workflow from **Processing Toolbox → Primary
+> Forest Finder → Run full workflow** instead — same workflow, lighter on
+> memory, and it bypasses the dock UI.
+
+---
+
 ## Installation
 
 1. Copy the `pff_qgis_tools` folder into your QGIS plugins directory:
