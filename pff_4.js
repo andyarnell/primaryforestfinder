@@ -3623,9 +3623,14 @@
   var INPUT_CATEGORY_NONE = 'Non FRA aligned';
 
   var inputCategorySelect = ui.Select({
+    // INPUT_CATEGORY_PRIMARY intentionally omitted from the dropdown --
+    // declaring "my input is primary forest" is a confusing edge case
+    // (only fits an already-primary map); comparing such a map is handled
+    // in the Validation section instead. The constant + its handling stay
+    // for backwards-compat with any saved settings.
     items: [INPUT_CATEGORY_NONE,
             INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST,
-            INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY],
+            INPUT_CATEGORY_NATREG],
     value: INPUT_CATEGORY_NONE,
     onChange: function() {
       updateRefineVisibility();
@@ -5598,8 +5603,11 @@
       if (INPUT_CATEGORY_LEGACY_MAP[savedCat]) {
         savedCat = INPUT_CATEGORY_LEGACY_MAP[savedCat];
       }
+      // PRIMARY omitted (no longer a dropdown option) -- an old saved
+      // setting with it just falls back to the default rather than trying
+      // to select a missing item.
       if ([INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST,
-          INPUT_CATEGORY_NATREG, INPUT_CATEGORY_PRIMARY].indexOf(savedCat) >= 0) {
+          INPUT_CATEGORY_NATREG].indexOf(savedCat) >= 0) {
         inputCategorySelect.setValue(savedCat);
       }
     }
