@@ -410,6 +410,32 @@ def refine_output(input_path, output_path, radius_m=2000, threshold=0.5,
 
     res = abs(gt[1])
     radius_px = max(1, int(round(radius_m / res)))
+
+    # Backstop (defence-in-depth). If the raster reaches here still in a
+    # geographic CRS (degrees) -- e.g. the upstream target-CRS guard was
+    # bypassed by an empty/invalid CRS -- then radius_m / res explodes
+    # (2000 m / ~0.0008 deg ≈ 2.5M px) and building the (2r+1)^2 kernel
+    # below would try to allocate hundreds of TiB. Fail with a clear,
+    # actionable message instead of a raw numpy MemoryError.
+    _is_geographic = False
+    if proj:
+        try:
+            from osgeo import osr
+            _srs = osr.SpatialReference()
+            _srs.ImportFromWkt(proj)
+            _is_geographic = bool(_srs.IsGeographic())
+        except Exception:
+            _is_geographic = False
+    if _is_geographic or radius_px > 1_000_000:
+        from qgis.core import QgsProcessingException
+        raise QgsProcessingException(
+            "Refine Output cannot run: the input raster appears to be in a "
+            "geographic CRS (degrees), so a {rm:g} m neighbourhood resolves "
+            "to {rp} pixels (pixel size {res:g}) and the kernel would need "
+            "hundreds of TiB of memory. Set a projected target CRS in metres "
+            "(a UTM zone or your national grid) and re-run.".format(
+                rm=radius_m, rp=radius_px, res=res))
+
     use_square = fast_approximation or (radius_m > _CIRCLE_TO_SQUARE_THRESHOLD_M)
 
     # Area-correct the square radius so total kernel pixels ≈ circle's.
