@@ -158,7 +158,7 @@ function getCountryFeatures(countryName) {
   var info = gaulLut.GAUL_LUT[gaulLut.nameToCode(countryName)];
   if (!info) return countries.filter(ee.Filter.eq('gaul0_name', countryName));
   var iso3 = info.iso3;
-  if (iso3 === 'IDN' || iso3 === 'THA' || iso3 === 'DZA' || iso3 === 'AUS' || iso3 === 'CHN') {
+  if (iso3 === 'IDN' || iso3 === 'THA' || iso3 === 'DZA' || iso3 === 'AUS' || iso3 === 'CHN' || iso3 === 'CHL') {
     return countries_simple.filter(ee.Filter.eq('iso3_code', iso3));
   }
   return countries.filter(ee.Filter.eq('gaul0_name', countryName));

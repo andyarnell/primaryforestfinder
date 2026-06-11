@@ -1,9 +1,16 @@
 # Changelog — pff_4.js (GEE app)
 
+## v4.16.0-beta.13 (on-map "next step" prompt + UI polish)
+- On-map guidance: the "what to do next" prompt now floats at the top-centre of the map instead of under the Run button. Step-aware -- "Choose a country to begin" before a country is picked, "Press ▶ Run analysis to generate the map" once one is, hidden once the analysis runs. Info-blue (#2196F3), first-run nudge only (ongoing staleness is still carried by the Run button's "*"). Replaces the old left-panel runHintLabel.
+- Removed the now-redundant red "Please choose a country" warning + red selector border (it fired whenever updateMap ran with no country, e.g. at load, so the country prompt showed twice). The on-map prompt covers it.
+- "Reset Defaults" button un-greyed: was styled grey (#888) so it read as disabled despite being fully functional; now normal dark text (#333). Reset logic unchanged.
+- Single-map year label moved from top-centre to top-left (matches the split-screen left map and frees top-centre). Split-screen year labels unchanged.
+
 ## v4.16.0-beta.12 (manual Run analysis + Refine-input polish, PR #46)
 - Manual run: selecting a COUNTRY now zooms/centres the map but no longer auto-runs the primary-forest analysis -- nothing computes until "Run analysis" is pressed (year change / Compare Years still auto-run). updateMap gains opts.skipAnalysis. Button renamed "↻ Update Analysis" -> "▶ Run analysis" (one constant label + "*" when stale). A "↑ Press Run analysis to compute" hint shows under the button after a country select, hidden once it runs.
 - "Treat input as:" dropdown: removed "Primary forest" (confusing edge case -- comparing an already-primary map belongs in the Validation section). Still listed in the ⓘ definitions as a real FRA category.
 - Buffer Exceptions + Refine input sub-section toggles: larger ▶/▼ arrow glyphs (label kept at 11px).
+- `getCountryFeatures()`: added Chile (CHL) to the simplified-geometry list (served from `countries_simple`), alongside IDN/THA/DZA/AUS/CHN -- Chile's original GAUL_2024_L0 polygon hit the same vertex-limit / boundary issues. Mirrored in `tools/pff_batch_export_asia_pacific.js`.
 
 ## v4.16.0-beta.11 (Refine input / FRA definitions overhaul, PR #45)
 - ⓘ FRA-definitions popup rebuilt as two tabs (Definitions / Hierarchy; simulated with toggle buttons). Definitions lists the FRA categories (Tree cover dropped — universally understood — so no group-headers/"not a FRA category" notes needed). Hierarchy shows the real FRA taxonomy by indentation (Forest and Other land as separate top-level branches; Tree cover only as a muted footnote). ⓘ button now shows open/closed state ("ⓘ ▾" + highlight when open).
