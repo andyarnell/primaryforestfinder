@@ -25,10 +25,10 @@ import re
 
 import processing
 from qgis.PyQt.QtCore import QEvent, QObject, Qt
-from qgis.PyQt.QtGui import QStandardItem, QStandardItemModel, QTextCursor
+from qgis.PyQt.QtGui import QTextCursor
 from qgis.PyQt.QtWidgets import (
     QAbstractSlider, QAbstractSpinBox, QApplication, QCheckBox, QComboBox,
-    QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
     QSplitter, QTextEdit, QToolButton, QVBoxLayout, QWidget
 )
@@ -699,40 +699,42 @@ class PffDockWidget(QgsDockWidget):
         self._prefix_preview.setStyleSheet("color:#666; font-style:italic;")
         form.addRow("", self._prefix_preview)
 
-        # P1.30 batch 20i: single CRS picker replacing the previous
-        # Suggested-CRS dropdown + Manual CRS + EPSG fields. Items are
-        # grouped under disabled headers ("AOI-based suggestions",
-        # "Recent", "Other"). The "Other" group has actions for
-        # typing an EPSG code or browsing the full QGIS CRS list.
-        # No default selection -- user must explicitly pick.
+        # beta.14: manual CRS input (type an EPSG code + a … browse button).
+        # Replaces the batch-20i grouped suggestion combo, which DISPLAYED a
+        # curated/suggested CRS as if selected but never committed it (it set
+        # the combo index under blockSignals while _chosen_crs stayed None) --
+        # so a run could ship an empty CRS and crash deep in Stage 5. Manual
+        # entry means _chosen_crs is only ever set by a deliberate type/browse.
+        # The richer AOI/ISO3 suggestion helper is parked for a later release.
         crs_row = QHBoxLayout()
         crs_row.setContentsMargins(0, 0, 0, 0)
         crs_row.setSpacing(4)
-        self._crs_combo = QComboBox()
-        self._crs_combo.setToolTip(
-            "Pick a CRS. Top entries are AOI-based suggestions from "
-            "pyproj. 'Recent' lists CRSes used in past runs. 'Other' "
-            "has actions for typing an EPSG code or browsing the "
-            "full QGIS CRS list. No silent default -- you must pick.")
-        # Batch 28.8: shrink to whatever the form column gives us so
-        # the … browse button never gets clipped.
-        self._crs_combo.setSizePolicy(
-            QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self._crs_combo.setMinimumWidth(0)
-        from qgis.PyQt.QtWidgets import QComboBox as _QCB
-        self._crs_combo.setSizeAdjustPolicy(
-            _QCB.AdjustToMinimumContentsLengthWithIcon)
-        self._crs_combo.activated.connect(self._on_crs_combo_picked)
-        crs_row.addWidget(self._crs_combo, 1)
-        # Quick-browse button: shorthand for the "Browse all CRSes" action.
+        self._crs_epsg_edit = QLineEdit()
+        self._crs_epsg_edit.setPlaceholderText("EPSG code, e.g. 32645")
+        self._crs_epsg_edit.setToolTip(
+            "Type a projected CRS as an EPSG code (e.g. 32645 = WGS 84 / "
+            "UTM 45N), or use the … button to browse the full QGIS CRS "
+            "list. Distance and area need a projected CRS in metres -- not "
+            "lat/long (EPSG:4326).")
+        self._crs_epsg_edit.editingFinished.connect(self._on_crs_epsg_edited)
+        crs_row.addWidget(self._crs_epsg_edit, 1)
         self._crs_browse_btn = QToolButton()
         self._crs_browse_btn.setText("…")
-        self._crs_browse_btn.setToolTip(
-            "Browse the full QGIS CRS list (same as 'Other > "
-            "Browse all CRSes' in the dropdown)")
+        self._crs_browse_btn.setToolTip("Browse the full QGIS CRS list")
         self._crs_browse_btn.clicked.connect(self._on_crs_browse_clicked)
         crs_row.addWidget(self._crs_browse_btn)
         form.addRow("Target CRS:", crs_row)
+
+        # Status line under the CRS row + a static reprojection hint.
+        self._crs_status = QLabel("")
+        self._crs_status.setWordWrap(True)
+        form.addRow("", self._crs_status)
+        _crs_hint = QLabel(
+            "Inputs not already in this CRS are reprojected to it before "
+            "analysis.")
+        _crs_hint.setWordWrap(True)
+        _crs_hint.setStyleSheet("color: #777; font-size: 11px;")
+        form.addRow("", _crs_hint)
 
         # Internal state: the chosen CRS as a QgsCoordinateReferenceSystem
         # (None until user picks). Drives _collect_params -- written to
@@ -740,7 +742,7 @@ class PffDockWidget(QgsDockWidget):
         # up regardless of which path it follows.
         self._chosen_crs = None  # type: ignore[assignment]
         self._chosen_crs_label = ""
-        self._rebuild_crs_combo()
+        self._update_crs_status()
 
         sec.set_content_layout(form)
 
@@ -764,131 +766,46 @@ class PffDockWidget(QgsDockWidget):
         self._on_subnational_toggled(self._use_subnational_chk.isChecked())
 
     def _on_aoi_or_iso3_changed(self, *_):
-        """AOI path or ISO3 changed -- refresh prefix preview AND
-        rebuild the CRS combo so suggestions track the new inputs.
-        Clears the previous CRS choice so the user consciously picks
-        the right one for the new country."""
+        """AOI path or ISO3 changed -- refresh the filename-prefix preview.
+
+        Deliberately does NOT touch the chosen CRS. An earlier version
+        cleared self._chosen_crs here on every ISO3 keystroke, silently
+        losing a CRS the user had already set -> the run then shipped an
+        empty CRS and crashed in Stage 5. CRS entry is fully manual now."""
         self._refresh_prefix_preview()
-        self._chosen_crs = None
-        self._chosen_crs_label = ""
-        self._rebuild_crs_combo()
 
     # ────────────────────────────────────────────────────────────────
-    # P1.30 batch 20i: CRS picker (single combobox + browse button)
+    # CRS status + display sync (beta.14 manual input)
     # ────────────────────────────────────────────────────────────────
-    # Item UserRole sentinels — distinguish action items from real picks.
-    _CRS_ROLE_HEADER = "header"
-    _CRS_ROLE_NONE = "none"
-    _CRS_ROLE_BROWSE = "browse"
-    _CRS_ROLE_EPSG_INPUT = "epsg_input"
-
-    def _rebuild_crs_combo(self):
-        """Populate the CRS combobox with grouped sources.
-
-        Three groups under disabled headers:
-          - AOI-based suggestions (from utils_crs_suggest.suggest_crses)
-          - Recent (last 10 unique CRSes from run_history.json)
-          - Other (Type EPSG code…, Browse all CRSes…)
-
-        Section headers are non-selectable. Selectable items carry an
-        EPSG integer (for picks) or one of the role sentinels (for
-        actions) in their UserRole data.
-
-        If nothing is currently chosen AND there are no AOI/ISO3 inputs
-        yet, the combo shows a single placeholder telling the user to
-        provide AOI/ISO3 or pick manually.
-        """
-        try:
-            from ..utils_crs_suggest import suggest_crses
-        except ImportError:
-            suggest_crses = None  # graceful when pyproj unavailable
-
-        aoi_path = self._aoi_picker.path() or None
-        iso3 = (self._iso3_edit.text().strip() or None)
-
-        suggestions = []
-        if suggest_crses is not None and (aoi_path or iso3):
-            try:
-                suggestions = suggest_crses(
-                    aoi_path=aoi_path, iso3=iso3, max_results=5)
-            except Exception:
-                suggestions = []
-
-        recents = self._recent_target_crses(n=10)
-
-        model = QStandardItemModel(self._crs_combo)
-
-        def _add_header(text):
-            item = QStandardItem(f"── {text} ──")
-            item.setData(self._CRS_ROLE_HEADER, Qt.UserRole)
-            item.setSelectable(False)
-            item.setEnabled(False)
-            model.appendRow(item)
-
-        def _add_action(text, role):
-            item = QStandardItem(text)
-            item.setData(role, Qt.UserRole)
-            model.appendRow(item)
-
-        def _add_epsg(epsg, label):
-            item = QStandardItem(label)
-            item.setData(int(epsg), Qt.UserRole)
-            model.appendRow(item)
-
-        # Track whether the chosen CRS appears in any group so we can
-        # set the combo's currentIndex to it after population.
-        chosen_idx = -1
-
-        # If no AOI/ISO3 AND no recent runs AND no chosen CRS yet,
-        # show a single placeholder + the Other actions only.
-        has_anything = (
-            bool(suggestions) or bool(recents) or self._chosen_crs is not None)
-
-        if not has_anything:
-            placeholder = QStandardItem("— Select one —")
-            placeholder.setData(self._CRS_ROLE_NONE, Qt.UserRole)
-            placeholder.setSelectable(False)
-            placeholder.setEnabled(False)
-            model.appendRow(placeholder)
+    def _update_crs_status(self):
+        """Refresh the status line under the manual CRS field."""
+        crs = self._chosen_crs
+        if crs is None or not crs.isValid():
+            self._crs_status.setText(
+                "— No CRS set — type an EPSG code or use …")
+            self._crs_status.setStyleSheet("color: #777; font-size: 11px;")
+        elif crs.isGeographic():
+            self._crs_status.setText(
+                "⚠ {} is geographic (degrees) — pick a projected CRS in "
+                "metres (e.g. a UTM zone)".format(crs.authid() or "This CRS"))
+            self._crs_status.setStyleSheet("color: #b35900; font-size: 11px;")
         else:
-            # If the user has already chosen a CRS, show it as the
-            # current entry at the top so the combo reflects state.
-            if self._chosen_crs is not None:
-                _add_header("Current selection")
-                _add_epsg(
-                    self._chosen_crs_epsg() or 0,
-                    self._chosen_crs_label or self._format_crs_label(
-                        self._chosen_crs))
-                chosen_idx = model.rowCount() - 1
+            self._crs_status.setText(
+                "✓ {}".format(self._chosen_crs_label or crs.authid()))
+            self._crs_status.setStyleSheet("color: #2e7d32; font-size: 11px;")
 
-            if suggestions:
-                _add_header("AOI-based suggestions")
-                for code, name, reason in suggestions:
-                    label = f"EPSG:{code} — {name}"
-                    if reason:
-                        label += f"  [{reason}]"
-                    _add_epsg(code, label)
+    def _reflect_chosen_crs(self):
+        """Mirror self._chosen_crs into the EPSG field, then refresh status.
 
-            if recents:
-                _add_header("Recent")
-                for code, label in recents:
-                    _add_epsg(code, label)
-
-        _add_header("Other")
-        _add_action("Type EPSG code…", self._CRS_ROLE_EPSG_INPUT)
-        _add_action("Browse all CRSes (QGIS picker)…", self._CRS_ROLE_BROWSE)
-
-        self._crs_combo.blockSignals(True)
-        self._crs_combo.setModel(model)
-        if chosen_idx >= 0:
-            self._crs_combo.setCurrentIndex(chosen_idx)
-        else:
-            # Find first selectable row to land on.
-            for r in range(model.rowCount()):
-                if model.item(r).isSelectable():
-                    self._crs_combo.setCurrentIndex(r)
-                    break
-        self._crs_combo.blockSignals(False)
+        Called after a CRS is committed (typed or browsed). setText does
+        not re-fire editingFinished, so there's no recursion."""
+        if self._chosen_crs is not None and self._chosen_crs.isValid():
+            authid = self._chosen_crs.authid() or ""
+            code = (authid.split(":", 1)[1]
+                    if authid.upper().startswith("EPSG:") else authid)
+            if code:
+                self._crs_epsg_edit.setText(code)
+        self._update_crs_status()
 
     def _chosen_crs_epsg(self):
         """Return the integer EPSG code of the currently chosen CRS, or None."""
@@ -914,7 +831,7 @@ class PffDockWidget(QgsDockWidget):
             return "(custom CRS)"
 
     def _set_chosen_crs_from_epsg(self, epsg: int):
-        """Set self._chosen_crs from an EPSG integer; refresh combo state."""
+        """Set self._chosen_crs from an EPSG integer; refresh field + status."""
         crs = QgsCoordinateReferenceSystem(f"EPSG:{int(epsg)}")
         if not crs.isValid():
             QMessageBox.warning(
@@ -923,7 +840,7 @@ class PffDockWidget(QgsDockWidget):
             return
         self._chosen_crs = crs
         self._chosen_crs_label = self._format_crs_label(crs)
-        self._rebuild_crs_combo()
+        self._reflect_chosen_crs()
 
     def _set_chosen_crs(self, crs):
         """Set self._chosen_crs from a QgsCoordinateReferenceSystem."""
@@ -931,30 +848,33 @@ class PffDockWidget(QgsDockWidget):
             return
         self._chosen_crs = crs
         self._chosen_crs_label = self._format_crs_label(crs)
-        self._rebuild_crs_combo()
+        self._reflect_chosen_crs()
 
-    def _on_crs_combo_picked(self, idx):
-        """Handle a user pick from the CRS combobox."""
-        if idx < 0:
+    def _on_crs_epsg_edited(self):
+        """Commit (or clear) the CRS when the user finishes editing the
+        EPSG field. Accepts "32645" or "EPSG:32645"; an empty field clears
+        the selection (the _validate run-guard then blocks until set)."""
+        raw = (self._crs_epsg_edit.text() or "").strip()
+        if not raw:
+            self._chosen_crs = None
+            self._chosen_crs_label = ""
+            self._update_crs_status()
             return
-        model = self._crs_combo.model()
-        if model is None:
+        text = raw.upper()
+        if text.startswith("EPSG:"):
+            text = text.split(":", 1)[1].strip()
+        try:
+            epsg = int(text)
+        except ValueError:
+            QMessageBox.warning(
+                self, "Primary Forest Finder",
+                f"'{raw}' is not a valid EPSG code. Type a number like "
+                "32645, or use the … button to browse.")
+            self._chosen_crs = None
+            self._chosen_crs_label = ""
+            self._update_crs_status()
             return
-        item = model.item(idx)
-        if item is None:
-            return
-        role = item.data(Qt.UserRole)
-        if role == self._CRS_ROLE_HEADER or role == self._CRS_ROLE_NONE:
-            return  # disabled, shouldn't fire — but be defensive
-        if role == self._CRS_ROLE_BROWSE:
-            self._on_crs_browse_clicked()
-            return
-        if role == self._CRS_ROLE_EPSG_INPUT:
-            self._on_crs_epsg_input()
-            return
-        if isinstance(role, int):
-            self._set_chosen_crs_from_epsg(role)
-            return
+        self._set_chosen_crs_from_epsg(epsg)
 
     def _on_crs_browse_clicked(self):
         """Open the QGIS CRS picker dialog."""
@@ -966,33 +886,11 @@ class PffDockWidget(QgsDockWidget):
             if crs is not None and crs.isValid():
                 self._set_chosen_crs(crs)
             else:
-                # User confirmed an invalid/empty CRS; rebuild to drop
-                # any partial state.
-                self._rebuild_crs_combo()
+                # User confirmed an invalid/empty CRS; refresh status.
+                self._update_crs_status()
         else:
-            # Cancelled — restore the combo display.
-            self._rebuild_crs_combo()
-
-    def _on_crs_epsg_input(self):
-        """Prompt the user to type an EPSG code."""
-        text, ok = QInputDialog.getText(
-            self, "Enter EPSG code",
-            "EPSG code (e.g. 5266):")
-        if not ok:
-            self._rebuild_crs_combo()
-            return
-        text = (text or "").strip().upper()
-        if text.startswith("EPSG:"):
-            text = text.split(":", 1)[1].strip()
-        try:
-            epsg = int(text)
-        except ValueError:
-            QMessageBox.warning(
-                self, "Primary Forest Finder",
-                f"'{text}' is not a valid EPSG code.")
-            self._rebuild_crs_combo()
-            return
-        self._set_chosen_crs_from_epsg(epsg)
+            # Cancelled — leave the current selection as-is.
+            self._update_crs_status()
 
     def _recent_target_crses(self, n: int = 10):
         """Read the run-history JSON and return the last N unique
@@ -3707,6 +3605,18 @@ class PffDockWidget(QgsDockWidget):
                 "has been chosen (§2). Select what your data represents.")
         if not self._output_folder.filePath():
             issues.append("Output folder (§1) is required.")
+        # Target CRS guard. A missing/invalid CRS used to sail through to
+        # the algorithm as an empty QgsCoordinateReferenceSystem(), which
+        # left the data geographic and crashed deep in Stage 5 (degrees-as-
+        # metres kernel blowup). Block the run here with a clear message.
+        if self._chosen_crs is None or not self._chosen_crs.isValid():
+            issues.append(
+                "Target CRS (§0) is not set. Pick a projected CRS "
+                "(metres, e.g. a UTM zone) before running.")
+        elif self._chosen_crs.isGeographic():
+            issues.append(
+                "Target CRS (§0) is geographic (degrees). Pick a projected "
+                "CRS in metres (e.g. a UTM zone or your national grid).")
         return issues
 
     def _collect_params(self) -> dict:
@@ -4759,6 +4669,7 @@ class PffDockWidget(QgsDockWidget):
         # leave the dock with no chosen CRS so the user must pick again.
         self._chosen_crs = None
         self._chosen_crs_label = ""
+        self._crs_epsg_edit.clear()
         crs_epsg_str = s(FW.TARGET_CRS_EPSG)
         crs_str = s(FW.TARGET_CRS)  # may be authid like "EPSG:5266"
         if crs_epsg_str:
@@ -4773,7 +4684,7 @@ class PffDockWidget(QgsDockWidget):
                     self._set_chosen_crs(crs)
             except Exception:
                 pass
-        self._rebuild_crs_combo()
+        self._update_crs_status()
         self._aoi_buffer.setValue(n(FW.AOI_BUFFER))
 
         # §1 Time Period — restore mode based on the saved YEAR value.

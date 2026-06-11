@@ -1390,7 +1390,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.16.0-beta.13"
+    PFF_VERSION = "0.16.0-beta.14"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -1819,6 +1819,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
             crs_source = "CRS picker"
 
         target_crs = QgsCoordinateReferenceSystem(target_crs_str)
+
+        # Validate a CRS was actually resolved. An empty/invalid CRS (e.g.
+        # the dock shipped QgsCoordinateReferenceSystem() because no CRS was
+        # picked) is NOT geographic, so it slips past the isGeographic() check
+        # below, leaves the data in its native (often geographic) CRS, and
+        # detonates later in Refine Output (degrees-as-metres kernel blowup).
+        # Fail loud and early instead.
+        if not target_crs.isValid():
+            raise QgsProcessingException(
+                "No valid target CRS was resolved (the CRS field was empty "
+                "or invalid). Set a projected CRS in metres -- a UTM zone, a "
+                "continental equal-area projection, or your country's national "
+                "grid -- via dock §0 or the Target CRS / EPSG fields.")
 
         # Validate the resolved CRS is projected (metres). Distance / area
         # operations downstream silently produce wrong values on geographic
