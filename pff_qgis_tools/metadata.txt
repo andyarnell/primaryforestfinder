@@ -3,8 +3,10 @@ name=Primary Forest Finder
 qgisMinimumVersion=3.10
 qgisMaximumVersion=3.99
 description=Processing tools for delineating primary forest candidate areas using anthropogenic influence, slope and protected area tiers.
-version=0.16.0-beta.14
-changelog=0.16.0-beta.14 — Fix: the Target CRS could be silently dropped (edited ISO3/AOI cleared a chosen CRS) or left empty, crashing national runs deep in Refine Output (geographic degrees treated as metres). CRS input reverted to a manual EPSG field + browse; the run is blocked with a clear message if no projected CRS is set, plus algorithm-level guards (invalid-CRS + geographic-raster backstops).
+version=0.16.0-beta.15
+changelog=
+    0.16.0-beta.15 — Run summary no longer mislabels harmless GDAL warnings (e.g. the DEM NoData notice) as fatal errors; auto-handled notices (geographic-CRS reproject) now render as blue informational, not red.
+    0.16.0-beta.14 — Target CRS could be silently dropped (editing ISO3/AOI cleared a chosen CRS) or left empty, crashing national runs in Refine Output. Reverted to manual CRS input + run/algorithm CRS guards.
 author=Andy Arnell
 email=
 about=Replicates the PFF Google Earth Engine app workflow using local data with GDAL and native QGIS Processing algorithms. Includes validate, prepare, distance, anthropogenic mask, primary forest, refine output, and zonal statistics tools — plus a one-click full workflow runner with selective exports, auto UTM, and combined coded raster output.
