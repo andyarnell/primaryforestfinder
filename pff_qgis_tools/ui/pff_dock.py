@@ -194,6 +194,13 @@ class _DockFeedback(QgsProcessingFeedback):
                 "distance calculations require a projected crs"):
             if kw in m:
                 return "resolved"
+        # GDAL nodata-collision notice (e.g. "Value 255 ... changed to 254
+        # ... to avoid being treated as NoData"): GDAL preserves the data
+        # automatically -- purely informational, not a problem. Seen on the
+        # DEM clip, where 255 is a valid elevation but the binary-raster
+        # NoData=255 collides with it.
+        if "to avoid being treated as nodata" in m:
+            return "resolved"
         # Resolved: auto-handled by the plugin (fallback / reproj /
         # auto-tick). Worth noting but not actionable.
         for kw in (
@@ -286,16 +293,31 @@ class _DockFeedback(QgsProcessingFeedback):
         # don't get hard-tagged as fatal errors. Anything the
         # categorizer doesn't recognise stays as "error".
         sev = self._categorize(error)
-        if sev == "warning":
+        # GDAL CPLError *warnings* ("Warning N: ...") arrive on the error
+        # channel (reportError) but are non-fatal -- they must NOT be filed
+        # under "Errors (fatal -- run did not finish cleanly)". Detect them
+        # and keep them as warnings (or whatever the categorizer resolved
+        # them to); only genuinely-unrecognised error text is upgraded.
+        is_gdal_warning = re.match(
+            r"^\s*warning\s+\d+\s*:", error or "", re.IGNORECASE) is not None
+        if sev == "warning" and not is_gdal_warning:
             sev = "error"
         self._ledger.append((sev, error))
-        # The visual ✖ icon stays even for downgraded entries -- the
-        # log line was already printed before this categorisation
-        # happened, and we want the user to see "the workflow logged
-        # this as an error originally". The end-of-run summary
-        # bucketing is the reliable signal of resolution.
-        self._append(
-            f"<span style='color:#a00;'>✖ {_html_escape(error)}</span>")
+        # Inline icon/colour by resolved severity, so auto-handled notices
+        # (e.g. "uses geographic CRS … reprojecting") read as information,
+        # not a red error:
+        #   resolved   -> ℹ blue   (auto-handled / informational)
+        #   GDAL warn  -> ⚠ amber  (non-fatal warning)
+        #   otherwise  -> ✖ red    (genuine error)
+        if sev == "resolved":
+            self._append(
+                f"<span style='color:#1a73e8;'>&#8505; {_html_escape(error)}</span>")
+        elif is_gdal_warning:
+            self._append(
+                f"<span style='color:#b8860b;'>⚠ {_html_escape(error)}</span>")
+        else:
+            self._append(
+                f"<span style='color:#a00;'>✖ {_html_escape(error)}</span>")
 
     def _on_progress(self, value: float):
         self._pb.setValue(int(value))
