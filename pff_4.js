@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.12";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.13";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -75,7 +75,7 @@
     if (!info) return countries.filter(ee.Filter.eq(property_name, countryName));
     var iso3 = info.iso3;
     // Use simplified geometries for countries known to hit vertex limits
-    if (iso3 === 'IDN' || iso3 === 'THA' || iso3 === 'DZA' || iso3 === 'AUS' || iso3 === 'CHN') {
+    if (iso3 === 'IDN' || iso3 === 'THA' || iso3 === 'DZA' || iso3 === 'AUS' || iso3 === 'CHN' || iso3 === 'CHL') {
       return countries_simple.filter(ee.Filter.eq('iso3_code', iso3));
     }
     return countries.filter(ee.Filter.eq(property_name, countryName));
@@ -1241,12 +1241,9 @@
     }
   });
 
-  // Hint under the Run button -- shown after a country is selected but before
-  // the analysis is run (the map zooms but doesn't auto-compute), hidden once
-  // it runs. Guides users who expect auto-run. Toggled in updateMap().
-  var runHintLabel = ui.Label('↑ Press Run analysis to compute',
-    {fontSize: '11px', color: '#2e7d32', fontStyle: 'italic',
-     margin: '0 0 4px 10px', shown: false});
+  // (The "what to do next" hint now lives on the map as a dead-centre prompt --
+  // see createRunCtaPanel / refreshRunCta. The old left-panel runHintLabel was
+  // removed in favour of the on-map version.)
 
   // P1.26: "Disable map" mode for slow internet connections. When ticked,
   // addLayersToMap() skips every map.addLayer() / map.layers().add() call
@@ -4882,6 +4879,47 @@
     });
   }
 
+  // On-map "what to do next" prompt. Floats top-centre, info-blue, and
+  // updates by step: 'choose' (pick a country) -> 'run' (press Run analysis)
+  // -> 'done' (hidden once the analysis has run). First-run nudge only;
+  // ongoing staleness is carried by the Run button's "*" marker, not this.
+  // Built fresh on each map (re)build like the legend/disclaimer; the module
+  // refs let refreshRunCta() update the live instance, and refreshRunCta() is
+  // re-called after each rebuild to re-apply runCtaStep.
+  var runCtaStep = 'choose'; // 'choose' | 'run' | 'done'
+  var runCtaPanel = null;
+  var runCtaLabel = null;
+
+  function createRunCtaPanel() {
+    runCtaLabel = ui.Label('', {
+      fontSize: '12px', color: '#2196F3', fontStyle: 'italic', margin: '4px 8px'
+    });
+    runCtaPanel = ui.Panel({
+      widgets: [runCtaLabel],
+      style: {
+        position: 'top-center',
+        padding: '2px 8px',
+        backgroundColor: 'rgba(255,255,255,0.92)',
+        border: '1px solid #ccc',
+        shown: false
+      }
+    });
+    return runCtaPanel;
+  }
+
+  function refreshRunCta() {
+    if (!runCtaLabel || !runCtaPanel) return;
+    if (runCtaStep === 'choose') {
+      runCtaLabel.setValue('Choose a country to begin');
+      runCtaPanel.style().set('shown', true);
+    } else if (runCtaStep === 'run') {
+      runCtaLabel.setValue('Press ▶ Run analysis to generate the map');
+      runCtaPanel.style().set('shown', true);
+    } else {
+      runCtaPanel.style().set('shown', false);
+    }
+  }
+
   // =============================================================================
   // STATS PANEL (collapsible, right side)
   // =============================================================================
@@ -5038,7 +5076,7 @@
     resetVisibleLayers();
   }
 
-  var resetSettingsButton = ui.Button({label: 'Reset Defaults', onClick: resetToDefaults, style: {width: '90px', margin: '2px 0px', fontSize: '10px', color: '#888'}});
+  var resetSettingsButton = ui.Button({label: 'Reset Defaults', onClick: resetToDefaults, style: {width: '90px', margin: '2px 0px', fontSize: '10px', color: '#333'}});
 
   // Batch 27.1: tiny grey hint labels clarify that Save/Load Settings
   // and Download Run Metadata serve different purposes:
@@ -5325,7 +5363,7 @@
 
   // Left panel with collapsible sections and scroll
   var leftPanel = ui.Panel({
-    widgets: [runButton, runHintLabel, disableMapCheckbox, disableMapHint, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
+    widgets: [runButton, disableMapCheckbox, disableMapHint, datesPanelCollapsible, treeCoverPanelCollapsible, anthropogenicPanel, connectivityPanel],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {width: '310px', backgroundColor: 'rgba(255, 255, 255, 0.95)', padding: '2px', maxHeight: '600px'}
   });
@@ -5697,6 +5735,8 @@
   map2.setControlVisibility({all: true, zoomControl: true});
   map2.add(createLegendPanel());
   map2.add(createDisclaimerPanel());
+  map2.add(createRunCtaPanel());
+  refreshRunCta();
   map2.setOptions('Gray', {Gray: GRAYMAP});
   mainContainer.add(leftPanel);
   mainContainer.add(map2);
@@ -5823,11 +5863,12 @@
     // button prompts.
     if (opts.skipAnalysis) {
       markNeedsUpdate();
-      runHintLabel.style().set('shown', true);
+      runCtaStep = 'run';
     } else {
       markUpToDate();
-      runHintLabel.style().set('shown', false);
+      runCtaStep = countrySelector.getValue() ? 'done' : 'choose';
     }
+    refreshRunCta();
     // Clear stale on-the-fly stats whenever parameters change
     areaStatsPanel.clear();
     exportStatusLabel.setValue('');
@@ -5856,9 +5897,8 @@
     var selectedCountry = countrySelector.getValue();
     
     if (!selectedCountry || selectedCountry === '') {
-      countrySelector.style().set({border: '2px solid #cc6666', color: '#cc6666'});
-      countryWarningLabel.setValue('Please choose a country');
-      countryWarningLabel.style().set({shown: true});
+      // No country yet -- the on-map "Choose a country to begin" prompt already
+      // guides the user, so don't duplicate it with a red warning/border here.
       return;
     }
 
@@ -5972,7 +6012,9 @@
         // Add legend to first map
         map1.add(createLegendPanel());
         map1.add(createDisclaimerPanel());
-        
+        map1.add(createRunCtaPanel());
+        refreshRunCta();
+
         // Reset tracked centers/zooms when maps are recreated
         map1Center = null;
         map1Zoom = null;
@@ -6011,7 +6053,9 @@
         // Add legend to map
         map2.add(createLegendPanel());
   map2.add(createDisclaimerPanel());
-        
+        map2.add(createRunCtaPanel());
+        refreshRunCta();
+
         // Reset tracked center/zoom for single map
         map2Center = null;
         map2Zoom = null;
@@ -6224,7 +6268,7 @@
       yearLabel2Widget = ui.Label({
         value: 'Year: ' + yearSelector2.getValue(),
         style: {
-          position: 'top-center',
+          position: 'top-left',
           backgroundColor: 'rgba(255, 255, 255, 0.8)',
           padding: '8px',
           margin: '3px',
