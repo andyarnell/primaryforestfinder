@@ -3,8 +3,9 @@ name=Primary Forest Finder
 qgisMinimumVersion=3.10
 qgisMaximumVersion=3.99
 description=Processing tools for delineating primary forest candidate areas using anthropogenic influence, slope and protected area tiers.
-version=0.16.0-beta.15
+version=0.16.0-beta.16
 changelog=
+    0.16.0-beta.16 — Input-category section aligned to the GEE app: removed "Primary forest" from the dropdown, renamed the prompt to "Treat input as:", placeholder to "Non FRA aligned", and added an ⓘ button with a tabbed FRA Definitions / Hierarchy popup. Dock fix: the output-log pane no longer takes ~half the height when side-docked, so the sections fill the panel.
     0.16.0-beta.15 — Run summary no longer mislabels harmless GDAL warnings (e.g. the DEM NoData notice) as fatal errors; auto-handled notices (geographic-CRS reproject) now render as blue informational, not red.
     0.16.0-beta.14 — Target CRS could be silently dropped (editing ISO3/AOI cleared a chosen CRS) or left empty, crashing national runs in Refine Output. Reverted to manual CRS input + run/algorithm CRS guards.
 author=Andy Arnell
