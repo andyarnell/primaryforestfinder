@@ -8,15 +8,32 @@ silently zero out the primary-forest output on some GDAL builds (see
 
 ## Current
 
-- [`pff_qgis_tools_0.16.0-beta.13.zip`](pff_qgis_tools_0.16.0-beta.13.zip)
-  — all bug fixes through 2026-05-12 workshop, plus scroll-wheel trap fix
-  and multi-year baseline-forest constraint (see
-  [../docs/known_issues.md](../docs/known_issues.md)).
+- [`pff_qgis_tools_0.16.0-beta.17.zip`](pff_qgis_tools_0.16.0-beta.17.zip)
+  — version per `pff_qgis_tools/metadata.txt`; see
+  [../CHANGELOG_GEE.md](../CHANGELOG_GEE.md) and the plugin `changelog=` in
+  metadata.txt for what's in it.
 
 ## Install
 
 QGIS → **Plugins → Manage and Install Plugins → Install from ZIP** → pick
 the zip above.
+
+## Build (regenerate the zip)
+
+Run the build script — it reads the version from `metadata.txt`, names the
+zip accordingly, drops any stale `pff_qgis_tools_*.zip`, and keeps only the
+current one:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build_plugin_zip.ps1
+```
+
+**Do NOT build with `Compress-Archive`.** Windows PowerShell 5.1 writes zip
+entries with backslash separators (`pff_qgis_tools\metadata.txt`), which the
+QGIS installer can reject or unpack wrongly. The script builds via .NET
+`ZipArchive` with **forward-slash** entry names, excludes `__pycache__`/`*.pyc`,
+and puts `pff_qgis_tools/` at the zip root. Run a quick Bhutan self-test of
+the plugin **before** shipping a new zip.
 
 ## Going forward
 
