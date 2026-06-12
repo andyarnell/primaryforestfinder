@@ -99,6 +99,30 @@ layers that are not provided.
 
 ---
 
+## Development (editing the plugin)
+
+The repo and the QGIS **installed** plugin are **separate copies** — editing
+files here does **not** change what QGIS runs. After any edit:
+
+1. **Sync** the repo into the installed plugin folder:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File tools\sync_plugin_to_qgis.ps1
+   ```
+   (defaults to the `default` profile under `%APPDATA%`; use `-Profile <name>`
+   or `-Dest <path>` to target another. macOS/Linux: copy `pff_qgis_tools/`
+   into the plugins path above by hand.)
+2. **Reload** in QGIS: *Plugins → Plugin Reloader → Reload "Primary Forest
+   Finder"* — no restart needed. The dock header version (read from
+   `FullWorkflowAlgorithm.PFF_VERSION`) should then match `metadata.txt`.
+
+If the dock still shows the old version, the sync didn't reach the folder QGIS
+loads from — check the profile/path.
+
+To build the distributable zip, see [`../dist/README.md`](../dist/README.md)
+(`tools\build_plugin_zip.ps1` — do **not** use `Compress-Archive`).
+
+---
+
 ## Outputs
 
 The Full Workflow produces this folder layout (headlines at top, everything else nested in `intermediates/`):
