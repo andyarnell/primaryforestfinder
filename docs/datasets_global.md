@@ -2,7 +2,7 @@
 
 Human-readable companion to [`datasets_global.json`](datasets_global.json) (the canonical machine-readable source — feed it to run-metadata, dataset pages, and (i) buttons).
 
-Covers `pff_4.js` v4.14.1 and `modules/timeSeriesAnthro.js` as of 2026-05-08.
+Covers `pff_4.js` v4.16.0-beta.16 and `modules/timeSeriesAnthro.js` as of 2026-06-12.
 
 ## How to read the status field
 
