@@ -30,7 +30,8 @@ from qgis.PyQt.QtWidgets import (
     QAbstractSlider, QAbstractSpinBox, QApplication, QCheckBox, QComboBox,
     QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-    QSplitter, QTextEdit, QToolButton, QVBoxLayout, QWidget
+    QFrame, QSplitter, QTabWidget, QTextEdit, QToolButton, QVBoxLayout,
+    QWidget
 )
 from qgis.core import (
     QgsApplication, QgsCoordinateReferenceSystem, QgsMapLayer,
@@ -89,6 +90,9 @@ INPUT_CATEGORY_LEGACY_MAP = {
         INPUT_CATEGORY_NRF),
     "Primary forest: for comparison / further analysis": (
         INPUT_CATEGORY_PRIMARY),
+    # Placeholder wording aligned to the GEE app; map the old QGIS
+    # wording forward so saved runs restore cleanly.
+    "No FRA alignment": "Non FRA aligned",
 }
 
 
@@ -103,13 +107,17 @@ def _history_path() -> str:
 
 _HISTORY_MAX_ENTRIES = 50
 
-INPUT_CATEGORY_PLACEHOLDER = "No FRA alignment"
+INPUT_CATEGORY_PLACEHOLDER = "Non FRA aligned"
 
+# INPUT_CATEGORY_PRIMARY intentionally omitted from the dropdown --
+# declaring "my input is primary forest" is a confusing edge case (only
+# fits an already-primary map); comparison is handled in the Validation
+# workflow. The constant stays (consumers + legacy restore reference it)
+# -- mirrors the GEE app (pff_4.js).
 INPUT_CATEGORY_ITEMS = [
     INPUT_CATEGORY_TREECOVER,
     INPUT_CATEGORY_FOREST,
     INPUT_CATEGORY_NRF,
-    INPUT_CATEGORY_PRIMARY,
 ]
 
 
@@ -539,10 +547,14 @@ class PffDockWidget(QgsDockWidget):
         self._log.setMinimumHeight(0)  # so the splitter can collapse
         self._splitter.addWidget(self._log)
 
-        # Even stretch on resize; both panes share new space.
+        # Sections pane absorbs resize; the log stays compact instead of
+        # eating ~half the dock when side-docked (the initial setSizes
+        # doesn't survive the dock's first real layout, so the stretch
+        # factors decide -- previously even (1:1) -> ~50/50). The user can
+        # still drag the handle up to enlarge the log.
         self._splitter.setStretchFactor(0, 1)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([800, 100])
+        self._splitter.setStretchFactor(1, 0)
+        self._splitter.setSizes([800, 120])
         outer_layout.addWidget(self._splitter, 1)
 
         # Run controls. Two rows so the dock stays narrow-friendly:
@@ -1262,12 +1274,12 @@ class PffDockWidget(QgsDockWidget):
 
         # FRA category dropdown
         cat_row = QHBoxLayout()
-        self._fra_input_type_label = QLabel("FRA category:")
+        self._fra_input_type_label = QLabel("Treat input as:")
         self._fra_input_type_label.setStyleSheet(
             "color: #555; font-size: 11px;")
         self._fra_input_type_label.setToolTip(
-            "Pick the FRA category that matches your input data.\n"
-            "Leave on '— Select one —' to skip FRA refinement entirely.")
+            "Declare what your input data already represents on the FRA\n"
+            "hierarchy. Leave on 'Non FRA aligned' to skip FRA refinement.")
         cat_row.addWidget(self._fra_input_type_label)
         self._input_category = QComboBox()
         self._input_category.addItem(INPUT_CATEGORY_PLACEHOLDER)
@@ -1279,6 +1291,15 @@ class PffDockWidget(QgsDockWidget):
         self._input_category.setSizePolicy(
             QSizePolicy.Ignored, QSizePolicy.Fixed)
         cat_row.addWidget(self._input_category, 1)
+        # ⓘ button -> tabbed FRA definitions popup (mirrors the GEE app's
+        # inputCategoryFraInfo + fraDefsPanel). Understated, link-like.
+        self._fra_defs_btn = QToolButton()
+        self._fra_defs_btn.setText("ⓘ")
+        self._fra_defs_btn.setToolTip("FRA definitions & hierarchy")
+        self._fra_defs_btn.setStyleSheet(
+            "QToolButton { border: none; color: #1a73e8; font-size: 12px; }")
+        self._fra_defs_btn.clicked.connect(self._toggle_fra_defs)
+        cat_row.addWidget(self._fra_defs_btn)
         _tooltips = {
             INPUT_CATEGORY_TREECOVER: (
                 "• Excludes: nothing — all land with tree cover,\n"
@@ -1309,15 +1330,8 @@ class PffDockWidget(QgsDockWidget):
                 "  whether planted or naturally regenerated.\n"
                 "  Includes coppice from trees originally\n"
                 "  established through natural regeneration."),
-            INPUT_CATEGORY_PRIMARY: (
-                "• Input is already primary forest — no\n"
-                "  further exclusions apply. Human\n"
-                "  influence removal (§3) still runs.\n\n"
-                "• FRA definition: Naturally regenerating\n"
-                "  forest of native tree species, where there\n"
-                "  are no clearly visible indications of human\n"
-                "  activities and the ecological processes are\n"
-                "  not significantly disturbed."),
+            # Primary forest removed from the dropdown (see
+            # INPUT_CATEGORY_ITEMS) -- its tooltip entry is dropped too.
         }
         for i in range(self._input_category.count()):
             txt = self._input_category.itemText(i)
@@ -1325,6 +1339,58 @@ class PffDockWidget(QgsDockWidget):
                 self._input_category.setItemData(
                     i, _tooltips[txt], Qt.ToolTipRole)
         refine_body.addLayout(cat_row)
+
+        # ── ⓘ FRA definitions popup: two tabs (Definitions / Hierarchy) ──
+        # Mirrors the GEE app (pff_4.js defsTabContent / hierTabContent).
+        # Hidden until the ⓘ button is clicked.
+        self._fra_defs_panel = QFrame()
+        self._fra_defs_panel.setVisible(False)
+        self._fra_defs_panel.setStyleSheet(
+            "QFrame { background: #f8f9fa; border: 1px solid #e0e0e0; }")
+        _defs_outer = QVBoxLayout(self._fra_defs_panel)
+        _defs_outer.setContentsMargins(4, 4, 4, 4)
+        _fra_defs_tabs = QTabWidget()
+        _fra_defs_tabs.setStyleSheet("QTabBar::tab { font-size: 10px; }")
+        _defs_lbl = QLabel(
+            "<b>Forest</b><br>"
+            "<span style='color:#555'>Land use is forest; ≥5 m, "
+            "≥10% canopy, ≥0.5 ha (excludes agricultural &amp; "
+            "urban tree stands)</span><br>"
+            "<b>Naturally regenerating forest</b><br>"
+            "<span style='color:#555'>Forest established through natural "
+            "regeneration</span><br>"
+            "<b>Primary forest</b><br>"
+            "<span style='color:#555'>Naturally regenerating, native "
+            "species, no visible human activity</span><br>"
+            "<b>Other land with tree cover (OLTC)</b><br>"
+            "<span style='color:#555'>Tree cover on non-forest land use: "
+            "oil palm, orchards, agroforestry</span><br>"
+            "<b>Planted forest</b><br>"
+            "<span style='color:#555'>Trees established by planting/"
+            "seeding: eucalyptus, pine, teak, rubber</span><br>"
+            "<a href='https://fra-data.fao.org/definitions/fra/2025/en/"
+            "tad#1b'>FAO FRA 2025 full definitions →</a>")
+        _defs_lbl.setWordWrap(True)
+        _defs_lbl.setOpenExternalLinks(True)
+        _defs_lbl.setStyleSheet("font-size: 10px; border: none;")
+        _hier_lbl = QLabel(
+            "<b>Forest</b><br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;<b>Naturally regenerating forest</b>"
+            "<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
+            "<b>Primary forest</b><br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;<b>Planted forest</b><br>"
+            "<b>Other land</b><br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;<b>Other land with tree cover (OLTC)"
+            "</b><br><br>"
+            "<span style='color:#999;font-style:italic'>Tree cover (tool "
+            "input) = Forest + OLTC pixels — not a FRA category.</span>")
+        _hier_lbl.setWordWrap(True)
+        _hier_lbl.setStyleSheet("font-size: 10px; border: none;")
+        _fra_defs_tabs.addTab(_defs_lbl, "Definitions")
+        _fra_defs_tabs.addTab(_hier_lbl, "Hierarchy")
+        _defs_outer.addWidget(_fra_defs_tabs)
+        refine_body.addWidget(self._fra_defs_panel)
 
         # Footnote-style label shown only when "Tree cover" is the
         # selected category — flags that it's NOT strictly a FRA
@@ -1428,6 +1494,12 @@ class PffDockWidget(QgsDockWidget):
         self._input_category.currentIndexChanged.connect(
             self._on_input_category_changed)
         self._update_refine_visibility()
+
+    def _toggle_fra_defs(self):
+        """Show/hide the FRA definitions popup (mirrors the GEE ⓘ panel)."""
+        shown = not self._fra_defs_panel.isVisible()
+        self._fra_defs_panel.setVisible(shown)
+        self._fra_defs_btn.setText("ⓘ ▾" if shown else "ⓘ")
 
     def _on_input_category_changed(self):
         """Signal handler for dropdown changes — auto-ticks toggles per
