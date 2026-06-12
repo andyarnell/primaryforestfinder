@@ -108,9 +108,14 @@ files here does **not** change what QGIS runs. After any edit:
    ```powershell
    powershell -ExecutionPolicy Bypass -File tools\sync_plugin_to_qgis.ps1
    ```
-   (defaults to the `default` profile under `%APPDATA%`; use `-Profile <name>`
-   or `-Dest <path>` to target another. macOS/Linux: copy `pff_qgis_tools/`
-   into the plugins path above by hand.)
+   The script first **fast-forward pulls** the local repo if it's behind GitHub
+   (so a remotely-merged change isn't missed — skipped if the tree is dirty or
+   diverged, and with `-NoPull`), mirrors `pff_qgis_tools/` into the install
+   folder, and refreshes the `pff_qgis_tools.zip` timestamp companion next to it
+   (`-NoZip` to skip; build the zip first with `build_plugin_zip.ps1`). Defaults
+   to the `default` profile under `%APPDATA%`; use `-Profile <name>` or
+   `-Dest <path>` to target another. macOS/Linux: copy `pff_qgis_tools/` into the
+   plugins path above by hand.
 2. **Reload** in QGIS: *Plugins → Plugin Reloader → Reload "Primary Forest
    Finder"* — no restart needed. The dock header version (read from
    `FullWorkflowAlgorithm.PFF_VERSION`) should then match `metadata.txt`.

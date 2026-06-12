@@ -1,6 +1,6 @@
 """Rename previously-exported PFF GeoTIFFs to the post-2026-06 naming.
 
-Two `02a` exports were renamed (GEE v4.16.0-beta.14 / plugin 0.16.0-beta.16):
+Two `02a` exports were renamed (GEE v4.16.0-beta.14 / plugin 0.16.0-beta.17):
 
     02a_forest_raw          ->  02a_tree_cover_binary    (thresholded tree-cover input)
     02a_glad_tree_height_m  ->  02a_glad_tree_height_raw (continuous GLAD height)
