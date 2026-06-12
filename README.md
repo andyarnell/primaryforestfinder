@@ -21,7 +21,7 @@ Two ways to access Primary Forest Finder in Google Earth Engine:
 Download the latest zip from [`dist/`](dist/) and install in QGIS via
 **Plugins → Manage and Install Plugins → Install from ZIP**.
 
-**Current build:** [`pff_qgis_tools_0.16.0-beta.13.zip`](dist/pff_qgis_tools_0.16.0-beta.13.zip) — workshop bug fixes plus scroll-wheel trap fix and multi-year baseline-forest constraint.
+**Current build:** [`pff_qgis_tools_0.16.0-beta.17.zip`](dist/pff_qgis_tools_0.16.0-beta.17.zip) — FRA input-section alignment + the `02a` tree-cover input rename (`forest_raw` → `tree_cover_binary`). See the `changelog=` in [`pff_qgis_tools/metadata.txt`](pff_qgis_tools/metadata.txt) for the full history.
 
 Older versions are reachable through git history but generally shouldn't be used — most pre-`beta.11` builds carry a latent NoData bug on some GDAL builds. See [`docs/known_issues.md`](docs/known_issues.md).
 
