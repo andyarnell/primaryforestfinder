@@ -116,7 +116,7 @@ The footer makes the user's choices explicit, so a colleague opening the CSV six
 ## Trade-offs / known costs
 
 - **Workshop users must expand the subsection + pick Tree cover to see the FRA cascade.** Facilitator says this verbally on the day; no UI hint.
-- **QGIS CSV breaking rename.** Today's `forest_kha` column actually contains the raw input (forest_raw). Under the new scheme:
+- **QGIS CSV breaking rename.** Today's `forest_kha` column actually contains the raw input (tree_cover_binary). Under the new scheme:
   - `forest_kha` is reserved for the post-OLTC Forest cascade layer (matching GEE's existing convention)
   - The raw input becomes `input_kha` (no declaration) or `tree_cover_kha` (Tree cover declared)
   - Downstream scripts reading the old `forest_kha` column will need to update.
@@ -124,7 +124,7 @@ The footer makes the user's choices explicit, so a colleague opening the CSV six
 
 ## Height threshold + source behaviour
 
-- **GLAD:** user-configurable height slider, default 5m (FRA). Can go lower (3m, 2m for countries like Bhutan/Nepal or Bangladesh) or higher. Backed by GLAD's continuous `glad_tree_height_m` layer.
+- **GLAD:** user-configurable height slider, default 5m (FRA). Can go lower (3m, 2m for countries like Bhutan/Nepal or Bangladesh) or higher. Backed by GLAD's continuous `glad_tree_height_raw` layer.
 - **Hansen:** vegetation ≥5m baked in at source (Hansen et al. 2013). The configurable axis is canopy % (10/30/50), not height. Hansen data cannot be re-thresholded below 5m.
 - The §2 group box swaps widgets based on source choice: height slider when GLAD, canopy % when Hansen.
 
@@ -195,7 +195,7 @@ Note: Primary forest number matches the workshop-path result (1,540 kha) because
 
 1. **Soft-warning trigger conditions.** Current proposal fires when agriculture buffer is missing or disabled. Should it also fire on missing built-up layers? Too noisy?
 2. **Acceptable to break the `forest_kha` column in QGIS CSV?** No deprecation period — old `forest_kha` (= input) becomes new `forest_kha` (= post-OLTC Forest layer). Anyone with downstream scripts needs to update.
-3. **Workshop guidance channel.** The "pick Tree cover for GEE 02a_forest_raw" instruction is delivered verbally by the facilitator (and optionally noted in the participant task doc), not as a UI hint. Confirm this is the right channel.
+3. **Workshop guidance channel.** The "pick Tree cover for GEE 02a_tree_cover_binary" instruction is delivered verbally by the facilitator (and optionally noted in the participant task doc), not as a UI hint. Confirm this is the right channel.
 4. **Toggle visibility when subsection expanded but no declaration.** Currently both toggles always visible. Alternative: hide toggles unless dropdown has a selection (forces declaration first). Preference?
 5. **Anything missed.** Sanity-check the behaviour table against your mental model.
 

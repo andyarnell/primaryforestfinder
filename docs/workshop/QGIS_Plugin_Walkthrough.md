@@ -42,13 +42,13 @@ Add the rasters + AOI vector, zoom to AOI. Click through the layers briefly — 
 
 | File pattern | Purpose |
 |---|---|
-| `*_02a_forest_raw_*.tif` | **Plugin input** — raw tree cover (GLAD LULC ≥ 5 m height, before FRA filtering) |
+| `*_02a_tree_cover_binary_*.tif` | **Plugin input** — tree cover (binary; GLAD LULC ≥ 5 m height, before FRA filtering) |
 | `*_03a_builtup_small_*.tif`, `*_03a_builtup_large_*.tif` | **Plugin input** — built-up areas |
 | `*_03a_agriculture_*.tif` | **Plugin input** — agriculture |
 | `*_02d_planted_forest_*.tif` | **Plugin input** — planted forest |
 | `*_03b_protection_natural_dem_*.tif` | **Plugin input** — DEM |
 | `*_03b_protection_natural_slope_*.tif` | Info only — slope (generated from DEM; not normally needed as input) |
-| `*_02a_glad_tree_height_m_*.tif` | Info only — continuous tree height in metres |
+| `*_02a_glad_tree_height_raw_*.tif` | Info only — continuous tree height in metres |
 | `*_02b_other_land_with_tree_cover_*.tif` | Info only — OLWTC layer (oil palm, tree crops, urban tree cover) |
 | `*_03c_pre_refinement_primary_forest_*.tif` | **GEE reference output** — compare against the plugin's own pre-refinement result |
 | `*_04a_primary_forest_*.tif` | **GEE reference output** — compare against the plugin's own primary forest result |
@@ -90,7 +90,7 @@ Fill in the sections:
 
 | Field | File |
 |---|---|
-| Tree cover / forest raster | `*_02a_forest_raw_*.tif` |
+| Tree cover / forest raster | `*_02a_tree_cover_binary_*.tif` |
 
 The input category dropdown should be set to **"Tree cover"** (this is the raw GLAD tree cover ≥ 5 m, before FRA filtering — the plugin handles OLWTC exclusion itself).
 
@@ -162,7 +162,7 @@ Open pff_4.js in GEE, select your country, click **Show Area Statistics**. Jot t
 A key question: how much primary forest has your country lost between 2000 and 2020?
 
 1. **You already have a year-2000 run** from Step 4. Note the `primary_forest_kha` number from the area statistics CSV (or the §5 panel output).
-2. **Switch the input files to year 2020.** In §2 Tree Cover, swap in the `*_2020_*` forest raw raster. In §3, swap the `*_2020_*` built-up, agriculture, and planted forest files. DEM, slope, roads, and protected areas are the same for both years.
+2. **Switch the input files to year 2020.** In §2 Tree Cover, swap in the `*_2020_*` tree-cover-binary raster. In §3, swap the `*_2020_*` built-up, agriculture, and planted forest files. DEM, slope, roads, and protected areas are the same for both years.
 3. **Change the year** in §1 Time Period to `2020`.
 4. **Pick a different output folder** (or rename the first run's folder) so the two sets of results don't overwrite each other.
 5. **Click Run.**
@@ -255,6 +255,6 @@ Alternatively, just leave "Reuse preprocessing cache" ticked (on by default) and
 ## Things that might trip you up
 
 - **DEM vs Slope slots** — the `_dem_` file goes in the DEM slot (the plugin derives slope from DEM internally)
-- **Input category dropdown** — make sure you select one (it starts on "— Select one —"); for the batch-exported `02a_forest_raw` file, pick "Tree cover"
+- **Input category dropdown** — make sure you select one (it starts on "— Select one —"); for the batch-exported `02a_tree_cover_binary` file, pick "Tree cover"
 - **Cancel** — takes a minute to actually stop
 - **CRS** — the dock suggests CRS options once you type an ISO3 code; if none appear, type an EPSG code directly (e.g. `EPSG:32645`)

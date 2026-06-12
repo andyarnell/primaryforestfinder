@@ -29,12 +29,12 @@ var EXPORT_CRS = 'EPSG:4326';
 // pixels into later-year exports — which would propagate into the
 // downstream QGIS primary-forest detection. Set to null to disable.
 //   - When analysisYear === BASELINE_FOREST_YEAR, the AND is a no-op.
-//   - Affects 02a forest_raw, 02b OLWTC, 02d planted, primary tiers.
+//   - Affects 02a tree_cover_binary, 02b OLWTC, 02d planted, primary tiers.
 var BASELINE_FOREST_YEAR = 2000;
 
 // Narrow per-year exports for years OTHER than BASELINE_FOREST_YEAR.
 // When the baseline constraint is active, only forest-derived layers
-// actually change between runs (02a forest_raw + 02b OLWTC which
+// actually change between runs (02a tree_cover_binary + 02b OLWTC which
 // includes urban-tree-cover from forest_map). DEM, slope, built-up,
 // agriculture, roads, planted_forest don't depend on forest_map at
 // all, so re-exporting them is wasted compute + Drive duplicates.
@@ -43,7 +43,7 @@ var BASELINE_FOREST_YEAR = 2000;
 // every year (original v1.0 behaviour).
 var NARROW_NON_BASELINE_EXPORTS = true;
 var NON_BASELINE_EXPORT_LAYERS = [
-  '02a_forest_raw',
+  '02a_tree_cover_binary',
   '02b_other_land_with_tree_cover'
 ];
 
@@ -63,10 +63,10 @@ var NON_BASELINE_EXPORT_LAYERS = [
 // re-exporting. 2000 gap-fill (IDN/PNG/VNM full bundle + THA
 // 02d_planted) is deferred to a follow-up run when needed.
 var COUNTRIES = [
-  // BTN: also re-do 2010 forest_raw + OLTC so the existing 2010 anthro
+  // BTN: also re-do 2010 tree_cover_binary + OLTC so the existing 2010 anthro
   // stack on disk can be used in a 3-year multi-year QGIS run with the
   // baseline constraint applied. Other countries don't have 2010 anthro
-  // inputs so re-exporting 2010 forest_raw for them would be unusable.
+  // inputs so re-exporting 2010 tree_cover_binary for them would be unusable.
   {name: 'Bhutan',                              iso3: 'BTN', years: [2010, 2020],
     skipDem: true, skipSlope: true},
   {name: "Lao People's Democratic Republic",    iso3: 'LAO', years: [2020],
@@ -408,9 +408,9 @@ function runCountry(country) {
     ];
     var gladTreeHeight = gladLandcoverLand.remap(heightFrom, heightTo)
       .updateMask(country_and_buffer_mask).unmask(0).toByte().rename('tree_height_m');
-    if (shouldExportYear(analysisYear, '02a', 'glad_tree_height_m')) {
+    if (shouldExportYear(analysisYear, '02a', 'glad_tree_height_raw')) {
       doExport(gladTreeHeight,
-        mkExportName(iso3, '02a', 'glad_tree_height_m_' + analysisYear + '_' + s), folder, exportRegion);
+        mkExportName(iso3, '02a', 'glad_tree_height_raw_' + analysisYear + '_' + s), folder, exportRegion);
     }
 
     // 2. Anthropogenic layers
@@ -480,10 +480,10 @@ function runCountry(country) {
         mkExportName(iso3, '02b', 'other_land_with_tree_cover_' + analysisYear + '_' + s), folder, exportRegion);
     }
 
-    // Export 02a forest raw — thresholded tree cover (GLAD LULC ≥ 5 m)
-    if (shouldExportYear(analysisYear, '02a', 'forest_raw')) {
+    // Export 02a tree cover (binary) — thresholded tree cover (GLAD LULC ≥ 5 m)
+    if (shouldExportYear(analysisYear, '02a', 'tree_cover_binary')) {
       doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-        mkExportName(iso3, '02a', 'forest_raw_' + analysisYear + '_' + s), folder, exportRegion);
+        mkExportName(iso3, '02a', 'tree_cover_binary_' + analysisYear + '_' + s), folder, exportRegion);
     }
 
     // Planted forest (02d)

@@ -39,8 +39,8 @@ Legend
 | Layer (file pattern) | Plugin slot | BTN | IDN | LAO | PNG | THA | VNM |
 |---|---|---|---|---|---|---|---|
 | `00a_aoi_<country>_vector` | `AOI` | vec | vec | vec | vec | vec | vec |
-| `02a_forest_raw_<year>` | `FOREST_RASTER` (REQUIRED) | 90 (2010+2020) | 30 + 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) |
-| `02a_glad_tree_height_m_<year>` | (no plugin slot — re-threshold helper) | 90 (2010+2020) | 30 + 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) |
+| `02a_tree_cover_binary_<year>` | `FOREST_RASTER` (REQUIRED) | 90 (2010+2020) | 30 + 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) |
+| `02a_glad_tree_height_raw_<year>` | (no plugin slot — re-threshold helper) | 90 (2010+2020) | 30 + 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) | 90 (2020) |
 | `02a_hansen_lossyear_raw` | (no plugin slot — debug) | 90 (no year) | 30 + 90 (no year) | 90 | 90 | 90 | 90 |
 | `02a_hansen_treecover2000_raw` | (no plugin slot — re-threshold helper) | 90 | 30 + 90 | 90 | 90 | 90 | 90 |
 | `02b_other_land_with_tree_cover_2020` | `FRA_AGRICULTURE_RASTER` | 90 (2020 only) | 90 | 90 | 90 | 90 | **30· (no 90 m) ⚠** |
@@ -68,7 +68,7 @@ Plugin parameter list confirmed from `pff_qgis_tools/algorithms/full_workflow.py
 | GEE export | Plugin input slot | Required? | Input prompt (plugin UI) |
 |---|---|---|---|
 | `00a_aoi_<country>_vector.shp` | `AOI` | optional | "00 Country: AOI boundary (vector, optional)" |
-| `02a_forest_raw_<year>.tif` | `FOREST_RASTER` | **REQUIRED** | "02 Tree Cover: Forest raster (REQUIRED; binary 1/0; defines reference grid)" |
+| `02a_tree_cover_binary_<year>.tif` | `FOREST_RASTER` | **REQUIRED** | "02 Tree Cover: Forest raster (REQUIRED; binary 1/0; defines reference grid)" |
 | `02b_other_land_with_tree_cover_2020.tif` | `FRA_AGRICULTURE_RASTER` | optional | "02 Tree Cover: Other land with tree cover raster" |
 | `02d_planted_forest_2020.tif` | `PLANTATIONS_RASTER` | optional | "02 Tree Cover: Planted forest raster" |
 | `03a_roads_osm_vector.shp` | `ROADS` | optional | "03a Disturbance Inputs: Roads (vector, optional)" |
@@ -85,7 +85,7 @@ The plugin's filename heuristic check (`_SLOT_FILENAME_HINTS` at `full_workflow.
 
 ### GEE exports with NO plugin input slot
 
-- `02a_glad_tree_height_m_<year>.tif` — raw GLAD height in metres; QGIS user can re-threshold to a custom binary forest before feeding to `FOREST_RASTER`. Not loaded directly.
+- `02a_glad_tree_height_raw_<year>.tif` — raw GLAD height in metres; QGIS user can re-threshold to a custom binary forest before feeding to `FOREST_RASTER`. Not loaded directly.
 - `02a_hansen_treecover2000_raw.tif` — same idea for Hansen canopy %.
 - `02a_hansen_lossyear_raw.tif` — debug / time-series re-thresholding helper.
 - `03c_pre_refinement_primary_forest_<year>.tif` — GEE output for comparison; the plugin produces its own equivalent.
