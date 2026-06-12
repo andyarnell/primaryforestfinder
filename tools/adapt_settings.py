@@ -129,7 +129,7 @@ SlotRule = namedtuple("SlotRule", [
 
 SLOT_RULES = [
     SlotRule("AOI",                    "00a", "aoi",                       ".shp",  False, ""),
-    SlotRule("FOREST_RASTER",          "02a", "forest_raw",                ".tif",  True,  ""),
+    SlotRule("FOREST_RASTER",          "02a", ("tree_cover_binary", "forest_raw"), ".tif", True, ""),
     SlotRule("FRA_AGRICULTURE_RASTER", "02b", "other_land_with_tree_cover",".tif",  True,  "prefer_90m"),
     SlotRule("PLANTATIONS_RASTER",     "02d", "planted_forest",            ".tif",  True,  "prefer_90m"),
     SlotRule("ROADS",                  "03a", "roads_osm_vector",          ".shp",  False, ""),
@@ -189,15 +189,19 @@ def match_slots(
         ]
 
         # description matching
+        # desc_match may be a single string or a tuple of accepted names
+        # (e.g. a renamed layer that still accepts its legacy name).
+        _matches = (rule.desc_match if isinstance(rule.desc_match, tuple)
+                    else (rule.desc_match,))
         if "exact" in rule.notes:
             candidates = [
                 gf for gf in candidates
-                if gf.description == rule.desc_match
+                if gf.description in _matches
             ]
         else:
             candidates = [
                 gf for gf in candidates
-                if gf.description.startswith(rule.desc_match)
+                if any(gf.description.startswith(m) for m in _matches)
             ]
 
         # year filter

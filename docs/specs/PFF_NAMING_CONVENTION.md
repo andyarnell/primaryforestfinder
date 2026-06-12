@@ -54,7 +54,7 @@ Step 02 produces three forest-type layers that map onto the FRA hierarchy. Which
 
 ```
 02a_*                                 Source components (Hansen treecover2000_raw,
-                                      Hansen lossyear_raw, GLAD tree_height_m) — when
+                                      Hansen lossyear_raw, GLAD tree_height_raw) — when
                                       GEE produces them and user opts to save
 
 02b_other_land_with_tree_cover        ≈ FRA OLWTC (Note 10) — non-Forest tree cover:
@@ -190,7 +190,7 @@ Final state after P1.16 + P1.18 + P1.20 land. "Today" deltas noted in caveats co
 |---|---|---|---|---|
 | `02a_hansen_treecover2000_raw` | Tree cover (canopy %) | Hansen GFC treecover2000 | — (raw data) | Year-2000 baseline; doesn't account for subsequent loss/gain |
 | `02a_hansen_lossyear_raw` | Tree-cover loss year | Hansen GFC lossyear | — (raw data) | Encodes year of detected loss 2001-2024; not absence at year 2000 |
-| `02a_glad_tree_height_m` | Tree canopy height | GLAD tree height (per year) | — (raw data) | Per-year snapshot; height-only — no land-use info |
+| `02a_glad_tree_height_raw` | Tree canopy height | GLAD tree height (per year) | — (raw data) | Per-year snapshot; height-only — no land-use info |
 | `02c_forest` | ≈ Forest (FRA) | Tree cover (canopy ≥ X% AND height ≥ Y m) | **After P1.18**: agriculture pixels removed (cropland + pasture + oil palm + SDPT class 2 tree crops). **Today (pre-P1.18)**: nothing removed at this step — agriculture filtering only happens at the disturbance-buffer stage on the way to primary | "≈" because: (a) thresholds are biophysical proxies for FRA's land-use definition; (b) without P1.18, agricultural tree cover stays in baseline; (c) FRA's 0.5 ha minimum patch size not enforced here |
 | `02e_naturally_regenerating_forest` | ≈ Naturally regenerating forest (FRA) | `02c_forest` MINUS `02d_planted_forest` | Planted forest (SDPT class 1 — timber, eucalyptus, pine, national overrides) subtracted | "≈" because: (a) SDPT misses smallholders → some planted areas remain in "naturally regenerating"; (b) SDPT misclassifications → some real natural forest wrongly excluded; (c) **today (pre-P1.20)** also subtracts SDPT class 2 + Descals oil palm via wrong-bucket — area is smaller-but-mislabelled today, will rebalance after P1.18+P1.20. **Includes Primary as a subset.** |
 | `02d_planted_forest` | ≈ Planted forest (FRA) | SDPT class 1 (Planted Forests) ∪ national plantations override | — (this IS the planted forest layer, not derived by subtraction) | "≈" because: (a) SDPT incomplete; (b) **today (pre-P1.20)** also includes SDPT class 2 (tree crops) + Descals oil palm — stat is inflated for FRA Planted Forest comparison; (c) FDAP commodity layers stay disabled (commission errors in primary forest) |
@@ -460,8 +460,8 @@ my-output-folder/
 GEE Drive folder/
   KEN_gee_02a_hansen_treecover2000_raw_30m.tif
   KEN_gee_02a_hansen_lossyear_raw_30m.tif
-  KEN_gee_02a_glad_tree_height_m_2010_30m.tif
-  KEN_gee_02a_glad_tree_height_m_2020_30m.tif
+  KEN_gee_02a_glad_tree_height_raw_2010_30m.tif
+  KEN_gee_02a_glad_tree_height_raw_2020_30m.tif
   KEN_gee_02c_forest_2010_30m.tif
   KEN_gee_02c_forest_2020_30m.tif
   KEN_gee_02e_naturally_regenerating_forest_2010_30m.tif    ← (P1.16 — new export)

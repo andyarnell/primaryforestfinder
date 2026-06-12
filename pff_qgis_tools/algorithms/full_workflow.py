@@ -1390,7 +1390,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
     #  Workflow execution
     # ------------------------------------------------------------------ #
 
-    PFF_VERSION = "0.16.0-beta.16"
+    PFF_VERSION = "0.16.0-beta.17"
 
     def processAlgorithm(self, parameters, context, feedback):
         feedback.pushInfo(f"PFF plugin version: {self.PFF_VERSION}")
@@ -2307,12 +2307,12 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 self.FRA_AGRICULTURE_RASTER, "fra_agriculture_tree_cover")
 
         # Workshop feedback (2026-05-12): always write the raw
-        # thresholded tree cover to OUT/02a_forest_raw.tif BEFORE
+        # thresholded tree cover to OUT/02a_tree_cover_binary.tif BEFORE
         # the OLWTC step potentially narrows it. Lets the auto-load
         # logic (below) surface "Input" on the map for runs where
         # the user picked "No FRA alignment" — and also gives every
         # user a clear file of "what I fed in".
-        _input_raw_out = _out("02a", "forest_raw")
+        _input_raw_out = _out("02a", "tree_cover_binary")
         try:
             _safe_remove(_input_raw_out, feedback=feedback)
             shutil.copy2(forest_raw_path, _input_raw_out)
@@ -2320,7 +2320,7 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 f"Wrote raw input to {os.path.basename(_input_raw_out)}")
         except Exception as _e_input_copy:
             feedback.pushWarning(
-                f"Could not write 02a_forest_raw: {_e_input_copy}")
+                f"Could not write 02a_tree_cover_binary: {_e_input_copy}")
 
         if fra_agriculture_tif is not None and exclude_agriculture_from_forest:
             feedback.pushInfo(
@@ -3763,11 +3763,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 "" if parameters.get("TREE_COVER_MODE") == "fra"
                 else " (non-FRA-aligned)")
             # Workshop feedback (2026-05-12): always load the raw
-            # input (02a_forest_raw) onto the map so participants who
+            # input (02a_tree_cover_binary) onto the map so participants who
             # picked "No FRA alignment" see their data. Label = "Input"
             # to match the GEE app. The file is always written (no
-            # SAVE flag gating needed) and lives at OUT/<...>02a_forest_raw.tif.
-            _input_top_path = _out("02a", "forest_raw")
+            # SAVE flag gating needed) and lives at OUT/<...>02a_tree_cover_binary.tif.
+            _input_top_path = _out("02a", "tree_cover_binary")
             if os.path.exists(_input_top_path):
                 _layers_to_load.append(("Input", _input_top_path))
             _forest_top_path = _out("02c", "forest")

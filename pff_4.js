@@ -1,5 +1,5 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.13";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.16";
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -40,6 +40,7 @@
   // Static GAUL LUT — eliminates blocking .getInfo() at startup
   var gaulLut = require("users/andyarnellgee/apps:modules/gaulLut.js");
   var fraStats = require("users/andyarnellgee/apps:modules/fraStats.js");
+  var provenanceNarrative = require("users/andyarnellgee/apps:modules/provenanceNarrative.js");
   var country_names = gaulLut.country_names;     // pre-sorted, no server call
 
   // GAUL 2024 boundaries: vector for geometry ops, raster for fast masking
@@ -1106,11 +1107,12 @@
   var yearSelector2Label = ui.Label('Year:', {margin: '4px 0px'});
 
   var yearSelector2 = ui.Select({
-    items: years.map(String), 
-    value: '2020', 
+    items: years.map(String),
+    value: '2020',
     onChange: function(value) {
       updateVisibleAssetInputs();
       updateMap();
+      if (typeof updateSaveToComputerYearNote === 'function') { updateSaveToComputerYearNote(); }
     },
     style: {width: '80px', margin: '4px 8px'}
   });
@@ -1124,6 +1126,7 @@
       yearSelector2Label.setValue(checked ? 'Year 2:' : 'Year:');
       updateVisibleAssetInputs();
       updateMap();
+      if (typeof updateSaveToComputerYearNote === 'function') { updateSaveToComputerYearNote(); }
     },
     style: {margin: '4px 8px'}
   });
@@ -1844,14 +1847,15 @@
   var exportChk_naturallyRegenerating = ui.Checkbox({label: 'Naturally regenerating forest', value: true,  style: exportChkStyle});
   var exportChk_final           = ui.Checkbox({label: 'Primary forest', value: true,  style: exportChkStyle});
   var exportChk_runMetadata     = ui.Checkbox({label: 'Run metadata (config snapshot)', value: true,  style: exportChkStyle});
+  var exportChk_methodsNote     = ui.Checkbox({label: 'Methods note', value: true,  style: exportChkStyle});
   // ── Intermediates (default OFF) ──
   var exportChk_preConnectivity = ui.Checkbox({label: 'Pre-refinement primary forest', value: false, style: exportChkStyle});
   var exportChk_fraAgriculture  = ui.Checkbox({label: 'Other land with tree cover', value: false, style: exportChkStyle});
   var exportChk_plantations     = ui.Checkbox({label: 'Planted forest', value: false, style: exportChkStyle});
   // ── Inputs (default OFF) ──
-  var exportChk_forestRaw       = ui.Checkbox({label: 'Tree cover (raw input)', value: false, style: exportChkStyle});
-  var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw', value: false, style: exportChkStyle});
-  var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height', value: false, style: exportChkStyle});
+  var exportChk_forestRaw       = ui.Checkbox({label: 'Tree cover (binary)', value: false, style: exportChkStyle});
+  var exportChk_hansenRaw       = ui.Checkbox({label: 'Hansen raw (cover + loss)', value: false, style: exportChkStyle});
+  var exportChk_gladHeight      = ui.Checkbox({label: 'GLAD tree height (raw)', value: false, style: exportChkStyle});
   var exportChk_roads           = ui.Checkbox({label: 'Roads', value: false, style: exportChkStyle});
   var exportChk_roadsOsmVector  = ui.Checkbox({label: 'Roads (vector)', value: false, style: exportChkStyle});
   var exportChk_builtupSmall    = ui.Checkbox({label: 'Built-up small', value: false, style: exportChkStyle});
@@ -1871,7 +1875,7 @@
   // All export checkboxes for bulk operations
   var allExportCheckboxes = [
     exportChk_inputForest, exportChk_naturallyRegenerating,
-    exportChk_final, exportChk_runMetadata,
+    exportChk_final, exportChk_runMetadata, exportChk_methodsNote,
     exportChk_preConnectivity, exportChk_fraAgriculture, exportChk_plantations,
     exportChk_forestRaw, exportChk_hansenRaw, exportChk_gladHeight,
     exportChk_roads, exportChk_roadsOsmVector,
@@ -1954,7 +1958,8 @@
       exportChk_inputForest,
       exportChk_naturallyRegenerating,
       exportChk_final,
-      exportChk_runMetadata
+      exportChk_runMetadata,
+      exportChk_methodsNote
     ],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {shown: false, margin: '0 0 0 8px'}
@@ -2003,6 +2008,46 @@
     bundle['run__scale_m']            = scale;
     bundle['run__export_destination'] = useCloud ? 'cloud_storage' : 'google_drive';
     bundle['run__export_folder']      = exportFolder;
+    // Which layers the export-panel tickboxes will produce (for the
+    // "Layers in this export" section of the provenance note).
+    var _expLayers = [];
+    function _expIf(chk, key) { if (chk && chk.getValue()) { _expLayers.push(key); } }
+    _expIf(exportChk_aoi, 'aoi');
+    _expIf(exportChk_forestRaw, 'tree_cover_binary');
+    _expIf(exportChk_hansenRaw, 'hansen_raw');
+    _expIf(exportChk_gladHeight, 'glad_tree_height_raw');
+    _expIf(exportChk_fraAgriculture, 'other_land_with_tree_cover');
+    _expIf(exportChk_inputForest, 'forest');
+    _expIf(exportChk_plantations, 'planted_forest');
+    _expIf(exportChk_naturallyRegenerating, 'naturally_regenerating_forest');
+    _expIf(exportChk_roads, 'roads');
+    _expIf(exportChk_roadsOsmVector, 'roads_osm_vector');
+    _expIf(exportChk_builtupSmall, 'builtup_small');
+    _expIf(exportChk_builtupLarge, 'builtup_large');
+    _expIf(exportChk_agriculture, 'agriculture');
+    _expIf(exportChk_dem, 'protection_natural_dem');
+    _expIf(exportChk_slope, 'protection_natural_slope');
+    _expIf(exportChk_protLegal, 'protection_legal');
+    _expIf(exportChk_protVector, 'protection_legal_unfiltered_vector');
+    _expIf(exportChk_preConnectivity, 'pre_refinement_primary_forest');
+    _expIf(exportChk_final, 'primary_forest');
+    // Human-readable provenance/methods narrative (Markdown). Pure string
+    // assembly from the settings + run params; ships inside the run-metadata
+    // JSON and is printed by downloadRunBundle for easy reading/copying.
+    // Compare-Years context for the note's single-year caveat: the "other"
+    // year relative to this note's `year`.
+    var _splitOn = (typeof enableSplitScreenCheckbox !== 'undefined') && enableSplitScreenCheckbox.getValue();
+    var _y1 = parseInt(yearSelector1.getValue());
+    var _y2 = parseInt(yearSelector2.getValue());
+    var _otherYear = _splitOn ? (year === _y1 ? _y2 : _y1) : null;
+    bundle['run__provenance_md']      = provenanceNarrative.buildNarrative(settings, {
+      country: bundle['run__country'], iso3: iso3, year: year, scale: scale,
+      pffVersion: PFF_SCRIPT_VERSION, timestamp: bundle['run__timestamp'],
+      customForest: (typeof nationalForest !== 'undefined' && nationalForest.checkbox
+                     ? nationalForest.checkbox.getValue() : false),
+      compare: _splitOn, year2: _otherYear,
+      length: 'extended', exportedLayers: _expLayers
+    });
     return bundle;
   }
 
@@ -2290,7 +2335,7 @@
       // 02a / 02c forest exports moved BELOW the OLTC computation so the
       // FRA-narrowed Forest baseline (02c) can subtract OLTC -- matches
       // the FRA-Forest definition (Tree cover - OLTC). The pre-OLTC raw
-      // thresholded version is exposed separately as 02a_forest_raw for
+      // thresholded version is exposed separately as 02a_tree_cover_binary for
       // users who want the broader tree cover layer (or want to apply
       // their own national OLTC narrowing locally). See the export block
       // after `var olwtc = ...` below.
@@ -2310,7 +2355,7 @@
         var gladTreeHeight = gladLandcoverLand.remap(fromValues, toValues)
           .updateMask(country_and_buffer_mask).unmask(0).toByte()
           .rename('tree_height_m');
-        doExport(gladTreeHeight, mkExportName('02a', 'glad_tree_height_m_' + analysisYear + '_' + s), folder);
+        doExport(gladTreeHeight, mkExportName('02a', 'glad_tree_height_raw_' + analysisYear + '_' + s), folder);
       }
 
       // ── 2 — Anthropogenic: roads, built-up (small + large), agriculture ──
@@ -2415,7 +2460,7 @@
       // existing "Refine to forest" toggle (excludeAgricultureFromForest
       // Checkbox) so the export semantics match the analysis pipeline.
       // When the toggle is off, 02c falls back to raw thresholded tree
-      // cover (same as 02a_forest_raw) and the export-status label
+      // cover (same as 02a_tree_cover_binary) and the export-status label
       // surfaces the fallback so the user knows the file isn't
       // FRA-narrowed in this mode.
       var _refineToForestActive = exclusionActive(
@@ -2430,16 +2475,27 @@
           exportRasterStatusLabel.setValue(
             'Note: 02c_forest exported WITHOUT OLTC narrowing because ' +
             '"Refine to forest" toggle is off. Content equals raw ' +
-            'thresholded tree cover (same as 02a_forest_raw).');
+            'thresholded tree cover (same as 02a_tree_cover_binary).');
         }
       }
       if (exportChk_forestRaw.getValue()) {
-        // 02a_forest_raw = thresholded tree cover BEFORE OLTC narrowing.
-        // Always available; useful when user wants to apply their own
-        // OLTC narrowing locally with a national OLTC dataset different
-        // from the global one.
-        doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0),
-          mkExportName('02a', 'forest_raw_' + analysisYear + '_' + s), folder);
+        // 02a_tree_cover_binary = thresholded tree cover (binary 1/0) BEFORE
+        // OLTC narrowing. Always available; useful when a user wants to apply
+        // their own OLTC narrowing locally with a national OLTC dataset
+        // different from the global one. Band name records the source + the
+        // threshold(s) that source actually uses (filename stays canonical for
+        // auto-matching; full config lives in the run-metadata sidecar).
+        var tcSrc = treecoverSourceSelect.getValue();
+        var tcSrcCode = tcSrc === 'Hansen GFC' ? 'hansen'
+                      : tcSrc === 'GLAD LULC' ? 'glad'
+                      : tcSrc.indexOf('Agreement') === 0 ? 'agreement' : 'combined';
+        var tcUsesHeight = (tcSrc !== 'Hansen GFC');   // GLAD/Agreement/Combined use height
+        var tcUsesCanopy = (tcSrc !== 'GLAD LULC');    // Hansen/Agreement/Combined use canopy
+        var tcBand = 'tree_cover_' + tcSrcCode
+            + (tcUsesHeight ? '_h' + treecoverHeightThresholdSlider.getValue() + 'm' : '')
+            + (tcUsesCanopy ? '_c' + treecoverThresholdSlider.getValue() + 'pct' : '');
+        doExport(forest_map.updateMask(country_and_buffer_mask).unmask(0).rename(tcBand),
+          mkExportName('02a', 'tree_cover_binary_' + analysisYear + '_' + s), folder);
       }
 
       if (exportChk_plantations.getValue()) {
@@ -2543,6 +2599,8 @@
     if (exportChk_runMetadata.getValue()) {
       uniqueYears.forEach(function(metaYear) {
         var bundle = buildRunBundle(metaYear, exportScale, iso3, folder, useCloud);
+        print('=== PFF methods note (' + metaYear + ') — provenance ===');
+        print(bundle['run__provenance_md']);
         var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
         var bundlePrefix = (iso3 ? iso3 + '_' : '') +
           'gee_run_metadata_' + metaYear + '_' + s + 'm';
@@ -2562,6 +2620,31 @@
             folder: folder,
             fileNamePrefix: bundlePrefix,
             fileFormat: 'GeoJSON'
+          });
+        }
+      });
+    }
+
+    // Methods note (provenance) sidecar -- the readable narrative as its own
+    // file alongside the data. Export.table can only emit CSV/GeoJSON, so this
+    // is a single-field CSV (real newlines inside the quoted field); the clean
+    // .md is the Config-panel button, and the plugin writes a plain .txt.
+    if (exportChk_methodsNote.getValue()) {
+      uniqueYears.forEach(function(metaYear) {
+        var md = buildRunBundle(metaYear, exportScale, iso3, folder, useCloud)['run__provenance_md'];
+        var noteFC = ee.FeatureCollection([ee.Feature(null, {methods_note: md})]);
+        var notePrefix = (iso3 ? iso3 + '_' : '') +
+          'gee_methods_note_' + metaYear + '_' + s + 'm';
+        var noteDesc = notePrefix + runTag;
+        if (useCloud) {
+          Export.table.toCloudStorage({
+            collection: noteFC, description: noteDesc, bucket: gcsBucket.trim(),
+            fileNamePrefix: folder + '/' + notePrefix, fileFormat: 'CSV'
+          });
+        } else {
+          Export.table.toDrive({
+            collection: noteFC, description: noteDesc, folder: folder,
+            fileNamePrefix: notePrefix, fileFormat: 'CSV'
           });
         }
       });
@@ -2630,21 +2713,36 @@
   // ──────────────────────────────────────────────
   var dlModule = require('users/andyarnellgee/apps:modules/downloadViaUrl.js');
 
+  // Clear stale download output when a download input changes, so the
+  // workaround Note + Drive Tip + previous links/status don't linger from an
+  // earlier "Save to computer" click after the user picks a different layer
+  // or resolution. (Labels/panels are declared below but assigned before this
+  // ever runs on user interaction.)
+  function clearDownloadHints() {
+    downloadWarningLabel.style().set({shown: false});
+    driveTipLabel.style().set({shown: false});
+    downloadLinksPanel.clear();
+    psScriptPanel.clear();
+    psScriptPanel.style().set('shown', false);
+    downloadStatusLabel.setValue('');
+  }
+
   var downloadLayerSelect = ui.Select({
     items: [
       'Primary forest',
       'Forest',
       'Naturally regenerating forest',
       'Pre-refinement primary forest',
-      'Tree cover (raw input)',
+      'Tree cover (binary)',
     ],
     placeholder: '— Select dataset to save —',
-    style: {margin: '0 0 4px 0', stretch: 'horizontal'}
+    style: {margin: '0 0 4px 0', stretch: 'horizontal'},
+    onChange: clearDownloadHints
   });
   var downloadScaleSlider = ui.Slider({
     min: 30, max: 1000, value: 90, step: 10,
     style: {margin: '0 0 6px 0', stretch: 'horizontal'},
-    onChange: function(val) { downloadScaleInput.setValue(val.toString(), false); }
+    onChange: function(val) { downloadScaleInput.setValue(val.toString(), false); clearDownloadHints(); }
   });
   var downloadScaleInput = ui.Textbox({
     value: '90',
@@ -2831,9 +2929,9 @@
     } else if (layerChoice === 'Pre-refinement primary forest') {
       sourceDict = latestPreConnectivityForest;
       nameBase = '03c_pre_refinement_primary_forest';
-    } else if (layerChoice === 'Tree cover (raw input)') {
+    } else if (layerChoice === 'Tree cover (binary)') {
       sourceDict = latestMaskedForest;
-      nameBase = '02a_treecover';
+      nameBase = '02a_tree_cover_binary';
     } else {
       sourceDict = latestMaskedPrimaryForest;
       nameBase = '04a_primary_forest';
@@ -2842,6 +2940,10 @@
     var years = Object.keys(sourceDict);
     if (years.length === 0) {
       downloadStatusLabel.setValue('No data for ' + layerChoice + '. Run the analysis first.');
+      // No download will happen -- hide the download workaround note + Drive
+      // tip (same as the no-country / no-dataset guards above).
+      downloadWarningLabel.style().set({shown: false});
+      driveTipLabel.style().set({shown: false});
       return;
     }
 
@@ -3169,6 +3271,48 @@
   downloadWarningLabel.style().set({shown: false});
   driveTipLabel.style().set({shown: false});
 
+  // Run records, surfaced here in the app-friendly "Save to computer" area.
+  // The Outputs tickboxes for these only queue Drive tasks, which do nothing
+  // in the published App (no Tasks tab) -- these in-browser downloads are the
+  // way app users get them. Same handlers as the (former) Config buttons; ui
+  // widgets are single-parent, so these are dedicated instances.
+  // (downloadMethodsNote / downloadRunBundle are hoisted function declarations.)
+  var runRecordsHeading = ui.Label(
+    'This run', {fontWeight: 'bold', fontSize: '11px', margin: '8px 0 2px 0', color: '#444'});
+  var downloadMethodsNoteButtonApp = ui.Button({
+    label: '📄 Methods note',
+    onClick: downloadMethodsNote,
+    style: {margin: '0 4px 0 0', fontSize: '10px', padding: '1px 4px'}
+  });
+  var downloadRunBundleButtonApp = ui.Button({
+    label: '🧾 Run metadata',
+    onClick: downloadRunBundle,
+    style: {margin: '0', fontSize: '10px', padding: '1px 4px'}
+  });
+  var runRecordsRow = ui.Panel(
+    [downloadMethodsNoteButtonApp, downloadRunBundleButtonApp],
+    ui.Panel.Layout.flow('horizontal'), {margin: '0 0 2px 0'});
+  var runRecordsHint = ui.Label(
+    'Methods note (.md, plain language) + run metadata (.json) for this run.',
+    {fontSize: '10px', color: '#777', margin: '0 0 4px 0'});
+
+  // Section-level single-year notice. Save to computer works one year at a
+  // time (uses yearSelector2 / 'Year:'); in Compare Years mode it can't cover
+  // both, so point the user to Save to Drive (which writes per-year outputs).
+  var saveToComputerYearNote = ui.Label('', {fontSize: '10px', color: '#777',
+    fontStyle: 'italic', margin: '0 0 4px 0'});
+  function updateSaveToComputerYearNote() {
+    var y2 = yearSelector2.getValue();
+    if (typeof enableSplitScreenCheckbox !== 'undefined' && enableSplitScreenCheckbox.getValue()) {
+      saveToComputerYearNote.setValue('Single year only — uses Year ' + y2 +
+        '. Compare Years is on; for both years use Save to Drive (writes a file per year).');
+      saveToComputerYearNote.style().set('color', '#cc6666');
+    } else {
+      saveToComputerYearNote.setValue('Single year only — uses Year ' + y2 + '.');
+      saveToComputerYearNote.style().set('color', '#777');
+    }
+  }
+
   var downloadPanel = ui.Panel({
     widgets: [
       ui.Panel([ui.Label('Layer:', {margin: '0 8px 0 0', fontSize: '12px'}), downloadLayerSelect],
@@ -3180,6 +3324,9 @@
       downloadStatusLabel,
       downloadLinksPanel,
       psScriptPanel,
+      runRecordsHeading,
+      runRecordsRow,
+      runRecordsHint,
       downloadAdvancedToggle,
       downloadAdvancedContent
     ],
@@ -3628,7 +3775,7 @@
     items: [INPUT_CATEGORY_NONE,
             INPUT_CATEGORY_ALL, INPUT_CATEGORY_FOREST,
             INPUT_CATEGORY_NATREG],
-    value: INPUT_CATEGORY_NONE,
+    value: INPUT_CATEGORY_ALL,
     onChange: function() {
       updateRefineVisibility();
       markNeedsUpdate();
@@ -4972,6 +5119,29 @@
   var exportSettingsButton = ui.Button({label: 'Save Settings', onClick: exportSettings, style: {margin: '4px 0px', fontSize: '11px'}});
   var importSettingsButton = ui.Button({label: 'Load Settings', onClick: showTextInput, style: {margin: '4px 0px', fontSize: '11px'}});
 
+  // Pre-download checks, mirroring the Area Statistics warnings: (1) no
+  // country selected, (2) analysis out of date / not yet run (needsUpdate).
+  // These downloads capture the CURRENT settings, so a not-run / stale state
+  // means the record may not match a produced or exported map. We warn but
+  // still allow the download (it's useful as a template / pre-run record).
+  // Returns an array of ui.Label widgets to prepend to the download panel.
+  function exportWarningLabels() {
+    var labels = [];
+    if (!countrySelector.getValue()) {
+      labels.push(ui.Label(
+        '⚠ No country selected — this record is not tied to a country.',
+        {color: '#cc6666', fontSize: '11px', margin: '0 0 4px 0'}));
+    }
+    if (needsUpdate) {
+      labels.push(ui.Label(
+        '⚠ Analysis not run / out of date — this reflects the current ' +
+        'settings, not a produced run. Click "▶ Run analysis" first for a ' +
+        'record that matches your map.',
+        {color: '#cc6666', fontSize: '11px', margin: '0 0 4px 0'}));
+    }
+    return labels;
+  }
+
   // In-browser counterpart of the run metadata sidecar -- downloads the
   // current config + run snapshot without queueing a Drive export. Useful
   // when the user wants the run record before (or instead of) launching
@@ -4981,9 +5151,15 @@
     var countryInfo = selectedCountry ? gaulLut.GAUL_LUT[gaulLut.nameToCode(selectedCountry)] : null;
     var iso3 = countryInfo ? countryInfo.iso3 :
       (selectedCountry ? cleanCountryName(selectedCountry).substring(0, 3).toUpperCase() : 'XXX');
-    var year = parseInt(yearSelector1.getValue());
+    // Save to computer is single-year: use yearSelector2, the always-visible
+    // 'Year:' selector (= the analysis year in single mode; uniqueYears uses
+    // analysisYear2). yearSelector1 is the hidden Compare 'Year 1' and would
+    // give the wrong year (its 2000 default) in single mode.
+    var year = parseInt(yearSelector2.getValue());
     var scale = exportRasterScaleSlider.getValue();
     var bundle = buildRunBundle(year, scale, iso3, '<not-yet-exported>', false);
+    print('=== PFF methods note (provenance) ===');
+    print(bundle['run__provenance_md']);
     var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
     var url = bundleFC.getDownloadURL({
       format: 'json',
@@ -5007,18 +5183,57 @@
       }
     });
     downloadLinkPanel = ui.Panel({
-      widgets: [downloadLink, closeButton],
+      widgets: exportWarningLabels().concat([downloadLink, closeButton]),
       layout: ui.Panel.Layout.flow('vertical'),
       style: {margin: '10px 0'}
     });
     ui.root.widgets().add(downloadLinkPanel);
   }
 
-  var downloadRunBundleButton = ui.Button({
-    label: 'Download Run Metadata',
-    onClick: downloadRunBundle,
-    style: {margin: '4px 0px', fontSize: '11px'}
-  });
+  // downloadRunBundle / downloadMethodsNote are surfaced as buttons in the
+  // "Save to computer" area (downloadRunBundleButtonApp / ...NoteButtonApp) --
+  // they live there, not Config, because the in-browser download works in the
+  // published App where Drive export tickboxes don't.
+
+  // Methods note (.md) download. Reuses the data-URI download trick from the
+  // "Save to computer" path (see buildPythonScript usage) so GEE can hand over
+  // a clean text file with REAL newlines -- unlike getDownloadURL JSON, which
+  // escapes them. Browser can't set the filename from a data-URI link, so the
+  // label tells the user to save it as .md.
+  function downloadMethodsNote() {
+    var selectedCountry = countrySelector.getValue();
+    var countryInfo = selectedCountry ? gaulLut.GAUL_LUT[gaulLut.nameToCode(selectedCountry)] : null;
+    var iso3 = countryInfo ? countryInfo.iso3 :
+      (selectedCountry ? cleanCountryName(selectedCountry).substring(0, 3).toUpperCase() : 'XXX');
+    // Save to computer is single-year: use yearSelector2, the always-visible
+    // 'Year:' selector (= the analysis year in single mode; uniqueYears uses
+    // analysisYear2). yearSelector1 is the hidden Compare 'Year 1' and would
+    // give the wrong year (its 2000 default) in single mode.
+    var year = parseInt(yearSelector2.getValue());
+    var scale = exportRasterScaleSlider.getValue();
+    var md = buildRunBundle(year, scale, iso3, '<not-yet-exported>', false)['run__provenance_md'];
+    print('=== PFF methods note (provenance) ===');
+    print(md);
+    var dataUri = 'data:application/octet-stream;charset=utf-8,' + encodeURIComponent(md);
+    if (downloadLinkPanel) { ui.root.widgets().remove(downloadLinkPanel); }
+    var fname = (iso3 ? iso3 + '_' : '') + 'gee_methods_note_' + year + '_' + scale + 'm.md';
+    var downloadLink = ui.Label({
+      value: '⬇ Download methods note — save as ' + fname,
+      style: {color: 'blue', textDecoration: 'underline'},
+      targetUrl: dataUri
+    });
+    var closeButton = ui.Button({
+      label: '✕', style: {margin: '0 0 0 10px'},
+      onClick: function() { ui.root.widgets().remove(downloadLinkPanel); downloadLinkPanel = null; }
+    });
+    downloadLinkPanel = ui.Panel({
+      widgets: exportWarningLabels().concat([downloadLink, closeButton]),
+      layout: ui.Panel.Layout.flow('vertical'),
+      style: {margin: '10px 0'}
+    });
+    ui.root.widgets().add(downloadLinkPanel);
+  }
+
 
   // Reset function to restore all parameters to defaults
   function resetToDefaults() {
@@ -5054,7 +5269,7 @@
     // Reset plantations and custom assets
     includePlantationsCheckbox.setValue(false);
     excludeAgricultureFromForestCheckbox.setValue(false);
-    inputCategorySelect.setValue(null);
+    inputCategorySelect.setValue(INPUT_CATEGORY_ALL);
     fraAlignedCheckbox.setValue(false);
     refineInputCheckbox.setValue(false);
     updateRefineVisibility();
@@ -5078,30 +5293,21 @@
 
   var resetSettingsButton = ui.Button({label: 'Reset Defaults', onClick: resetToDefaults, style: {width: '90px', margin: '2px 0px', fontSize: '10px', color: '#333'}});
 
-  // Batch 27.1: tiny grey hint labels clarify that Save/Load Settings
-  // and Download Run Metadata serve different purposes:
-  //   - Save / Load Settings = portable config (manual, shareable with
-  //     colleagues; excludes run-specific fields like timestamp).
-  //   - Run Metadata = per-run snapshot (auto-emitted with Drive exports;
-  //     records exactly what produced a given output).
+  // Config is just portable settings now: Save / Load Settings = shareable
+  // config (excludes run-specific fields like timestamp), plus Reset. The
+  // per-run records (methods note + run metadata) moved to "Save to computer"
+  // so they work in the published App.
   var settingsHintSettings = ui.Label(
     'Portable config — share with colleagues. Excludes run-specific ' +
     'fields like timestamp.',
     {fontSize: '10px', color: '#888', fontStyle: 'italic',
     margin: '0 0 6px 0'}
   );
-  var settingsHintMetadata = ui.Label(
-    'Run snapshot — records exactly what produced this run (auto-emitted ' +
-    'alongside Drive exports). Use to trace what produced an output.',
-    {fontSize: '10px', color: '#888', fontStyle: 'italic',
-    margin: '6px 0 0 0'}
-  );
 
   var settingsContent = ui.Panel({
     widgets: [
       ui.Label('Config', {fontWeight: 'bold', fontSize: '13px', margin: '0 0 6px 0', color: '#333'}),
       exportSettingsButton, importSettingsButton, settingsHintSettings,
-      downloadRunBundleButton, settingsHintMetadata,
       resetSettingsButton
     ],
     layout: ui.Panel.Layout.flow('vertical'),
@@ -5115,8 +5321,10 @@
   // OUTPUTS PANEL (collapsible, right side)
   // =============================================================================
 
+  updateSaveToComputerYearNote();
   var saveDataWidgets = [
     ui.Label('Save to computer (experimental)', {fontWeight: 'bold', fontSize: '13px', margin: '6px 0 4px 0', color: '#222'}),
+    saveToComputerYearNote,
     downloadPanel
   ];
   if (!IS_PUBLISHED_APP) {
@@ -5505,7 +5713,7 @@
 
     // Create a panel to hold the download link and close button
     downloadLinkPanel = ui.Panel({
-      widgets: [downloadLink, closeButton],
+      widgets: exportWarningLabels().concat([downloadLink, closeButton]),
       layout: ui.Panel.Layout.flow('vertical'),
       style: {margin: '10px 0'}
     });
