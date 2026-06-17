@@ -446,7 +446,8 @@ _SLOT_FILENAME_HINTS = {
     "forest_raster": (
         ("forest", "treecover", "tree_cover", "tree_height", "hansen", "glad"),
         ("plantation", "planted_forest", "agriculture", "roads", "builtup",
-         "dem", "slope", "protect"),
+         "dem", "slope", "protect",
+         "other_land", "oltc", "olwtc"),   # OLTC file name contains 'tree_cover' -> flag a mis-pick here
     ),
     "olwtc": (
         ("plantation", "tree_crops", "other_land_with_tree_cover",
