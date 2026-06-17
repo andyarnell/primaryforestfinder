@@ -1988,26 +1988,15 @@
     style: {margin: '0 0 4px 0'}
   });
 
-  // Build a per-run metadata bundle for the JSON sidecar export and the
-  // in-browser snapshot download. Combines the user's full config (mirrors
-  // Save Settings) with run-specifics (timestamp, year exported, scale,
-  // destination, version). Keys are flat and prefixed (config__* / run__*)
-  // because Earth Engine's getDownloadURL serialises Feature properties
-  // best as flat key-value pairs.
-  function buildRunBundle(year, scale, iso3, exportFolder, useCloud) {
-    var bundle = {};
+  // Build the human-readable provenance / methods narrative (Markdown) for a
+  // run. Kept SEPARATE from buildRunBundle so the run-metadata JSON stays a
+  // clean, stable config snapshot: the narrative is long, re-flows on small
+  // wording tweaks, and would change far more often than the config keys --
+  // bundling it bloated the JSON and made it unreadable. The narrative is
+  // shipped as its own .md / methods-note sidecar (and the in-browser
+  // "Methods note" download) instead.
+  function buildProvenanceMd(year, scale, iso3) {
     var settings = collectSettings();
-    Object.keys(settings).forEach(function(k) {
-      bundle['config__' + k] = settings[k];
-    });
-    bundle['run__pff_script_version'] = PFF_SCRIPT_VERSION;
-    bundle['run__timestamp']          = new Date().toISOString();
-    bundle['run__country']            = countrySelector.getValue();
-    bundle['run__iso3']               = iso3;
-    bundle['run__year_exported']      = year;
-    bundle['run__scale_m']            = scale;
-    bundle['run__export_destination'] = useCloud ? 'cloud_storage' : 'google_drive';
-    bundle['run__export_folder']      = exportFolder;
     // Which layers the export-panel tickboxes will produce (for the
     // "Layers in this export" section of the provenance note).
     var _expLayers = [];
@@ -2031,23 +2020,45 @@
     _expIf(exportChk_protVector, 'protection_legal_unfiltered_vector');
     _expIf(exportChk_preConnectivity, 'pre_refinement_primary_forest');
     _expIf(exportChk_final, 'primary_forest');
-    // Human-readable provenance/methods narrative (Markdown). Pure string
-    // assembly from the settings + run params; ships inside the run-metadata
-    // JSON and is printed by downloadRunBundle for easy reading/copying.
     // Compare-Years context for the note's single-year caveat: the "other"
     // year relative to this note's `year`.
     var _splitOn = (typeof enableSplitScreenCheckbox !== 'undefined') && enableSplitScreenCheckbox.getValue();
     var _y1 = parseInt(yearSelector1.getValue());
     var _y2 = parseInt(yearSelector2.getValue());
     var _otherYear = _splitOn ? (year === _y1 ? _y2 : _y1) : null;
-    bundle['run__provenance_md']      = provenanceNarrative.buildNarrative(settings, {
-      country: bundle['run__country'], iso3: iso3, year: year, scale: scale,
-      pffVersion: PFF_SCRIPT_VERSION, timestamp: bundle['run__timestamp'],
+    return provenanceNarrative.buildNarrative(settings, {
+      country: countrySelector.getValue(), iso3: iso3, year: year, scale: scale,
+      pffVersion: PFF_SCRIPT_VERSION, timestamp: new Date().toISOString(),
       customForest: (typeof nationalForest !== 'undefined' && nationalForest.checkbox
                      ? nationalForest.checkbox.getValue() : false),
       compare: _splitOn, year2: _otherYear,
       length: 'extended', exportedLayers: _expLayers
     });
+  }
+
+  // Build a per-run metadata bundle for the JSON sidecar export and the
+  // in-browser snapshot download. Combines the user's full config (mirrors
+  // Save Settings) with run-specifics (timestamp, year exported, scale,
+  // destination, version). Keys are flat and prefixed (config__* / run__*)
+  // because Earth Engine's getDownloadURL serialises Feature properties
+  // best as flat key-value pairs. The methods note (provenance narrative)
+  // is intentionally NOT included here -- it ships as its own .md sidecar
+  // (see buildProvenanceMd) to keep this JSON a clean, readable config
+  // snapshot.
+  function buildRunBundle(year, scale, iso3, exportFolder, useCloud) {
+    var bundle = {};
+    var settings = collectSettings();
+    Object.keys(settings).forEach(function(k) {
+      bundle['config__' + k] = settings[k];
+    });
+    bundle['run__pff_script_version'] = PFF_SCRIPT_VERSION;
+    bundle['run__timestamp']          = new Date().toISOString();
+    bundle['run__country']            = countrySelector.getValue();
+    bundle['run__iso3']               = iso3;
+    bundle['run__year_exported']      = year;
+    bundle['run__scale_m']            = scale;
+    bundle['run__export_destination'] = useCloud ? 'cloud_storage' : 'google_drive';
+    bundle['run__export_folder']      = exportFolder;
     return bundle;
   }
 
@@ -2599,8 +2610,6 @@
     if (exportChk_runMetadata.getValue()) {
       uniqueYears.forEach(function(metaYear) {
         var bundle = buildRunBundle(metaYear, exportScale, iso3, folder, useCloud);
-        print('=== PFF methods note (' + metaYear + ') — provenance ===');
-        print(bundle['run__provenance_md']);
         var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
         var bundlePrefix = (iso3 ? iso3 + '_' : '') +
           'gee_run_metadata_' + metaYear + '_' + s + 'm';
@@ -2631,7 +2640,7 @@
     // .md is the Config-panel button, and the plugin writes a plain .txt.
     if (exportChk_methodsNote.getValue()) {
       uniqueYears.forEach(function(metaYear) {
-        var md = buildRunBundle(metaYear, exportScale, iso3, folder, useCloud)['run__provenance_md'];
+        var md = buildProvenanceMd(metaYear, exportScale, iso3);
         var noteFC = ee.FeatureCollection([ee.Feature(null, {methods_note: md})]);
         var notePrefix = (iso3 ? iso3 + '_' : '') +
           'gee_methods_note_' + metaYear + '_' + s + 'm';
@@ -5166,8 +5175,6 @@
     var year = parseInt(yearSelector2.getValue());
     var scale = exportRasterScaleSlider.getValue();
     var bundle = buildRunBundle(year, scale, iso3, '<not-yet-exported>', false);
-    print('=== PFF methods note (provenance) ===');
-    print(bundle['run__provenance_md']);
     var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
     var url = bundleFC.getDownloadURL({
       format: 'json',
@@ -5219,7 +5226,7 @@
     // give the wrong year (its 2000 default) in single mode.
     var year = parseInt(yearSelector2.getValue());
     var scale = exportRasterScaleSlider.getValue();
-    var md = buildRunBundle(year, scale, iso3, '<not-yet-exported>', false)['run__provenance_md'];
+    var md = buildProvenanceMd(year, scale, iso3);
     print('=== PFF methods note (provenance) ===');
     print(md);
     var dataUri = 'data:application/octet-stream;charset=utf-8,' + encodeURIComponent(md);
