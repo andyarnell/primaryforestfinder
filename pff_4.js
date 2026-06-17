@@ -898,7 +898,7 @@
   var visibleLayers = {
     // Analysis outputs
     primaryForest: true,         // Headline output (default on)
-    forestOutsideBuffers: true,  // Supporting output: pre-connectivity (default on)
+    forestOutsideBuffers: false, // Pre-refinement primary -- available in Layers, off by default
     treeCover: true,             // Thresholded tree cover -- pre-FRA-filter baseline
     forest: true,                // Input forest -- FRA Forest baseline (default on)
     naturallyRegenerating: true, // P1.16: ≈ FRA Naturally regenerating forest (default on when produced)
@@ -928,7 +928,7 @@
   // forest input on, anthro/buffer/exception inputs off).
   function resetVisibleLayers() {
     visibleLayers.primaryForest = true;
-    visibleLayers.forestOutsideBuffers = true;
+    visibleLayers.forestOutsideBuffers = false; // pre-refinement primary off by default
     visibleLayers.treeCover = true;
     visibleLayers.forest = true;
     visibleLayers.naturallyRegenerating = true;
@@ -3285,7 +3285,7 @@
     style: {margin: '0 4px 0 0', fontSize: '10px', padding: '1px 4px'}
   });
   var downloadRunBundleButtonApp = ui.Button({
-    label: '🧾 Run metadata',
+    label: '🧾 Metadata',
     onClick: downloadRunBundle,
     style: {margin: '0', fontSize: '10px', padding: '1px 4px'}
   });
@@ -3293,7 +3293,7 @@
     [downloadMethodsNoteButtonApp, downloadRunBundleButtonApp],
     ui.Panel.Layout.flow('horizontal'), {margin: '0 0 2px 0'});
   var runRecordsHint = ui.Label(
-    'Methods note (.md, plain language) + run metadata (.json) for this run.',
+    'Methods note (.md, plain language) + metadata (.json) for this run.',
     {fontSize: '10px', color: '#777', margin: '0 0 4px 0'});
 
   // Section-level single-year notice. Save to computer works one year at a
@@ -4938,7 +4938,15 @@
               legendItemsPanel.add(createLegendItem(c.color, c.label, true));
             });
           } else {
-            legendItemsPanel.add(createLegendItem(entry.color, entry.label));
+            // The Tree cover / Input row mirrors the declared input type so the
+            // legend matches the map layer + area-stats name: show "Tree cover"
+            // when Tree cover is declared as the input, otherwise "Input".
+            var legLabel = entry.label;
+            if (entry.key === 'treeCover'
+                && inputCategorySelect.getValue() === INPUT_CATEGORY_ALL) {
+              legLabel = 'Tree cover';
+            }
+            legendItemsPanel.add(createLegendItem(entry.color, legLabel));
           }
           anyShown = true;
         }
