@@ -2,15 +2,15 @@
 
 Human-readable companion to [`datasets_global.json`](datasets_global.json) (the canonical machine-readable source — feed it to run-metadata, dataset pages, and (i) buttons).
 
-Covers `pff_4.js` v4.16.0-beta.16 and `modules/timeSeriesAnthro.js` as of 2026-06-12.
+Covers `pff_4.js` v4.16.0-beta.17 and `modules/timeSeriesAnthro.js` as of 2026-06-22. Lists only the datasets each run actually loads; off-by-default / not-loaded datasets are recorded in the JSON only (see below).
 
 ## How to read the status field
 
 | Status | Meaning |
 |---|---|
-| `active` | Used in every default run. Include in run-metadata. |
-| `optional_default_off` | Code path exists but include flag / UI default is OFF (or layer is loaded but never folded into the default analysis). |
-| `queued` | Referenced in commented-out code or docs notes. NOT loaded today. Kept in [`datasets_global.json`](datasets_global.json) (filter `"status": "queued"`), not listed individually here. |
+| `active` | Used in every default run — the only status listed individually below. |
+| `optional_default_off` | Loaded in code but disabled or never folded into the default analysis. Kept in [`datasets_global.json`](datasets_global.json) only, not listed here. |
+| `queued` | Referenced only in commented-out code / notes; not loaded today. Kept in [`datasets_global.json`](datasets_global.json) only, not listed here. |
 | `deprecated` | Was used in a previous version; superseded. |
 
 ---
@@ -100,27 +100,6 @@ Provides built-up small (SMOD 11–12) + built-up large (>12), masked by GHS_POP
 - **Cite:** Marconcini et al. (2020) *Scientific Data* 7, 242. [doi:10.1038/s41597-020-00580-5](https://doi.org/10.1038/s41597-020-00580-5)
 - **Docs:** <https://geoservice.dlr.de/web/datasets/wsf_evo>
 
-### GISD30 1985–2020 — `optional_default_off`
-Global impervious-surface dynamic. **Disabled** by default (`includeGISD=false` at `pff_4.js:864`) due to rock-formation false positives.
-- **EE asset:** `projects/sat-io/open-datasets/GISD30_1985_2020`
-- **Cite:** Zhang et al. (2022) *ESSD* 14, 1831–1856. [doi:10.5194/essd-14-1831-2022](https://doi.org/10.5194/essd-14-1831-2022)
-
-### GISA 1972–2019 — `optional_default_off`
-Global impervious surface area, longest time-span. **Disabled** (`includeGISA=false` at `pff_4.js:865`).
-- **EE asset:** `projects/sat-io/open-datasets/GISA_1972_2019`
-- **Cite:** Huang et al. (2021) *Sci. China Earth Sci.* 64, 1922–1933. [doi:10.1007/s11430-020-9797-9](https://doi.org/10.1007/s11430-020-9797-9)
-
----
-
-## Population
-
-### LandScan Global (ORNL via sat-io) — `optional_default_off`
-Helper module loads it; **no caller in `pff_4.js`** (kept exposed for workshop / future use).
-- **EE asset:** `projects/sat-io/open-datasets/ORNL/LANDSCAN_GLOBAL`
-- **Code:** `modules/timeSeriesAnthro.js:1166-1200`
-- **Cite:** Rose et al. (2025) *Scientific Data* 12, 458. [doi:10.1038/s41597-025-04817-z](https://doi.org/10.1038/s41597-025-04817-z)
-- **Docs:** <https://landscan.ornl.gov/documentation>
-
 ---
 
 ## Land cover / agriculture
@@ -160,23 +139,9 @@ Class 1 = Planted Forest (FRA-aligned, 02d); class 2 = Tree Crops (OLTC, 02b —
 - **Cite:** Richter et al. (2024) *Spatial Database of Planted Trees v2.0*. WRI Technical Note.
 - **Docs:** <https://www.wri.org/research/spatial-database-planted-trees-sdpt-version-2>
 
-### FDAP Palm / Rubber / Cocoa model 2024a — `optional_default_off`
-Loaded but **not OR'd into the plantations mosaic** — commits primary forest as agriculture (see auto-memory `feedback_qgis_*` and `project_fdap_commission_errors`).
-- **EE assets:** `projects/forestdatapartnership/assets/{palm,rubber,cocoa}/model_2024a`
-- **Code:** `modules/timeSeriesAnthro.js:707-732`
-- **Cite:** Forest Data Partnership / Google (2024).
-- **Docs:** <https://www.forestdatapartnership.org/data-approach>
-
 ---
 
 ## Roads / infrastructure
-
-### GRIP4 Roads + Predicted AADT (custom rasterisation) — `active`
-1990, 2000, 2015 anchor years; linearly interpolated; 2020 = 2015 copy. Used as the 'roads with traffic' raster.
-- **EE assets:** `projects/ee-andyarnellgee/assets/p0002_primary_forest_support/raw/GRIP4_ExSet_<1990|2000|2015>_AADTpred_20240312`
-- **Code:** `modules/timeSeriesAnthro.js:823-921`
-- **Cite:** Meijer et al. (2018) *Environ. Res. Lett.* 13, 064006. [doi:10.1088/1748-9326/aabd42](https://doi.org/10.1088/1748-9326/aabd42)
-- **Docs:** <https://www.globio.info/download-grip-dataset>
 
 ### OSM Roads (PFF custom 33-region merge) — `active`
 Static global OSM roads collected May 2025. Used as 'small roads' raster + per-AOI vector export. **Provenance:** [`docs/osm_roads_prep`](osm_roads_prep) (full collection chain + dates). **Scripts:** [`preprocessing/osm_local/`](../preprocessing/osm_local/README.md) (Conda + pyosmium notebooks).
@@ -199,22 +164,12 @@ Tropical-belt annual deforestation; OR'd with Hansen lossyear in `forest_disturb
 
 ---
 
-## Water / waterways
+## Datasets not folded into a run
 
-### OSM Water Layer (sat-io / U-Tokyo) — `optional_default_off`
-Loaded; canal extraction (`band==4`) computed but not used in default disturbance composite.
-- **EE asset:** `projects/sat-io/open-datasets/OSM_waterLayer`
-- **Code:** `pff_4.js:6356-6360`
-- **Docs:** <https://hydro.iis.u-tokyo.ac.jp/~yamadai/OSM_water/>
+Datasets the tool does **not** use in a run are kept only in [`datasets_global.json`](datasets_global.json), not listed individually above, so this reference stays a faithful list of what each run actually loads. Two groups (filter the JSON on `"status"`):
 
-### PFF Navigable Rivers (WDB-derived) + USA Navigable Waterways — `optional_default_off`
-Custom assets; loaded but not buffered into default disturbance composite.
-
----
-
-## Datasets considered but not loaded
-
-Candidate / swap-in datasets that the tool does **not** load today (status `queued`) — e.g. WRI SBTN Natural Lands, the European Primary Forests Database, the Tsinghua China Terrace Map, and several alternative road sources — are kept only in [`datasets_global.json`](datasets_global.json) (filter `"status": "queued"`), alongside the commented-out code that references them. They're omitted here so this reference stays a faithful list of what each run actually loads.
+- **`optional_default_off`** — loaded in code but disabled or never folded into the default analysis: GISD30 / GISA built-up, LandScan population, FDAP palm/rubber/cocoa, GRIP4 + predicted-AADT roads, OSM Water Layer, and the PFF navigable-rivers assets.
+- **`queued`** — referenced only in commented-out code / notes: e.g. WRI SBTN Natural Lands, the European Primary Forests Database, the Tsinghua China Terrace Map, and several alternative road sources.
 
 ---
 

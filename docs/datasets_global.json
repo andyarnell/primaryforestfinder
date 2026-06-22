@@ -585,8 +585,8 @@
       "name": "GRIP4 — Global Roads Inventory Project (with predicted AADT)",
       "version": "GRIP4 + ExSet AADT prediction (2024-03-12 snapshot)",
       "group": "roads_infrastructure",
-      "role_in_pff": "Per-year 'roads with traffic' raster. Linearly interpolated between 1990, 2000, 2015 anchor years; 2020 = copy of 2015 (latest available). Used (alongside the OSM roads raster) for the road-buffer disturbance distance.",
-      "status": "active",
+      "role_in_pff": "Per-year 'roads with traffic' raster. Loaded by getRoadsCollection() but NOT folded into the analysis: the road-size split (roadsSel.lte/gt roadSizeThreshold) is commented out and roadsSmall = roadsMosaicStatic (OSM roads only). So GRIP4/AADT is currently computed-but-discarded; only the OSM roads raster feeds the road-buffer distance.",
+      "status": "optional_default_off",
       "ee_assets": [
         "projects/ee-andyarnellgee/assets/p0002_primary_forest_support/raw/GRIP4_ExSet_1990_AADTpred_20240312",
         "projects/ee-andyarnellgee/assets/p0002_primary_forest_support/raw/GRIP4_ExSet_2000_AADTpred_20240312",
