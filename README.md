@@ -24,6 +24,10 @@ Current build: [`pff_qgis_tools_0.16.0-beta.17.zip`](dist/pff_qgis_tools_0.16.0-
 
 Global datasets the GEE app loads, with sources and citations: [`docs/datasets_global.md`](docs/datasets_global.md).
 
+## Issues & feedback
+
+Report bugs or request features on the [GitHub issues page](https://github.com/andyarnell/primaryforestfinder/issues). Filter by label to focus — e.g. [`GEE App`](https://github.com/andyarnell/primaryforestfinder/issues?q=is%3Aissue+label%3A%22GEE+App%22) or [`QGIS Plugin`](https://github.com/andyarnell/primaryforestfinder/issues?q=is%3Aissue+label%3A%22QGIS+Plugin%22).
+
 ## License
 
 CC BY 4.0 (workflow and documentation).
