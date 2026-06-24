@@ -2115,6 +2115,43 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                              context=context, feedback=feedback)
             return rasterised
 
+        # --- Cache-staleness guard (NEW-Q7 / NEW-Q4) -------------------
+        # The reuse_prepared shortcut below reused a cached prepared/<f>.tif
+        # on grid-match alone, never checking whether the SOURCE changed.
+        # Result: swapping an input (e.g. adding a national plantation
+        # layer) while reuse was on could silently reuse the stale aligned
+        # raster -> wrong exclusion (rubber surviving as primary forest),
+        # or an output left in a previous target CRS. These helpers
+        # fingerprint the source (path + mtime + target CRS) alongside the
+        # cache so reuse only fires when the source is genuinely unchanged.
+        def _src_fingerprint(src_path, crs_str):
+            try:
+                _mt = os.path.getmtime(src_path)
+            except OSError:
+                _mt = None
+            return {"src": os.path.normpath(src_path),
+                    "mtime": _mt, "crs": crs_str}
+
+        def _write_cache_fingerprint(aligned_path, src_path, crs_str):
+            import json
+            try:
+                with open(aligned_path + ".fp", "w") as _f:
+                    json.dump(_src_fingerprint(src_path, crs_str), _f)
+            except OSError:
+                pass  # best-effort; a missing fingerprint just forces re-prep
+
+        def _cache_fingerprint_matches(aligned_path, src_path, crs_str):
+            import json
+            fp_path = aligned_path + ".fp"
+            if not os.path.exists(fp_path):
+                return False  # no fingerprint (e.g. pre-fix cache) -> re-prep
+            try:
+                with open(fp_path) as _f:
+                    stored = json.load(_f)
+            except (OSError, ValueError):
+                return False
+            return stored == _src_fingerprint(src_path, crs_str)
+
         # Helper: align a raster input to the reference grid.
         # Intermediates go to _scratch/ (same rationale).
         def _prep_raster(param_key, filename):
@@ -2147,13 +2184,19 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                         and abs(abs(_ag_gt[1]) - abs(_rf_gt[1])) < 1e-6
                         and abs(abs(_ag_gt[5]) - abs(_rf_gt[5])) < 1e-6
                     )
-                    if _grid_match:
+                    _fp_match = _cache_fingerprint_matches(
+                        aligned, layer.source(), target_crs_str)
+                    if _grid_match and _fp_match:
                         feedback.pushInfo(
                             f"Reused cached: preprocessing/{filename}.tif "
-                            "(matches reference grid; reproject skipped). "
-                            "Untick 'Reuse preprocessing/*.tif cache' to force "
-                            "re-prep if your source raster changed.")
+                            "(grid + source fingerprint match; reproject "
+                            "skipped).")
                         return aligned
+                    elif _grid_match and not _fp_match:
+                        feedback.pushInfo(
+                            f"Cached preprocessing/{filename}.tif is STALE "
+                            "(source file or target CRS changed since it was "
+                            "built) -- recomputing.")
                     else:
                         feedback.pushInfo(
                             f"Cached preprocessing/{filename}.tif has mismatched "
@@ -2197,6 +2240,10 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                     os.remove(reproj)
                 except OSError:
                     pass
+            # Record the source fingerprint so a later reuse_prepared run
+            # can tell whether this cache is still valid for the current
+            # source + target CRS (NEW-Q7 / NEW-Q4 staleness guard).
+            _write_cache_fingerprint(aligned, layer.source(), target_crs_str)
             return aligned
 
         # Limit GDAL cache to avoid memory pressure on large rasters
