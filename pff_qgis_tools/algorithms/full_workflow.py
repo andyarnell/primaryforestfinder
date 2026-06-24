@@ -2915,6 +2915,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ds_in = None
                 _masked = (
                     (_sv_arr == 1) & (_in_arr == 1)).astype(np.uint8)
+                _removed_px = int((_in_arr == 1).sum()) - int(_masked.sum())
+                feedback.pushInfo(
+                    f"Step (b) removed {_removed_px:,} forest pixel(s) in "
+                    f"patches smaller than {refine_min_patch_area_ha:g} ha "
+                    f"(0 = no patches were below the threshold).")
                 if os.path.exists(final_path):
                     try:
                         os.remove(final_path)
@@ -2931,6 +2936,11 @@ class FullWorkflowAlgorithm(QgsProcessingAlgorithm):
                 _ob.SetNoDataValue(0)
                 _ob.FlushCache()
                 _ds_out = None
+            else:
+                feedback.pushInfo(
+                    "Step (b) (minimum patch size) skipped: min patch area "
+                    "is 0 ha. Set a value > 0 to remove small isolated "
+                    "patches.")
         else:
             if not enable_refine_output:
                 feedback.pushInfo(
