@@ -1,5 +1,52 @@
+// =====================================================================
+// timeseriesAnthro.js -- PFF anthropogenic / land-use datasets module
+// =====================================================================
+// VERSIONING. pff_4.js and tools/*.js require() this file live from the
+// GEE repo (GEE cannot pin a module version), so the two can drift when
+// they are pasted at different times. MODULE_VERSION is recorded in every
+// run's metadata + methods note, and pff_4.js warns when it differs from
+// its EXPECTED_ANTHRO_MODULE_VERSION.
+// When you change a dataset, asset ID, threshold or processing step here:
+//   1. bump MODULE_VERSION (semver: patch = comments/fixes with no output
+//      change, minor = output change or new dataset, major = breaking API),
+//   2. update DATASET_VERSIONS if an asset/version changed,
+//   3. set EXPECTED_ANTHRO_MODULE_VERSION in pff_4.js to match,
+//   4. add a line to the history below and to CHANGELOG_GEE.md.
+// History:
+//   1.0.0 (2026-11-19) first versioned release; matches pff_4.js
+//         v4.16.0-beta.18.
+var MODULE_VERSION = '1.0.0';
+exports.MODULE_VERSION = MODULE_VERSION;
+
+// Version of each dataset this module loads (recorded per run). Keep in
+// sync with the asset IDs below and docs/datasets_global.json.
+var DATASET_VERSIONS = {
+  hansen_gfc:          'Hansen GFC 2024 v1_12',
+  jrc_tmf:             'JRC TMF v1_2025 DeforestationYear',
+  glc_fcs30d:          'GLC_FCS30D 1985-2022 (sat-io annual + five-years-map)',
+  ghsl:                'JRC GHSL P2023A (GHS_SMOD + GHS_POP)',
+  gisd30:              'GISD30 1985-2020 (sat-io)',
+  gisa:                'GISA 1972-2019 (sat-io)',
+  wsf_evo:             'DLR WSF Evolution (sat-io WSF_EVO)',
+  landscan:            'LandScan Global (sat-io ORNL)',
+  glad_cropland:       'GLAD Global cropland 2003/2011/2015/2019 (Potapov et al. 2022)',
+  descals_oil_palm:    'GlobalOilPalm_YoP_2021 (Descals et al. 2024)',
+  sdpt:                'SDPT v2 (sdpt_v2_simpleType_v09032024_public)',
+  fdap_commodities:    'FDAP palm/rubber/cocoa model_2024a',
+  fdap_rubber_2026:    'FDAP rubber model_2026a (2020, p>0.35)',
+  rubber_sea:          'rubber_SEA_2020 (Ahrends et al. 2026, preprint)',
+  grip4_aadt:          'GRIP4 + predicted AADT, 2024-03-12 snapshot (1990/2000/2015)',
+  congo_logging_roads: 'WUR forestroads_afr_2019-01_2024-12 + Kleinschroth et al. 2019',
+  osm_roads_vector:    'OSM via Geofabrik, May 2025 -- 34 chunks (complete)',
+  // v1 = roadsAllImageOSM; v2 = roadsAllImageOSM_v2 (all 34 chunks, not
+  // yet exported). See the KNOWN GAP note above roadsMosaicStatic().
+  osm_roads_raster:    'v1 roadsAllImageOSM (June 2025) -- 33 of 34 chunks; missing asia_20000000_to_30000000_of_62409033'
+};
+exports.DATASET_VERSIONS = DATASET_VERSIONS;
+// =====================================================================
+
 // var image = ee.Image('Tsinghua/DESS/ChinaTerraceMap/v1');
-// var roadsBrazil1 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/brazil_outros-trechos_mapbiomas"),
+// var roadsBrazil1 =ee.FeatureCollection("projects/ee-andyarnellgee/assets/brazil_outros-trechos_mapbiomas"),
 //     roadsBrazil2 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/brazil_rodovia-estadual_mapbiomas"),
 //     roadsBrazil3 = ee.FeatureCollection("projects/ee-andyarnellgee/assets/brazil_rodovia-federal_mapbiomas");
 // Map.addLayer(roadsBrazil1.merge(roadsBrazil2).merge(roadsBrazil3),"","roadsBrazil")
@@ -808,6 +855,56 @@ function processingPlantedForestSDPT(){
 }
 exports.processingPlantedForestSDPT = processingPlantedForestSDPT;
 
+// Step 2d (optional): Rubber plantations, Southeast Asia ~2020.
+// Sentinel-2 phenology + radar/canopy-height/texture map covering
+// Thailand, Myanmar, Laos, Vietnam, Cambodia, Malaysia, Indonesia and
+// parts of S China; subset upstream to ESA WorldCover 2020 tree cover.
+// Static single-epoch layer -- applied the same for all analysis years
+// (like SDPT). Band 'rubber': 1 = rubber, 0 = other tree cover, no-data
+// masked. unmask(0) turns both no-data and out-of-coverage pixels into
+// 0, so .or() is a no-op and .not() is 1 outside SE Asia -- the separate
+// 'no_data' band is therefore not needed here.
+// Used by pff_4.js (default OFF) to reroute confirmed rubber from SDPT
+// class 2 (tree crops / OLWTC) into FRA Planted Forest per FRA Note 7
+// (rubber-wood plantations ARE forest).
+// Known errors (per authors, preprint not yet peer-reviewed):
+// commission with other plantations / sparse tree cover / focal-filter
+// artifacts; omission of young, diseased and jungle rubber, with
+// under-mapping in Malaysia and Indonesia.
+function processingRubberSEA(){
+    var img = ee.Image("projects/rubber-499107/assets/rubber_SEA_2020");
+    return img.select('rubber').eq(1).unmask(0);
+}
+exports.processingRubberSEA = processingRubberSEA;
+
+// Map.addLayer(processingRubberSEA().selfMask(), {palette:['e31a1c']}, "processingRubberSEA")
+
+// Step 2e (optional): FDAP rubber probability, model 2026a (global).
+// Supersedes the deprecated model_2024a loaded (disabled) in
+// processingPlantationsMosaic above. Threshold 0.35 = the documented
+// precision/recall break-even (~94% both) from the model_2026a README
+// (Table 6) -- NB the README warns those accuracies are overestimates
+// (computed on the model-selection set).
+// CONSUMER CONTRACT (pff_4.js rubber gate): used ONLY to reroute pixels
+// already inside SDPT class 2 (tree crops) into planted forest -- never
+// to add rubber outside SDPT. FDAP probability layers commit primary
+// forest as commodities (the reason 2024a is disabled), so constraining
+// FDAP to SDPT-mapped tree crops bounds the damage of a false positive
+// to relabeling an existing tree-crop pixel.
+function processingFdapRubber2026(){
+    var fdapRubberProbThreshold = 0.35; // precision = recall break-even per model_2026a README
+    // NB: unlike model_2024a (one global image per year), model_2026a is
+    // TILED (~5.5k images for 2020) -- .first() would return a single
+    // arbitrary tile, so mosaic() is required.
+    return ee.ImageCollection("projects/forestdatapartnership/assets/rubber/model_2026a")
+        .filterDate('2020-01-01', '2020-12-31')
+        .mosaic().select('probability')
+        .gt(fdapRubberProbThreshold).unmask(0);
+}
+exports.processingFdapRubber2026 = processingFdapRubber2026;
+
+// Map.addLayer(processingFdapRubber2026().selfMask(), {palette:['purple']}, "processingFdapRubber2026")
+
 exports.processingPlantationsMosaic = processingPlantationsMosaic
 
 // Map.addLayer(processingPlantationsMosaic(),"","processingPlantationsMosaic")
@@ -925,10 +1022,13 @@ exports.getGripRoadsForYear = getGripRoadsForYear;
 // OSM ROADS (vector, global)  --  FOR VECTOR EXPORTS ONLY
 // ============================================================
 //
-// Global OSM roads merged from 33 regional CSV uploads. Source:
+// Global OSM roads merged from 34 regional CSV uploads (33 until the
+// missing Asia chunk was ingested 2026-09-15). Source:
 // geofabrik regional pbf -> pyosmium -> gpkg -> CSV chunks (CSV
 // chosen for size + no DBF column header limits). See
-// docs/osm_roads_prep for upload provenance.
+// docs/osm_roads_prep.md for upload provenance. NB the RASTER version
+// (roadsMosaicStatic, below) still lacks that Asia chunk -- see the
+// note there.
 //
 // Filtered to drop highway = 'proposed' / 'planned' (data-quality
 // issue noted during ingestion).
@@ -950,7 +1050,7 @@ function getOsmRoadsAll(aoi) {
   // the per-asset construction so each child FC's spatial index is
   // queried directly (mirrors WDPA's fast-path). Without this the
   // flatten() defeats per-child pushdown and the planner has to scan
-  // all 33 children. With this, 27 of 33 assets return empty FCs for
+  // all 34 children. With this, most of the 34 assets return empty FCs for
   // a small AOI and GEE skips them via index lookup.
   var assetIds = [
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/africa_0_to_10000000_of_20329501",
@@ -959,6 +1059,10 @@ function getOsmRoadsAll(aoi) {
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/antartica_0_to_1102_of_1102",
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_0_to_10000000_of_62409033",
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_10000000_to_20000000_of_62409033",
+    // Ingested 2026-09-15: produced May 2025 but never uploaded, so every
+    // run before this date was missing ~10M Asian roads (locally >100% of
+    // the network in places -- see docs/osm_roads_prep.md).
+    "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033",
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_30000000_to_40000000_of_62409033",
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_40000000_to_50000000_of_62409033",
     "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_50000000_to_60000000_of_62409033",
@@ -998,7 +1102,7 @@ function getOsmRoadsAll(aoi) {
     //      actually touch the AOI polygon -- e.g. roads in the bbox
     //      corner outside a narrow north-south country like Bhutan).
     // The bbox filter does the heavy lifting (per-child spatial-
-    // index pushdown across 33 assets); the intersects filter only
+    // index pushdown across 34 assets); the intersects filter only
     // sees the small bbox-pre-filtered subset, so the cost is
     // bounded by the AOI's road density, not the global dataset.
     return fc.filterBounds(aoi).filter(
@@ -1095,6 +1199,39 @@ exports.getCongoRoadsUpToYear = getCongoRoadsUpToYear;
 // }
 
 // Speed version: raster-only, no vector paint
+//
+// KNOWN GAP -- MISSING ASIA ROADS CHUNK IN THIS RASTER (as of 2026-11):
+// roadsAllImageOSM (exported June 2025) was rasterised from 33 of the 34
+// OSM vector chunks. The chunk `asia_20000000_to_30000000_of_62409033`
+// (~10M Asian roads, mostly OSM ways created ~2018-19) was never
+// uploaded at the time, so it is NOT in this raster. The gap is spread
+// across Asia rather than one block, but it is heavy in SE Asia: in a
+// 1-degree test box in Thailand the raster holds about half the road
+// pixels it should. Effect on PFF: roads are under-buffered there, so
+// primary forest is OVER-estimated in affected parts of Asia.
+// The vector chunk was ingested 2026-09-15, but the full raster
+// re-export has not run (global 30 m export doesn't complete on the
+// current GEE quota tier), so this asset is unchanged.
+//
+// NEED THE COMPLETE SET? The missing vector file is the GEE
+// FeatureCollection:
+//   projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033
+// - Vector, complete: getOsmRoadsAll(aoi) above already includes it
+//   (all 34 chunks) -- use that, or the app's OSM roads vector export.
+// - Raster, complete over your AOI: paint the missing chunk on top, e.g.
+//     var gap = ee.FeatureCollection('projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033')
+//         .filterBounds(aoi)
+//         .filter(ee.Filter.inList('highway', ['proposed', 'planned']).not());
+//     var roadsComplete = roadsMosaicStatic().unmask(0)
+//         .max(ee.Image(0).paint(gap, 1)).toInt8();
+//   (paint draws ~1-px lines vs the all-touched raster -- fine for
+//   distance buffering; see docs/osm_roads_prep.md before using it as a
+//   barrier.)
+// - Global re-export scripts: gee_scripts/export_osm_roads_raster*.js
+//   (output: roadsAllImageOSM_v2). When v2 exists, point this function at
+//   it, set DATASET_VERSIONS.osm_roads_raster to v2 and bump MODULE_VERSION
+//   (minor -- outputs change), so run metadata shows which raster was used.
+// Full details + measured impact: docs/osm_roads_prep.md ("Known gaps").
 function roadsMosaicStatic() {
   var osmRoadsImage = ee.Image("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/roadsAllImageOSM");
   return osmRoadsImage;

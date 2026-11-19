@@ -130,7 +130,7 @@ Both have trees meeting biophysical thresholds, both are human-managed, but FRA 
 | FRA category | Examples | FRA Forest? | Schema position | Removed at |
 |---|---|---|---|---|
 | **Plantation Forest / Planted Forest** | Timber plantations (pine, eucalyptus), SDPT class 1, national plantations registries | YES — it's a *forest sub-type* (Forest = Naturally Regenerating + Planted) | `02d_planted_forest` | `02c → 02e` (subtracted from Forest to derive Naturally Regenerating) |
-| **Other land with tree cover (OLWTC)** | Oil palm, rubber, fruit trees, agroforestry, orchards, SDPT class 2 (tree crops), Descals oil palm, **urban tree cover** (per Batch 25) | NO — non-Forest tree cover per FRA Note 10 | `02b_other_land_with_tree_cover` | `02a/raw → 02c` (subtracted from Forest baseline via "Refine to forest" toggle) |
+| **Other land with tree cover (OLWTC)** | Oil palm, rubber, fruit trees, agroforestry, orchards, SDPT class 2 (tree crops), Descals oil palm, **urban tree cover** (per Batch 25). NB rubber: the optional SE-Asia rubber checkbox (beta.18) reroutes confirmed rubber to `02d_planted_forest` per FRA Note 7 | NO — non-Forest tree cover per FRA Note 10 | `02b_other_land_with_tree_cover` | `02a/raw → 02c` (subtracted from Forest baseline via "Refine to forest" toggle) |
 
 The everyday English word "plantations" is ambiguous — it can mean either. Per strict FRA terminology, the schema names follow:
 - `02d_planted_forest` (today's name) ≈ FRA **Plantation Forest** (intensive monoculture forestry, narrow definition).

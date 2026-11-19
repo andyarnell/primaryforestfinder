@@ -14,7 +14,9 @@
  *   var prov = require('users/andyarnellgee/apps:modules/provenanceNarrative.js');
  *   var md = prov.buildNarrative(collectSettings(), {
  *     country: 'Bhutan', iso3: 'BTN', year: 2020, scale: 30,
- *     pffVersion: PFF_SCRIPT_VERSION, length: 'extended'   // or 'short'
+ *     pffVersion: PFF_SCRIPT_VERSION, length: 'extended',  // or 'short'
+ *     anthroVersion: anthro.MODULE_VERSION,       // timeseriesAnthro.js
+ *     datasetVersions: anthro.DATASET_VERSIONS    // drives "Known data issues"
  *   });
  *   print(md);
  *
@@ -42,6 +44,16 @@ var CITATIONS = {
     short: 'Descals et al., 2024',
     full: 'Descals, A. et al. (2024). Global mapping of oil palm planting year from 1990 to 2021. Earth Syst. Sci. Data 16, 5111-5129.',
     url: 'https://doi.org/10.5194/essd-16-5111-2024'},
+  rubber_sea: {
+    short: 'Ahrends et al., 2026',
+    full: 'Ahrends, A. et al. (2026). Rubber mapping reveals opportunities and current limitations of deforestation due-diligence. bioRxiv preprint (not peer-reviewed), doi:10.64898/2026.07.25.740673. Data: doi:10.5281/zenodo.21439869 (CC BY 4.0).',
+    url: 'https://www.biorxiv.org/content/10.64898/2026.07.25.740673v1',
+    isStatic: true},
+  fdap_rubber: {
+    short: 'Forest Data Partnership, 2026',
+    full: 'Forest Data Partnership / Google (2026). FDAP Rubber Probability, model 2026a. Threshold 0.35 (documented precision/recall break-even).',
+    url: 'https://github.com/google/forest-data-partnership/blob/main/models/model_2026a/README.md',
+    isStatic: true},
   osm: {
     short: 'OpenStreetMap contributors, 2025',
     full: 'OpenStreetMap contributors (2025). Geofabrik regional extracts (~May 2025), ODbL 1.0.',
@@ -99,7 +111,7 @@ var LAYER_RECIPES = {
   roads_osm_vector:   {stem: '03a_roads_osm_vector', text: 'Roads as supplied vector.', cites: ['osm']},
   builtup_small:      {stem: '03a_builtup_small', text: 'Built-up (rural settlement) extent for the disturbance buffer.', cites: ['ghsl']},
   builtup_large:      {stem: '03a_builtup_large', text: 'Built-up (urban centre) extent for the disturbance buffer.', cites: ['ghsl']},
-  agriculture:        {stem: '03a_agriculture', text: 'Agriculture (cropland, pasture, oil palm, tree crops) for the disturbance buffer.', cites: ['glad_cropland', 'glc_fcs30d', 'pasture', 'descals_palm', 'sdpt']},
+  agriculture:        {stem: '03a_agriculture', text: 'Agriculture (cropland, pasture, oil palm, tree crops) for the disturbance buffer.', cites: ['glad_cropland', 'pasture', 'descals_palm', 'sdpt']},
   protection_natural_dem: {stem: '03b_protection_natural_dem', text: 'Digital surface model for the steep-slope rescue tier.', cites: ['alos_dem']},
   protection_natural_slope: {stem: '03b_protection_natural_slope', text: 'Slope derived from the DEM for the steep-slope rescue tier.', cites: ['alos_dem']},
   protection_legal:   {stem: '03b_protection_legal', text: 'Legally protected areas for the protection rescue tier.', cites: ['wdpa']},
@@ -193,6 +205,7 @@ exports.buildNarrative = function(settings, run) {
   var subline = '';
   if (whenLine) { subline = 'Generated ' + whenLine; }
   if (run.pffVersion) { subline += (subline ? ' | ' : '') + 'Primary Forest Finder v' + run.pffVersion; }
+  if (run.anthroVersion) { subline += (subline ? ' | ' : '') + 'datasets module v' + run.anthroVersion; }
 
   var p1, p2 = '';
   if (length === 'short') {
@@ -220,7 +233,7 @@ exports.buildNarrative = function(settings, run) {
 
     p2 = 'To represent likely human influence, the following were buffered and any forest falling within those buffers was removed from the analysis: roads (OpenStreetMap; ' +
       cite('osm') + ') by ' + roadBuf + ' m, built-up areas (JRC GHSL; ' + cite('ghsl') + ') by ' + builtBuf +
-      ' m, and agriculture -- cropland (GLAD, ' + cite('glad_cropland') + '; GLC_FCS30D, ' + cite('glc_fcs30d') +
+      ' m, and agriculture -- cropland (GLAD, ' + cite('glad_cropland') +
       '), pasture (Global Pasture Watch; ' + cite('pasture') + '), oil palm (' + cite('descals_palm') + ') and tree crops (' +
       cite('sdpt') + ') -- by ' + agriBuf + ' m. Two exceptions were kept within those buffers: forest on ' +
       'slopes >= ' + slopeDeg + ' deg (JAXA ALOS AW3D30 DEM; ' + cite('alos_dem') + ') and forest in legally ' +
@@ -232,10 +245,26 @@ exports.buildNarrative = function(settings, run) {
 
   // Caveats / FRA-alignment notes.
   var caveats = [];
-  caveats.push('SDPT class 2 (tree crops) is treated as *other land with tree cover* and removed from Forest. ' +
-    'SDPT v2 (' + cite('sdpt') + ') does not separate **rubber** from other tree crops, so rubber plantations are excluded ' +
-    'here -- but the FAO FRA forest definition *can* include rubber. Where rubber is present, this map will diverge ' +
-    'from (under-count relative to) the FRA forest definition.');
+  if (s('Include Rubber SEA', false) === true) {
+    // Optional rubber layers active: confirmed rubber moved from
+    // tree crops (02b) to planted forest (02d) per FRA Note 7.
+    caveats.push('SDPT class 2 (tree crops) is treated as *other land with tree cover* and removed from Forest, ' +
+      'except **rubber**: a Southeast Asia rubber map (~2020; ' + cite('rubber_sea') + ') and, within SDPT-mapped tree ' +
+      'crops elsewhere, the FDAP rubber probability model 2026a at its precision/recall break-even threshold of 0.35 (' +
+      cite('fdap_rubber') + ') were used to count confirmed rubber plantations as planted forest instead, per the FAO ' +
+      'FRA definition (rubber-wood plantations are forest). The Southeast Asia map is a preprint (not yet ' +
+      'peer-reviewed) and under-maps rubber in Malaysia and Indonesia (young, diseased and mixed-species/jungle ' +
+      'rubber may be missed), so some rubber remains classified as tree crops; known commission errors include ' +
+      'confusion with other plantations and sparse tree cover. FDAP evidence was deliberately restricted to pixels ' +
+      'already mapped as tree crops (it is never used to add rubber elsewhere). Rubber detected by the Southeast ' +
+      'Asia map outside SDPT was also added to the buffered disturbance layer.');
+  } else {
+    caveats.push('SDPT class 2 (tree crops) is treated as *other land with tree cover* and removed from Forest. ' +
+      'SDPT v2 (' + cite('sdpt') + ') does not separate **rubber** from other tree crops, so rubber plantations are excluded ' +
+      'here -- but the FAO FRA forest definition *can* include rubber. Where rubber is present, this map will diverge ' +
+      'from (under-count relative to) the FRA forest definition. (For Southeast Asia, an optional rubber layer in the ' +
+      'app can reroute confirmed rubber into planted forest.)');
+  }
   if (scale > 30) {
     caveats.push('Exported at ' + scale + ' m (coarser than the 30 m source). At coarse resolution a vector ' +
       'representation preserves the true forest extent and avoids the sampling bias introduced by majority / ' +
@@ -285,10 +314,26 @@ exports.buildNarrative = function(settings, run) {
       '; that year has its own note)';
   }
 
+  // Known data issues -- keyed off the datasets module's DATASET_VERSIONS,
+  // so each line drops out by itself once the dataset is fixed.
+  var dataIssues = [];
+  var dv = run.datasetVersions || {};
+  if (dv.osm_roads_raster && dv.osm_roads_raster.indexOf('v1') === 0 &&
+      s('Enable Roads Buffer', true) !== false) {
+    dataIssues.push('Roads: the global OpenStreetMap roads raster used here (v1, June 2025) is missing one of ' +
+      'its 34 source chunks -- about 10 million roads spread across Asia, with heavy losses in Southeast Asia. ' +
+      'Where roads are missing they are not buffered, so primary forest may be over-estimated in affected ' +
+      'parts of Asia; outside Asia the layer is complete. The OSM roads vector export is complete.');
+  }
+
   // Assemble.
   var md = title + (subline ? '\n' + subline : '') + '\n' + yearLine + '\n\n' + p1;
   if (p2) { md += '\n\n' + p2; }
   if (layersBlock) { md += '\n\n' + layersBlock; }
+  if (dataIssues.length) {
+    md += '\n\n**Known data issues**\n';
+    dataIssues.forEach(function(d) { md += '- ' + d + '\n'; });
+  }
   md += '\n\n' + fraDefsBlock;
   if (caveats.length) {
     md += '\n\n**Notes on FRA alignment**\n';

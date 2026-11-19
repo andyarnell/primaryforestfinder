@@ -100,6 +100,14 @@ Users can supply their own GEE asset paths. The existing pattern uses UI textbox
 - Load via `ee.Image(userPath)` — no module function needed
 - Must be binary (0/1) and match the expected spatial extent
 
+### 6. Record the dataset version and bump the module version
+
+Every dataset the module loads has an entry in `DATASET_VERSIONS` at the top of `modules/timeSeriesAnthro.js`; each run records these in its metadata. When adding or changing a dataset:
+- add or update its `DATASET_VERSIONS` entry (source + version, e.g. `'SDPT v2 (sdpt_v2_simpleType_v09032024_public)'`),
+- bump `MODULE_VERSION` (minor for a new dataset or any output change, patch when outputs don't change) and add a history line in the module header,
+- set `EXPECTED_ANTHRO_MODULE_VERSION` in `pff_4.js` to the new version,
+- add the dataset to `docs/datasets_global.json` (and `docs/datasets_global.md` if it is active in default runs) and note it in `CHANGELOG_GEE.md`.
+
 ## Dataset categories and their pipeline roles
 
 | Category | Role in pipeline | Distance threshold | Example datasets |

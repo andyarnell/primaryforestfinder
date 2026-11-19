@@ -63,6 +63,14 @@ The current production script is `pff_4.js`. Older versions (`pff.js`, `pff_3.js
 - Target years for time-series collections: `[1990, 2000, 2010, 2015, 2020]`.
 - Use `forwardFillBinaryTimeSeries()` for layers where presence is cumulative (e.g., cropland, built-up).
 
+### Versioning (GEE)
+
+- `pff_4.js` carries `PFF_SCRIPT_VERSION` (top of file); log changes in `CHANGELOG_GEE.md`.
+- `modules/timeSeriesAnthro.js` carries its own `MODULE_VERSION` plus a `DATASET_VERSIONS` map (top of file). GEE `require()` loads the live module and cannot pin a version, so the app and the module can drift when pasted at different times.
+- When you change a dataset, asset ID, threshold or processing step in the module: bump `MODULE_VERSION` (patch = no output change, minor = output change or new dataset, major = breaking API), update `DATASET_VERSIONS`, set `EXPECTED_ANTHRO_MODULE_VERSION` in `pff_4.js` to match, and add a line to the module header history and `CHANGELOG_GEE.md`. Update `docs/datasets_global.json` (and `.md` if the dataset is active) too.
+- In `pff_4.js`, load the module with `getAnthroModule()`, not a bare `require()`, so the version check runs (one Console warning on mismatch).
+- Both versions are recorded in run metadata (`run__timeseries_anthro_version`, `run__dataset_version__*`) and the methods note. The methods note's "Known data issues" block is driven by `DATASET_VERSIONS` (see `modules/provenanceNarrative.js`), so a fixed dataset's caveat drops out once its version entry changes.
+
 ### GEE distance and masking patterns
 
 - Distance computation: prefer `fastDistanceTransform()` with fallback to `cumulativeCost()`.
@@ -203,3 +211,10 @@ Jupyter notebooks for extracting and formatting input data that feeds into the G
 - **Validate early**: Check CRS, resolution, and binary values before any processing step.
 - **Modular design**: Each tool/algorithm should work independently or as part of a sequence.
 - **No overengineering**: Keep solutions minimal and targeted.
+
+<!-- mermaid-ai-skills:start -->
+## Mermaid Diagrams
+
+When the user asks to create, edit, or visualize a diagram, follow the
+instructions in `.github/instructions/mermaid.instructions.md`.
+<!-- mermaid-ai-skills:end -->

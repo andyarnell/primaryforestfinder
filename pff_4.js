@@ -1,5 +1,29 @@
 ﻿  // Primary Forest Finder App
-  var PFF_SCRIPT_VERSION = "4.16.0-beta.17";
+  var PFF_SCRIPT_VERSION = "4.16.0-beta.18";
+
+  // Version of modules/timeseriesAnthro.js this script expects. The module
+  // is require()d live from the GEE repo (GEE cannot pin a version), so a
+  // mismatch means the two were pasted at different times. Bump together
+  // with MODULE_VERSION in the module. Both versions, plus the module's
+  // DATASET_VERSIONS, are recorded in run metadata and the methods note.
+  var EXPECTED_ANTHRO_MODULE_VERSION = "1.0.0";
+  var ANTHRO_MODULE_PATH = "users/andyarnellgee/apps:modules/timeseriesAnthro.js";
+  var _anthroVersionChecked = false;
+  // require() the datasets module (GEE caches it after the first call) and
+  // warn once in the Console if its version is not the expected one.
+  function getAnthroModule() {
+    var mod = require(ANTHRO_MODULE_PATH);
+    if (!_anthroVersionChecked) {
+      _anthroVersionChecked = true;
+      if (mod.MODULE_VERSION !== EXPECTED_ANTHRO_MODULE_VERSION) {
+        print('WARNING: modules/timeseriesAnthro.js is ' +
+              (mod.MODULE_VERSION ? 'v' + mod.MODULE_VERSION : 'unversioned (older than 1.0.0)') +
+              ' but pff_4.js v' + PFF_SCRIPT_VERSION + ' expects v' + EXPECTED_ANTHRO_MODULE_VERSION +
+              ' -- update whichever copy is older in the GEE repo.');
+      }
+    }
+    return mod;
+  }
 
   // Changelog: see CHANGELOG_GEE.md
 
@@ -1463,6 +1487,7 @@
         // P1.23: report what was *effectively* applied (exclusionActive)
         // so the metadata reflects the analysis run, not stale UI state.
         "Plantations Included": exclusionActive(includePlantationsCheckbox, includePlantationsPanel) ? "No" : "Yes",
+        "Rubber as Planted Forest": includeRubberCheckbox.getValue() ? "Yes" : "No",
         "FRA Agriculture Excluded from Forest": exclusionActive(excludeAgricultureFromForestCheckbox, excludeAgriPanel) ? "Yes" : "No",
         "Input Category (declared)": inputCategorySelect.getValue(),
         "FRA Aligned": fraAlignedCheckbox.getValue() ? "Yes" : "No",
@@ -2029,6 +2054,8 @@
     return provenanceNarrative.buildNarrative(settings, {
       country: countrySelector.getValue(), iso3: iso3, year: year, scale: scale,
       pffVersion: PFF_SCRIPT_VERSION, timestamp: new Date().toISOString(),
+      anthroVersion: getAnthroModule().MODULE_VERSION,
+      datasetVersions: getAnthroModule().DATASET_VERSIONS,
       customForest: (typeof nationalForest !== 'undefined' && nationalForest.checkbox
                      ? nationalForest.checkbox.getValue() : false),
       compare: _splitOn, year2: _otherYear,
@@ -2052,6 +2079,13 @@
       bundle['config__' + k] = settings[k];
     });
     bundle['run__pff_script_version'] = PFF_SCRIPT_VERSION;
+    // Datasets-module version + per-dataset versions (flat keys, see above).
+    var _anthro = getAnthroModule();
+    bundle['run__timeseries_anthro_version'] = _anthro.MODULE_VERSION || 'unversioned';
+    var _dsVersions = _anthro.DATASET_VERSIONS || {};
+    Object.keys(_dsVersions).forEach(function(k) {
+      bundle['run__dataset_version__' + k] = _dsVersions[k];
+    });
     bundle['run__timestamp']          = new Date().toISOString();
     bundle['run__country']            = countrySelector.getValue();
     bundle['run__iso3']               = iso3;
@@ -2319,7 +2353,7 @@
     var useGladLulcForest = (treecoverSourceSelect.getValue() === 'GLAD LULC');
     var useAgreementForest = (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)');
     var useUnionForest = (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)');
-    var timeseriesAnthroModule = require("users/andyarnellgee/apps:modules/timeseriesAnthro.js");
+    var timeseriesAnthroModule = getAnthroModule();
 
     uniqueYears.forEach(function(analysisYear) {
 
@@ -2447,6 +2481,32 @@
           .updateMask(country_and_buffer_mask);
       var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
           .updateMask(country_and_buffer_mask);
+      // Optional rubber -> planted forest: per FRA Note 7 rubber-wood IS
+      // forest. Two evidence sources with different trust levels:
+      //   1. rubber_SEA_2020 (regional, tree-cover-subset): reroutes out
+      //      of SDPT class 2 AND adds rubber outside SDPT.
+      //   2. FDAP rubber model_2026a @ p>0.35 (global, precision=recall
+      //      break-even): reroute ONLY -- constrained to pixels already
+      //      inside SDPT class 2, never adding rubber outside SDPT
+      //      (FDAP commits primary forest as commodities; bounding it to
+      //      mapped tree crops caps a false positive at relabeling an
+      //      existing tree-crop pixel).
+      // Single gate keeps every consumer consistent -- 02d gains rubber
+      // and the same pixels reroute OUT of SDPT class 2, so olwtc (02b)
+      // and the agriculture composite (which reads plantedForestSDPT and
+      // treeCropsSDPT below) do not double-count. Rubber still reaches
+      // the disturbance buffer via plantedForestSDPT. SEA-map rubber
+      // outside SDPT was previously unbuffered Forest/NRF, so 04a can
+      // shrink near it -- intended effect of the better data. Mirrors the
+      // gate in updateMap(); keep both in sync.
+      if (includeRubberCheckbox.getValue()) {
+        var rubberSelExp = timeseriesAnthroModule.processingRubberSEA()
+            .or(timeseriesAnthroModule.processingFdapRubber2026()
+                .and(treeCropsSDPT.unmask(0)))
+            .updateMask(country_and_buffer_mask);
+        plantedForestSDPT = plantedForestSDPT.unmask(0).or(rubberSelExp);
+        treeCropsSDPT = treeCropsSDPT.unmask(0).and(rubberSelExp.not());
+      }
       var allPlantationsSel = plantedForestSDPT;
 
       // P1.30 batch 25 -- OLWTC bucket per FRA Note 10 = "non-Forest
@@ -2514,9 +2574,11 @@
         // Plugin mirrors this when consumed -- "exclude planted forest" =
         // exclude FRA Planted Forest (timber, pulp, fibre).
         // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 (tree crops), so
-        // rubber is NOT in this layer. Per FRA Note 7, rubber-wood
-        // plantations ARE forest -- supply national rubber via
-        // nationalPlantations override to add it.
+        // rubber is NOT in this layer UNLESS the rubber checkbox
+        // (includeRubberCheckbox: rubber_SEA_2020 + FDAP 2026a within
+        // class 2) is on or national rubber is supplied via the
+        // nationalPlantations override. Per FRA Note 7, rubber-wood
+        // plantations ARE forest.
         doExport(allPlantationsSel.unmask(0).toByte(),
           mkExportName('02d', 'planted_forest_' + analysisYear + '_' + s), folder);
       }
@@ -2558,8 +2620,11 @@
       // export when explicitly requested.
       // RUBBER CAVEAT: SDPT v2 puts rubber in class 2 so it lands here,
       // but per FRA Note 7 rubber-wood is forest. Workshop users should
-      // be aware. National rubber data via nationalPlantations override
-      // can correct this in the analysis pipeline.
+      // be aware. The rubber checkbox (includeRubberCheckbox: SE-Asia
+      // map + FDAP 2026a within class 2) reroutes confirmed rubber out
+      // of this layer into 02d planted forest; national rubber via the
+      // nationalPlantations override can correct it where both sources
+      // miss rubber.
       if (exportChk_fraAgriculture.getValue()) {
         // Batch 25: OLWTC export now includes urban tree cover (tree-
         // covered pixels in built-up small + large) per FRA Note 10.
@@ -3465,7 +3530,9 @@
   // "Plantations" here means agricultural tree crops (oil palm, fruit,
   // agroforestry) per FRA Note 10. "Planted forest" means timber/pulp/
   // fibre plantations (eucalyptus, pine, teak) per FRA Note 7.
-  // (Rubber is country-dependent in FRA reporting -- see About panel.)
+  // (Rubber is country-dependent in FRA reporting -- see About panel.
+  // The optional includeRubberCheckbox below reroutes confirmed SE-Asia
+  // rubber into Planted forest per FRA Note 7.)
   // P1.24: outcome-framed labels.
   // P1.25: examples now inline in the label (FRA-aligned "other land
   // with tree cover" wording), so the standalone italic hint that lived
@@ -3526,6 +3593,35 @@
   var includePlantationsHint = ui.Label('', {shown: false});
   var includePlantationsPanel = ui.Panel({
     widgets: [includePlantationsCheckbox, includePlantationsHint],
+    layout: ui.Panel.Layout.flow('vertical'),
+    style: {margin: '0'}
+  });
+
+  // Optional SE-Asia rubber dataset (rubber_SEA_2020, ~2020, static).
+  // Dataset-composition toggle, NOT a refine exclusion: it changes what
+  // counts as planted forest vs tree crops (02d/02b) wherever those
+  // layers are used, including exports, so it is gated with a plain
+  // .getValue() rather than exclusionActive(), stays visible whenever
+  // the sub-section is open (not managed by updateRefineVisibility),
+  // and ships default OFF (known commission/omission errors; preprint
+  // not yet peer-reviewed).
+  var includeRubberCheckbox = ui.Checkbox({
+    label: 'Count rubber plantations as planted forest',
+    value: false,
+    onChange: function() { markNeedsUpdate(); },
+    style: {fontSize: '11px'}
+  });
+  var includeRubberHint = ui.Label(
+    'Moves rubber from tree crops to Planted forest (FRA: rubber-wood ' +
+    'plantations are forest), using a Southeast Asia rubber map (~2020) ' +
+    'plus FDAP rubber (2026a) within mapped tree crops elsewhere. The ' +
+    'SE Asia map also buffers newly detected rubber as disturbance, so ' +
+    'primary forest can shrink nearby. Rubber is under-mapped in ' +
+    'Malaysia/Indonesia.',
+    {fontSize: '10px', color: '#888', fontStyle: 'italic',
+     margin: '0 0 4px 24px'});
+  var includeRubberPanel = ui.Panel({
+    widgets: [includeRubberCheckbox, includeRubberHint],
     layout: ui.Panel.Layout.flow('vertical'),
     style: {margin: '0'}
   });
@@ -4207,6 +4303,7 @@
       nationalOLWTC.panel,
       includePlantationsPanel,
       plantedCreatesHint,
+      includeRubberPanel,
       nationalPlantations.panel
     ],
     layout: ui.Panel.Layout.flow('vertical'),
@@ -5283,6 +5380,7 @@
     
     // Reset plantations and custom assets
     includePlantationsCheckbox.setValue(false);
+    includeRubberCheckbox.setValue(false);
     excludeAgricultureFromForestCheckbox.setValue(false);
     inputCategorySelect.setValue(INPUT_CATEGORY_ALL);
     fraAlignedCheckbox.setValue(false);
@@ -5634,6 +5732,7 @@
     'Use Agreement Forest': (treecoverSourceSelect.getValue() === 'Agreement (Hansen & GLAD)'),
     'Use Combined Extent Forest': (treecoverSourceSelect.getValue() === 'Combined extent (Hansen | GLAD)'),
       'Exclude Plantations': includePlantationsCheckbox.getValue(),
+      'Include Rubber SEA': includeRubberCheckbox.getValue(),
       'Exclude Agriculture from Forest (FRA)': excludeAgricultureFromForestCheckbox.getValue(),
       'WDPA Preset': wdpaPresetSelect.getValue(),
       'WDPA Established Before': wdpaYearSlider.getValue(),
@@ -5845,6 +5944,10 @@
     } else if (settings['Include Plantations'] !== undefined) {
       // Backward compatibility: invert old "Include" to new "Exclude" semantic
       includePlantationsCheckbox.setValue(!settings['Include Plantations']);
+    }
+    // Undefined-guard: settings saved before beta.18 load with default OFF
+    if (settings['Include Rubber SEA'] !== undefined) {
+      includeRubberCheckbox.setValue(settings['Include Rubber SEA']);
     }
 
     // P1.18: FRA-aligned Forest baseline toggle
@@ -6612,7 +6715,7 @@
       
       /////////
       // Anthropogenic features
-      var timeseriesAnthroModule = require("users/andyarnellgee/apps:modules/timeseriesAnthro.js");
+      var timeseriesAnthroModule = getAnthroModule();
       var glcFcs30dCollection = timeseriesAnthroModule.preprocessGlc();
       var landcover = glcFcs30dCollection.filter(ee.Filter.eq("year", analysisYear)).first().updateMask(country_and_buffer_mask);
       
@@ -6633,6 +6736,22 @@
           .updateMask(country_and_buffer_mask);
       var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
           .updateMask(country_and_buffer_mask);
+      // Optional rubber -> Planted forest: rubber_SEA_2020 (reroute +
+      // add) OR'd with FDAP rubber 2026a @ p>0.35 constrained to SDPT
+      // class 2 (reroute only); same pixels rerouted OUT of class 2 so
+      // 02b/02d stay consistent. See the fuller rationale at the
+      // mirrored gate in exportRastersToDrive(); keep both in sync.
+      // Note: nationalPlantations "Replace global" below replaces
+      // global+rubber (intentional -- a national planted-forest layer
+      // supersedes both).
+      if (includeRubberCheckbox.getValue()) {
+        var rubberSel = timeseriesAnthroModule.processingRubberSEA()
+            .or(timeseriesAnthroModule.processingFdapRubber2026()
+                .and(treeCropsSDPT.unmask(0)))
+            .updateMask(country_and_buffer_mask);
+        plantedForestSDPT = plantedForestSDPT.unmask(0).or(rubberSel);
+        treeCropsSDPT = treeCropsSDPT.unmask(0).and(rubberSel.not());
+      }
       var allPlantationsSel = plantedForestSDPT;
 
       // Override plantations with national data if provided. National

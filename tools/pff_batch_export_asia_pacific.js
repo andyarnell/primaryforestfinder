@@ -18,7 +18,7 @@
 
 // ═══ 1. CONFIGURATION ═══════════════════════════════════════════════
 
-var SCRIPT_VERSION = '1.2.0';
+var SCRIPT_VERSION = '1.2.1';  // 1.2.1: records timeseriesAnthro.js MODULE_VERSION + DATASET_VERSIONS in run metadata
 var EXPORT_SCALE = 90;
 var EXPORT_CRS = 'EPSG:4326';
 
@@ -107,6 +107,8 @@ var FORWARD_FILL_YEARS = [2000, 2010, 2015, 2020];
 
 var gaulLut = require('users/andyarnellgee/apps:modules/gaulLut.js');
 var timeseriesAnthroModule = require('users/andyarnellgee/apps:modules/timeseriesAnthro.js');
+// Datasets-module version (recorded in run metadata). Unversioned = older than 1.0.0.
+print('timeseriesAnthro.js ' + (timeseriesAnthroModule.MODULE_VERSION ? 'v' + timeseriesAnthroModule.MODULE_VERSION : 'unversioned'));
 
 // ═══ 3. SHARED ASSETS ═══════════════════════════════════════════════
 
@@ -454,6 +456,10 @@ function runCountry(country) {
       oilPalmDescalsCollection.filter(ee.Filter.eq('year', analysisYear)).first()
     ).updateMask(country_and_buffer_mask);
 
+    // NB: the app (pff_4.js v4.16.0-beta.18+) has an optional SE-Asia
+    // rubber layer (processingRubberSEA) that reroutes confirmed rubber
+    // from SDPT class 2 into planted forest. This batch tool
+    // intentionally stays SDPT-only so prior runs remain reproducible.
     var plantedForestSDPT = timeseriesAnthroModule.processingPlantedForestSDPT()
       .updateMask(country_and_buffer_mask);
     var treeCropsSDPT = timeseriesAnthroModule.processingTreeCropsSDPT()
@@ -631,6 +637,7 @@ function runCountry(country) {
       'config__country_buffer_m':      COUNTRY_BUFFER_THRESHOLD,
       'config__fast_buffer':           FAST_BUFFER,
       'run__batch_script_version':     SCRIPT_VERSION,
+      'run__timeseries_anthro_version': timeseriesAnthroModule.MODULE_VERSION || 'unversioned',
       'run__pff_script_version':       '4.15.2',
       'run__timestamp':                new Date().toISOString(),
       'run__country':                  countryName,
@@ -640,6 +647,10 @@ function runCountry(country) {
       'run__export_destination':       'google_drive',
       'run__export_folder':            folder
     };
+    var dsVersions = timeseriesAnthroModule.DATASET_VERSIONS || {};
+    Object.keys(dsVersions).forEach(function(k) {
+      bundle['run__dataset_version__' + k] = dsVersions[k];
+    });
     var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
     var bundlePrefix = iso3 + '_gee_run_metadata_' + metaYear + '_' + s + 'm';
     var bundleDesc = bundlePrefix + runTag;

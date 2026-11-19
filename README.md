@@ -10,7 +10,10 @@ Tools for identifying potential primary forest at national scale. Both tools are
 ## Run the GEE app
 
 - **Browser app** — no account needed, fastest way to explore:
-  https://ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder
+  https://fao-fra-493913.projects.earthengine.app/view/primary-forest-finder
+
+  > **The app has moved to the address above.** The old link (`https://ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder`) will eventually be deprecated — please update bookmarks and any links you have shared.
+
 - **Code Editor** — free Google Earth Engine account; lets you save settings, export to Drive, and edit. Opens the live script (always the latest version):
   https://code.earthengine.google.com/?scriptPath=users%2Fandyarnellgee%2Fapps%3Aprimary_forest_finder_v4
 
@@ -22,7 +25,7 @@ Current build: [`pff_qgis_tools_0.16.0-beta.17.zip`](dist/pff_qgis_tools_0.16.0-
 
 ## Datasets
 
-Global datasets the GEE app loads, with sources and citations: [`docs/datasets_global.md`](docs/datasets_global.md).
+Global datasets the GEE app loads, with sources and citations: [`docs/datasets_global.md`](docs/datasets_global.md). To use the same prepared layers in your own Earth Engine script, see [Using these datasets in your own GEE script](docs/datasets_global.md#using-these-datasets-in-your-own-gee-script).
 
 ## Issues & feedback
 

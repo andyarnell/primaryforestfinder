@@ -1,7 +1,7 @@
 {
   "$schema_version": "1.0",
   "generated": "2026-05-08",
-  "covers_pff_script_version": "4.14.1",
+  "covers_pff_script_version": "4.16.0-beta.18",
   "scope": "Global datasets referenced by pff_4.js and modules/timeSeriesAnthro.js. Custom-prepared assets (e.g. simplified GAUL, OSM rasters, GRIP rasterised AADT) are listed under their parent global source. Thresholds + masks shown are the in-script defaults; user UI overrides them at runtime.",
   "intended_uses": [
     "Run-metadata sidecar (the export-settings JSON should embed only entries with status=active and resolved active_in_run=true)",
@@ -40,9 +40,9 @@
       "status": "active",
       "ee_assets": ["UMD/hansen/global_forest_change_2024_v1_12"],
       "code_refs": [
-        {"file": "pff_4.js", "lines": "1250-1265", "function": "gfcHansenTreecoverPrep"},
-        {"file": "pff_4.js", "lines": "2845-2851", "context": "Hansen raw export 02a"},
-        {"file": "modules/timeSeriesAnthro.js", "lines": "1141-1147", "function": "forest_disturbances"}
+        {"file": "pff_4.js", "lines": "505-520", "function": "gfcHansenTreecoverPrep"},
+        {"file": "pff_4.js", "lines": "2295-2302", "context": "Hansen raw export 02a"},
+        {"file": "modules/timeSeriesAnthro.js", "lines": "1267-1287", "function": "forest_disturbances (defined but not called by pff_4.js)"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "2000 baseline; annual loss 2001–2024",
@@ -74,8 +74,8 @@
         "projects/glad/OceanMask"
       ],
       "code_refs": [
-        {"file": "pff_4.js", "lines": "1267-1288", "function": "gladLulcForestPrep"},
-        {"file": "pff_4.js", "lines": "2937-2951", "context": "GLAD tree-height export 02a"},
+        {"file": "pff_4.js", "lines": "522-544", "function": "gladLulcForestPrep"},
+        {"file": "pff_4.js", "lines": "2388-2405", "context": "GLAD tree-height export 02a"},
         {"file": "modules/pffConnectivity.js", "line": 357}
       ],
       "native_resolution_m": 30,
@@ -97,10 +97,10 @@
       "version": "2019 (Grantham et al. 2020)",
       "group": "forest_reference",
       "role_in_pff": "Reference layer only — discretised into low (≤6.0) / medium (>6.0 & <9.6) / high (≥9.6) integrity bins and shown in the legend group 'Reference: FLII (high/med)' for visual comparison with PFF Primary Forest output.",
-      "status": "active",
-      "active_in_default_run": true,
+      "status": "optional_default_off",
+      "active_in_default_run": false,
       "ee_assets": ["users/openforisearthmap/World_EarthMap/flii_earth_20190824"],
-      "code_refs": [{"file": "pff_4.js", "lines": "6709-6717"}],
+      "code_refs": [{"file": "pff_4.js", "lines": "5517-5526", "context": "Reference overlay; validation checkbox default OFF"}],
       "native_resolution_m": 300,
       "temporal_coverage": "2019 single-epoch",
       "description": "A continuous 0–10 score per ~300 m forest pixel quantifying anthropogenic modification of forest landscapes, integrating observed pressures (infrastructure, agriculture), inferred pressures (deforestation, edge effects) and loss of forest connectivity. Higher = more intact.",
@@ -120,10 +120,10 @@
       "version": "v0 (2020 baseline)",
       "group": "forest_reference",
       "role_in_pff": "Reference layer only — thresholded at 0.90 and shown as 'Reference: Forest Persistence (FDaP)' for visual comparison with PFF Primary Forest output.",
-      "status": "active",
-      "active_in_default_run": true,
+      "status": "optional_default_off",
+      "active_in_default_run": false,
       "ee_assets": ["projects/forestdatapartnership/assets/community_forests/ForestPersistence_2020"],
-      "code_refs": [{"file": "pff_4.js", "lines": "6719-6722"}],
+      "code_refs": [{"file": "pff_4.js", "lines": "5527-5531", "context": "Reference overlay; validation checkbox default OFF"}],
       "native_resolution_m": 30,
       "temporal_coverage": "2020 single-epoch",
       "description": "Per-pixel score (0–1) indicating the presence of undisturbed forest in 2020 at 30 m. Built via a convergence-of-evidence approach combining multiple disturbance and forest-management datasets. Coverage is ±80° latitude; some regions (China, Russia, Australia, NZ) lack regionally specific inputs in the ensemble.",
@@ -149,7 +149,7 @@
         "projects/ee-andyarnellgee/assets/gaul_2024_level_0_code_500m"
       ],
       "code_refs": [
-        {"file": "pff_4.js", "lines": "821-852"},
+        {"file": "pff_4.js", "lines": "71-89"},
         {"file": "modules/gaulLut.js"}
       ],
       "native_resolution_m": null,
@@ -183,8 +183,8 @@
       "status": "active",
       "ee_assets": ["WCMC/WDPA/current/polygons"],
       "code_refs": [
-        {"file": "pff_4.js", "lines": "884-903", "context": "Pre-compute category masks at startup"},
-        {"file": "pff_4.js", "lines": "2873-2877", "context": "WDPA vector export 03b"}
+        {"file": "pff_4.js", "lines": "136-159", "context": "Pre-compute category masks at startup"},
+        {"file": "pff_4.js", "lines": "2324-2330", "context": "WDPA vector export 03b"}
       ],
       "native_resolution_m": null,
       "vector_native": true,
@@ -209,8 +209,8 @@
       "status": "active",
       "ee_assets": ["JAXA/ALOS/AW3D30/V3_2"],
       "code_refs": [
-        {"file": "pff_4.js", "lines": "2881-2892", "context": "DEM + slope export 03b"},
-        {"file": "pff_4.js", "lines": "6530"}
+        {"file": "pff_4.js", "lines": "2332-2337", "context": "DEM + slope export 03b"},
+        {"file": "pff_4.js", "lines": "7189", "context": "slope for steep-slope rescue"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "Single epoch (PRISM 2006–2011 + later updates)",
@@ -236,7 +236,7 @@
         "JRC/GHSL/P2023A/GHS_SMOD",
         "JRC/GHSL/P2023A/GHS_POP"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "194-228", "function": "processYear / getGhslCollection"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "242-275", "function": "processYear / getGhslCollection"}],
       "native_resolution_m": 1000,
       "temporal_coverage": "5-yearly 1975–2030 (PFF uses 1990, 2000, 2010, 2015, 2020)",
       "description": "Degree-of-Urbanisation classification produced by joint inference over GHS-POP (population grid) and GHS-BUILT-S (built-up surface). Codes 11–12 = rural / village clusters; >12 = urban-centre / dense-urban. The accompanying GHS-POP grid provides the population mask used to drop unpopulated SMOD pixels.",
@@ -258,7 +258,7 @@
       "role_in_pff": "Supplements GHSL SMOD for the built-up-small bucket: WSF EVO captures small/rural settlements that GHSL at 1 km can miss. Default ON (includeWSF=true).",
       "status": "active",
       "ee_assets": ["projects/sat-io/open-datasets/WSF/WSF_EVO"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "334-350", "function": "processWSFYear / getWSFCollection"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "381-397", "function": "processWSFYear / getWSFCollection"}],
       "native_resolution_m": 30,
       "temporal_coverage": "Annual 1985–2015",
       "description": "Annual 30 m global settlement extent from 1985 to 2015 derived from Landsat-5/-7 time series anchored on WSF2015. Each pixel value is the year of first settlement detection; pixels that were never settled are excluded.",
@@ -283,8 +283,8 @@
       "active_in_default_run": false,
       "ee_assets": ["projects/sat-io/open-datasets/GISD30_1985_2020"],
       "code_refs": [
-        {"file": "modules/timeSeriesAnthro.js", "lines": "254-266", "function": "processGISDYear / getGISDCollection"},
-        {"file": "pff_4.js", "line": 864, "context": "includeGISD = false (PFF default)"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "301-313", "function": "processGISDYear / getGISDCollection"},
+        {"file": "pff_4.js", "lines": "2447, 6794", "context": "includeGISD = false (PFF default)"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "1985–2020 annual dynamics",
@@ -309,8 +309,8 @@
       "active_in_default_run": false,
       "ee_assets": ["projects/sat-io/open-datasets/GISA_1972_2019"],
       "code_refs": [
-        {"file": "modules/timeSeriesAnthro.js", "lines": "294-307", "function": "processGISAYear / getGISACollection"},
-        {"file": "pff_4.js", "line": 865, "context": "includeGISA = false"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "341-354", "function": "processGISAYear / getGISACollection"},
+        {"file": "pff_4.js", "lines": "2451, 6798", "context": "includeGISA = false"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "1972–2019 annual",
@@ -335,7 +335,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["DLR/WSF/WSF2015/v1"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 332, "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 379, "context": "commented-out alt"}],
       "native_resolution_m": 10,
       "temporal_coverage": "2015 single-epoch",
       "description": "10 m global settlement mask for 2015 (Built-up = 255). Anchor for WSF Evolution.",
@@ -355,7 +355,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["projects/sat-io/open-datasets/WSF/WSF_2019"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 333, "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 380, "context": "commented-out alt"}],
       "native_resolution_m": 10,
       "temporal_coverage": "2019 single-epoch",
       "description": "Updated 10 m WSF mask anchored to 2019.",
@@ -375,7 +375,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/sat-io/open-datasets/ORNL/LANDSCAN_GLOBAL"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1166-1200"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1303-1337"}],
       "native_resolution_m": 1000,
       "temporal_coverage": "Annual 2000–2022 (1990 falls back to 2000 image)",
       "description": "30 arc-second (~1 km) global ambient-population grid produced annually by ORNL using a smart-disaggregation approach combining census, remote sensing and machine learning. 'Ambient' = average over 24 hours.",
@@ -394,13 +394,17 @@
       "name": "GLC_FCS30D — Global 30 m Land-Cover Dynamics 1985–2022",
       "version": "ESSD 2024 release",
       "group": "land_cover_agriculture",
-      "role_in_pff": "Source for the agriculture / cropland landcover backbone via timeseriesAnthroModule.preprocessGlc(). Combined with GLAD croplands (Potapov), Global Pasture Watch, Descals oil palm, and SDPT class 2 to produce the agriculture exclusion layer.",
-      "status": "active",
+      "role_in_pff": "NOT USED in the agriculture layer. preprocessGlc() is called and cropland classes [10, 11, 12] are extracted (croplandSel) in the analysis path, but the .or(croplandSelLessNoise) that would add them to croplandComb is commented out (noise-smoothing step too slow), and the export path never reads it. Agriculture = GLAD cropland + Global Pasture Watch + Descals oil palm + SDPT. Kept here so it can be re-enabled.",
+      "status": "optional_default_off",
+      "active_in_default_run": false,
       "ee_assets": [
         "projects/sat-io/open-datasets/GLC-FCS30D/annual",
         "projects/sat-io/open-datasets/GLC-FCS30D/five-years-map"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "12-100", "function": "preprocessGlc"}],
+      "code_refs": [
+        {"file": "modules/timeSeriesAnthro.js", "lines": "59-121", "function": "preprocessGlc"},
+        {"file": "pff_4.js", "lines": "6926-6939", "context": "croplandSel computed; .or(croplandSelLessNoise) commented out in croplandComb"}
+      ],
       "native_resolution_m": 30,
       "temporal_coverage": "5-yearly 1985–1995, annual 2000–2022 (35 fine sub-classes)",
       "description": "First global 30 m fine-classification (35 classes) land-cover dynamics dataset, generated with continuous change detection over the dense Landsat archive on GEE. PFF maps the GLC-FCS classes to a binary agriculture mask.",
@@ -428,8 +432,8 @@
         "users/potapovpeter/Global_cropland_2019"
       ],
       "code_refs": [
-        {"file": "modules/timeSeriesAnthro.js", "lines": "386-435", "function": "processingCroplandsGlad / getCroplandsGladForYear"},
-        {"file": "modules/timeSeriesAnthro.js", "lines": "541-591", "function": "forwardFillBinaryTimeSeries / processingCroplandsGladFF"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "433-482", "function": "processingCroplandsGlad / getCroplandsGladForYear"},
+        {"file": "modules/timeSeriesAnthro.js", "lines": "588-638", "function": "forwardFillBinaryTimeSeries / processingCroplandsGladFF"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "4-year epochs 2000–2003, 2004–2007, 2008–2011, 2012–2015, 2016–2019. PFF maps these to representative years 2000, _, 2010, 2015, 2020. For 1990 the 2003 asset is used as a proxy (acknowledged limitation).",
@@ -452,8 +456,8 @@
       "status": "active",
       "ee_assets": ["projects/global-pasture-watch/assets/ggc-30m/v1/grassland_c"],
       "code_refs": [
-        {"file": "pff_4.js", "lines": "3014-3017", "context": "pastureDataset filter + forward-fill"},
-        {"file": "pff_4.js", "line": 6101}
+        {"file": "pff_4.js", "lines": "2466-2469", "context": "pastureDataset filter + forward-fill"},
+        {"file": "pff_4.js", "lines": "6723-6726"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "Annual 2000–2022 (sat-io mirror) / 2000–2024 (DLR-hosted)",
@@ -476,7 +480,7 @@
       "role_in_pff": "Per-year oil-palm extent built from the year-of-planting raster: pixels with YoP ≤ analysisYear count as oil palm. Classified as Other Land with Tree Cover (OLTC, FRA Note 10), NOT as planted forest, so it routes into the agriculture/disturbance bucket and into the 02b_other_land_with_tree_cover export.",
       "status": "active",
       "ee_assets": ["projects/ee-globaloilpalm/assets/shared/GlobalOilPalm_YoP_2021"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "619-648", "function": "processingOilPalmDescals / getOilPalmDescalsForYear"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "666-695", "function": "processingOilPalmDescals / getOilPalmDescalsForYear"}],
       "native_resolution_m": 30,
       "temporal_coverage": "Year-of-planting 1990–2021 (Sentinel-1 extent at 10 m; Landsat-derived YoP at 30 m)",
       "description": "Global 30 m raster of the year an oil-palm plantation pixel was established (1990–2021). Industrial + smallholder palm extent from a CNN on Sentinel-1 (2016–2021) is back-cast through the Landsat archive to estimate planting year. PFF transforms the YoP image (decimal-year via minNBR_date / 365 + 1970, capped to 1989) into a per-year cumulative mask.",
@@ -499,13 +503,13 @@
       "status": "active",
       "ee_assets": ["projects/sdpt-v2/assets/sdpt_v2_simpleType_v09032024_public"],
       "code_refs": [
-        {"file": "modules/timeSeriesAnthro.js", "lines": "789-809", "function": "processingTreeCropsSDPT / processingPlantedForestSDPT"},
-        {"file": "modules/timeSeriesAnthro.js", "lines": "686-792", "function": "processingPlantationsMosaic"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "836-856", "function": "processingTreeCropsSDPT / processingPlantedForestSDPT"},
+        {"file": "modules/timeSeriesAnthro.js", "lines": "733-839", "function": "processingPlantationsMosaic"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "2020 baseline (158 countries, ~264 Mha planted forest + 65 Mha tree crops)",
       "description": "Global compilation differentiating planted forests + tree crops from natural forests, integrating government and research data across 158 countries. Class 1 = Planted Forest (eucalyptus, pine, teak, etc.); class 2 = Tree Crops (rubber, oil palm, coconut, fruit orchards).",
-      "preprocessing_in_pff": ".unmask(0); class 1 .eq(1) → planted_forest layer; class 2 .eq(2) → tree-crops layer. CAVEAT: rubber lives in class 2 even though FRA Note 7 lists rubberwood as forest — workshop/Custom-exclusion override required if you want rubber rerouted.",
+      "preprocessing_in_pff": ".unmask(0); class 1 .eq(1) → planted_forest layer; class 2 .eq(2) → tree-crops layer. CAVEAT: rubber lives in class 2 even though FRA Note 7 lists rubberwood as forest — the optional rubber_sea_2020 checkbox (SE Asia) or a nationalPlantations override reroutes it.",
       "citation": {
         "text": "Richter, J., Goldman, E., Harris, N., Gibbs, D., Rose, M., Peyer, S., Richardson, S., Velappan, H. (2024). Spatial Database of Planted Trees (SDPT Version 2.0). Technical Note. World Resources Institute, Washington, DC.",
         "documentation": "https://www.wri.org/research/spatial-database-planted-trees-sdpt-version-2",
@@ -513,6 +517,32 @@
         "related_dataset_paper": "https://doi.org/10.1038/s41597-024-04125-y"
       },
       "license": "CC-BY 4.0"
+    },
+    {
+      "id": "rubber_sea_2020",
+      "name": "Rubber plantations Southeast Asia ~2020 (Ahrends et al.)",
+      "version": "v1 (preprint, not yet peer-reviewed)",
+      "group": "plantations_treecrops",
+      "role_in_pff": "Optional (checkbox, default OFF): confirmed rubber is added to 02d_planted_forest per FRA Note 7 (rubber-wood plantations ARE forest) and rerouted OUT of SDPT class 2 / 02b OLWTC — partially resolving the SDPT rubber caveat for SE Asia. Rubber detected outside SDPT also enters the agriculture/disturbance buffer, so 04a can shrink near newly detected rubber.",
+      "status": "optional_default_off",
+      "active_in_default_run": false,
+      "ee_assets": ["projects/rubber-499107/assets/rubber_SEA_2020"],
+      "code_refs": [
+        {"file": "modules/timeSeriesAnthro.js", "lines": "858-880", "function": "processingRubberSEA"},
+        {"file": "pff_4.js", "lines": "2502-2509, 6747-6754", "function": "includeRubberCheckbox gates (export + analysis paths)"}
+      ],
+      "native_resolution_m": 10,
+      "temporal_coverage": "~2020 (imagery 2021 for most of the area; 2019 for parts of Indonesia). Static single-epoch — applied the same for all analysis years.",
+      "description": "Rubber plantation map for Thailand, Myanmar, Laos, Vietnam, Cambodia, Malaysia, Indonesia and parts of S China (Xishuangbanna, Hainan), from Sentinel-2 phenology + radar, canopy-height and texture metrics; subset upstream to ESA WorldCover 2020 tree cover. Bands: 'rubber' (1 = rubber, 0 = other tree cover, no-data masked), 'no_data'.",
+      "preprocessing_in_pff": ".select('rubber').eq(1).unmask(0) — no-data and out-of-coverage become 0 so the layer is a no-op outside SE Asia; the separate no_data band is not used.",
+      "citation": {
+        "text": "Ahrends, A., Harrison, S.B., Hollingsworth, P.M., Heath, J.D.J., Wang, Y., Xu, J., Green, J.M.H. (2026). Rubber mapping reveals opportunities and current limitations of deforestation due-diligence. bioRxiv preprint.",
+        "doi": "10.64898/2026.07.25.740673",
+        "doi_url": "https://www.biorxiv.org/content/10.64898/2026.07.25.740673v1",
+        "zenodo": "https://doi.org/10.5281/zenodo.21439869"
+      },
+      "license": "CC-BY 4.0",
+      "pff_known_issues": "Preprint, not yet peer-reviewed. Commission: other plantations (broadleaf N Vietnam, palm insular SE Asia), open/sparse tree cover, focal-majority artifacts. Omission: under-maps Malaysia/Indonesia; young, diseased and mixed/jungle rubber missed — absence of mapped rubber is not evidence of absence. Hence default OFF."
     },
     {
       "id": "fdap_palm_2024a",
@@ -523,7 +553,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/forestdatapartnership/assets/palm/model_2024a"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "707-712, 750-752"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "754-759, 797-799"}],
       "native_resolution_m": 10,
       "temporal_coverage": "2020, 2023 (model-2024a snapshots)",
       "description": "10 m per-pixel probability of oil-palm presence from a community-trained ML model. Default high-confidence threshold in the helper = 0.95.",
@@ -545,7 +575,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/forestdatapartnership/assets/rubber/model_2024a"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "714-719"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "761-766"}],
       "native_resolution_m": 10,
       "temporal_coverage": "2020, 2023",
       "description": "10 m per-pixel probability of rubber-plantation presence. Default high-confidence threshold = 0.95.",
@@ -556,7 +586,31 @@
         "github": "https://github.com/google/forest-data-partnership/blob/main/models/rubber/README.md"
       },
       "license": "CC-BY-NC 4.0",
-      "pff_known_issues": "Commission errors in primary forest. Disabled by default."
+      "pff_known_issues": "Commission errors in primary forest. Disabled by default. NB (2026-09): GEE flags model_2024a as deprecated, superseded by projects/forestdatapartnership/assets/rubber/model_2026a (wired separately as fdap_rubber_2026a); at the configured p>0.95 threshold 2024a detects almost nothing (2 km2 in Cambodia)."
+    },
+    {
+      "id": "fdap_rubber_2026a",
+      "name": "FDAP Rubber Probability — model 2026a",
+      "version": "model_2026a",
+      "group": "plantations_treecrops",
+      "role_in_pff": "Optional (rubber checkbox, default OFF): second rubber evidence source alongside rubber_sea_2020. CONSTRAINED to pixels already inside SDPT class 2 — it only reroutes mapped tree crops into 02d_planted_forest (globally), never adds rubber outside SDPT, bounding FDAP's known commission errors in primary forest to relabeling existing tree-crop pixels.",
+      "status": "optional_default_off",
+      "active_in_default_run": false,
+      "ee_assets": ["projects/forestdatapartnership/assets/rubber/model_2026a"],
+      "code_refs": [
+        {"file": "modules/timeSeriesAnthro.js", "lines": "882-903", "function": "processingFdapRubber2026"},
+        {"file": "pff_4.js", "function": "includeRubberCheckbox gates (export + analysis paths)"}
+      ],
+      "native_resolution_m": 10,
+      "temporal_coverage": "Reference data 2017–2025; PFF filters the 2020 image. Static in PFF (applied the same for all analysis years).",
+      "description": "10 m per-pixel probability of rubber-plantation presence, model 2026a. PFF thresholds at 0.35 — the README's documented precision/recall break-even (~94% both; README warns model-selection-set accuracies are overestimates).",
+      "preprocessing_in_pff": "filterDate 2020; .mosaic().select('probability').gt(0.35).unmask(0) — model_2026a is TILED (~5.5k images per year) so .first() would return one arbitrary tile; then .and(treeCropsSDPT) in the pff_4.js rubber gate (reroute-only constraint). Measured Cambodia: 5,608 km2 total at 0.35, 2,612 km2 within SDPT class 2, 645 km2 reroute beyond the SEA map.",
+      "citation": {
+        "text": "Forest Data Partnership / Google (2026). FDAP Rubber Probability model 2026a.",
+        "documentation": "https://github.com/google/forest-data-partnership/blob/main/models/model_2026a/README.md"
+      },
+      "license": "CC-BY-NC 4.0 for non-commercial; commercial terms separate",
+      "pff_known_issues": "Probability model with commission errors in primary forest if used unconstrained — hence the SDPT-class-2 constraint and default OFF. Localized validation recommended by the authors."
     },
     {
       "id": "fdap_cocoa_2024a",
@@ -567,7 +621,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/forestdatapartnership/assets/cocoa/model_2024a"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "721-726"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "768-773"}],
       "native_resolution_m": 10,
       "temporal_coverage": "2020, 2023",
       "description": "10 m per-pixel probability of cocoa-plantation presence. Default high-confidence threshold = 0.90.",
@@ -592,7 +646,7 @@
         "projects/ee-andyarnellgee/assets/p0002_primary_forest_support/raw/GRIP4_ExSet_2000_AADTpred_20240312",
         "projects/ee-andyarnellgee/assets/p0002_primary_forest_support/raw/GRIP4_ExSet_2015_AADTpred_20240312"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "823-921", "function": "_getGripRoads / getRoadsCollection / getGripRoadsForYear"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "917-1018", "function": "_getGripRoads / getRoadsCollection / getGripRoadsForYear"}],
       "native_resolution_m": null,
       "vector_native": true,
       "derived_assets": [{
@@ -612,43 +666,45 @@
     },
     {
       "id": "osm_roads_pff_merged",
-      "name": "OSM Roads (PFF custom 33-region merge)",
+      "name": "OSM Roads (PFF custom regional merge)",
       "version": "Geofabrik snapshot 2025-05-21 (RoW) / 2025-05-29 (Europe by country)",
       "group": "roads_infrastructure",
-      "role_in_pff": "Static (untimestamped) global OSM roads, used as the 'small roads' raster for the disturbance-buffer distance. Vector form (33 chunked FeatureCollections) is exported per-AOI for the QGIS plugin's roads input slot.",
+      "role_in_pff": "Static (untimestamped) global OSM roads, used as the single roads raster for the disturbance-buffer distance (the small/large split by GRIP4 AADT is commented out; internal names and the 'Road Small Buffer (m)' settings key still say 'small'). Vector form (34 chunked FeatureCollections) is exported per-AOI for the QGIS plugin's roads input slot. The raster was built from only 33 of the 34 chunks; see pff_known_issues.",
       "status": "active",
       "ee_assets": [
         "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/roadsAllImageOSM",
-        "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/{33 regional FCs}"
+        "projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/{34 regional FCs}"
       ],
       "code_refs": [
-        {"file": "modules/timeSeriesAnthro.js", "lines": "924-1012", "function": "getOsmRoadsAll"},
-        {"file": "modules/timeSeriesAnthro.js", "lines": "1097-1101", "function": "roadsMosaicStatic"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "1022-1116", "function": "getOsmRoadsAll"},
+        {"file": "modules/timeSeriesAnthro.js", "lines": "1201-1242", "function": "roadsMosaicStatic (incl. missing-chunk note)"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "Static snapshot from May 2025 OSM",
-      "description": "Custom merge of all OpenStreetMap 'highway=*' linestrings from Geofabrik regional PBFs. Processed locally with pyosmium → GeoPackage → CSV chunks (≤10 GB each) → GEE FeatureCollections (33 children). Rasterised to a single global 30 m presence image aligned to the Hansen GFC grid. Caveats: no road-class differentiation (some highways are foot/bike-only), 'proposed' / 'planned' values dropped during ingestion.",
+      "description": "Custom merge of all OpenStreetMap 'highway=*' linestrings from Geofabrik regional PBFs. Processed locally with pyosmium → GeoPackage → CSV chunks (≤10 GB each) → GEE FeatureCollections (34 children; one Asia chunk ingested late, 2026-09-15). Rasterised to a single global 30 m presence image aligned to the Hansen GFC grid. Caveats: no road-class differentiation (some highways are foot/bike-only), 'proposed' / 'planned' values dropped during ingestion.",
       "preprocessing_in_pff": "Vector path (export only): per-asset filterBounds(aoi) + ee.Filter.intersects() two-stage clip; flatten; drop highway ∈ {'proposed','planned'}. Raster path (analysis): pre-built mosaic via roadsMosaicStatic().",
-      "provenance_doc": "docs/osm_roads_prep (text file with full asset list + collection dates + processing chain)",
+      "provenance_doc": "docs/osm_roads_prep.md (full asset list, collection dates, processing chain, known gaps)",
       "preprocessing_scripts": "preprocessing/osm_local/ (Conda + pyosmium notebooks; see preprocessing/osm_local/README.md)",
       "citation": {
         "text": "OpenStreetMap contributors (2025). Planet dump retrieved via Geofabrik regional PBFs ~21 May 2025 (Europe ~29 May 2025).",
         "documentation": "https://www.openstreetmap.org/",
         "geofabrik_downloads": "https://download.geofabrik.de/",
-        "pff_provenance_doc": "docs/osm_roads_prep",
+        "pff_provenance_doc": "docs/osm_roads_prep.md",
         "pff_processing_scripts": "preprocessing/osm_local/README.md"
       },
-      "license": "© OpenStreetMap contributors, ODbL 1.0"
+      "license": "© OpenStreetMap contributors, ODbL 1.0",
+      "pff_known_issues": "RASTER MISSING ONE ASIA CHUNK: roadsAllImageOSM (June 2025) was rasterised from 33 of 34 vector chunks; asia_20000000_to_30000000_of_62409033 (~10M ways, OSM ways created ~2018-19) was not uploaded until 2026-09-15 and the global raster re-export has not run. The gap is spread across Asia and heavy in SE Asia (a 1-degree Thailand test box holds ~half its road pixels), so roads are under-buffered and primary forest over-estimated there. Complete vector: the missing chunk is projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033, already included by getOsmRoadsAll(aoi). For a complete raster over an AOI, paint that chunk onto roadsMosaicStatic() (recipe in the code comment above roadsMosaicStatic and in docs/osm_roads_prep.md)."
     },
     {
       "id": "jrc_tmf_def_v1_2025",
       "name": "JRC Tropical Moist Forest — Deforestation Year (v1 2025 release)",
       "version": "v1_2025",
       "group": "disturbance_history",
-      "role_in_pff": "Tropical-belt deforestation-year raster combined with Hansen lossyear (and treecover2000>10%) into the disturbance composite used by forest_disturbances() — drives parts of the 'forest lost before analysisYear' subtraction.",
-      "status": "active",
+      "role_in_pff": "NOT LOADED in current runs. forest_disturbances() in modules/timeSeriesAnthro.js would OR TMF deforestation-year with Hansen lossyear (treecover2000>10%) into a disturbance composite, but nothing in pff_4.js calls it. Forest loss is currently handled only by the Hansen lossyear mask in gfcHansenTreecoverPrep (Hansen source) or the per-year GLAD GLCLU maps. Ready to wire up.",
+      "status": "queued",
+      "active_in_default_run": false,
       "ee_assets": ["projects/JRC/TMF/v1_2025/DeforestationYear"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1132-1148", "function": "forest_disturbances"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1267-1287", "function": "forest_disturbances (defined but not called by pff_4.js)"}],
       "native_resolution_m": 30,
       "temporal_coverage": "Annual deforestation events 1990–latest (TMF release year)",
       "description": "Annual tropical-moist-forest cover-change product produced by JRC from the full Landsat archive. The DeforestationYear band gives the year of detected deforestation (≥1990 = deforested in or before that year).",
@@ -672,7 +728,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/sat-io/open-datasets/OSM_waterLayer"],
-      "code_refs": [{"file": "pff_4.js", "lines": "6356-6360"}],
+      "code_refs": [{"file": "pff_4.js", "lines": "7015"}],
       "native_resolution_m": 90,
       "vector_native": true,
       "description": "Global rasterised OSM surface-water layer (3 arc-sec; rivers / lakes / reservoirs / canals) extracted from the OSM planet PBF using natural=water, waterway=*, landuse=reservoir tags. Maintained by Yamazaki Lab.",
@@ -694,7 +750,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/ee-andyarnellgee/assets/crosscutting/wdb_navigable_rivers"],
-      "code_refs": [{"file": "pff_4.js", "lines": "6352-6353"}],
+      "code_refs": [{"file": "pff_4.js", "lines": "7011"}],
       "native_resolution_m": null,
       "vector_native": true,
       "description": "Custom-prepared PFF asset deriving from a World Database / global navigable-rivers source. See preprocessing/wdb/ for provenance (if present).",
@@ -714,7 +770,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/ee-andyarnellgee/assets/crosscutting/nav_wways_usa"],
-      "code_refs": [{"file": "pff_4.js", "line": 6355}],
+      "code_refs": [{"file": "pff_4.js", "lines": "7014"}],
       "native_resolution_m": null,
       "vector_native": true,
       "description": "Custom-prepared FeatureCollection of USA navigable waterways.",
@@ -733,7 +789,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["WRI/SBTN/naturalLands/v1_1/2020"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 1239}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1376"}],
       "native_resolution_m": 30,
       "temporal_coverage": "2020 single-epoch",
       "description": "Global 30 m natural-lands map for 2020 produced by WRI / WWF US / Systemiq / SBTN to support corporate no-conversion targets. Distinguishes natural vs non-natural land cover.",
@@ -754,7 +810,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["HU_BERLIN/EPFD/V2/polygons"],
-      "code_refs": [{"file": "pff_4.js", "lines": "6726-6728", "context": "commented-out alt"}],
+      "code_refs": [{"file": "pff_4.js", "lines": "7385", "context": "commented-out alt"}],
       "vector_native": true,
       "description": "Pan-European database of primary and old-growth forest polygons compiled from country-level submissions and remote-sensing verification (Sabatini et al. 2018, 2021).",
       "citation": {
@@ -777,7 +833,7 @@
         "projects/sat-io/open-datasets/TIGER/2025/Roads",
         "TIGER/2016/Roads"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1086-1095, 1107", "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1190-1199, 1244-1246", "context": "commented-out alt"}],
       "vector_native": true,
       "description": "US Census Bureau TIGER/Line roads — comprehensive USA road network.",
       "citation": {
@@ -799,7 +855,7 @@
         "projects/wurnrt-loggingroads/assets/kleinschroth/kleinschroth_etal_2019_natsust_data",
         "projects/wurnrt-loggingroads/assets/distribution/forestmask"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1019-1065", "function": "getCongoRoadsUpToYear (defined but not called from pff_4.js)"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1123-1169", "function": "getCongoRoadsUpToYear (defined but not called from pff_4.js)"}],
       "vector_native": true,
       "description": "Wageningen University & Research distribution of logging-road detections for the Congo Basin, with monthly resolution 2019-01 → 2024-12. Combined with Kleinschroth et al. (2019) historical road classes (old / new) for pre-2019 coverage.",
       "citation": {
@@ -819,7 +875,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_microsoft/roadsAllImageGlobal"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1120-1123", "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1257-1260", "context": "commented-out alt"}],
       "native_resolution_m": 30,
       "description": "Microsoft Bing Maps roads ML-extracted from satellite imagery. Custom derivative rasterised to global 30 m.",
       "citation": {
@@ -837,7 +893,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["projects/ee-andyarnellgee/assets/newguinea_ghostrds"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 1115, "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1252-1255", "context": "commented-out alt"}],
       "vector_native": true,
       "description": "Unmapped 'ghost roads' in tropical Asia / New Guinea — informal logging and oil-palm access roads not in OSM.",
       "citation": {
@@ -860,7 +916,7 @@
         "projects/ee-andyarnellgee/assets/brazil_rodovia-estadual_mapbiomas",
         "projects/ee-andyarnellgee/assets/brazil_rodovia-federal_mapbiomas"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "2-4", "context": "commented-out header alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "49-51", "context": "commented-out header alt"}],
       "vector_native": true,
       "description": "MapBiomas Brasil road infrastructure layers (outros trechos / rodovia estadual / rodovia federal). Brazilian-context road dataset.",
       "citation": {
@@ -878,7 +934,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["Tsinghua/DESS/ChinaTerraceMap/v1"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 1, "context": "commented-out"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "line": 48, "context": "commented-out"}],
       "native_resolution_m": 30,
       "description": "30 m China terrace map derived by Tsinghua DESS group — terraced agriculture extent, useful for China-specific runs.",
       "citation": {

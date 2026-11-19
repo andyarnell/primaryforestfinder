@@ -2,6 +2,8 @@
 
 Notebooks for extracting OSM features (highways, etc.) from Geofabrik PBF downloads into GeoPackages and GEE-ready CSVs.
 
+For the full provenance of the global OSM **roads** GEE assets produced with these notebooks (sources, dates, filtering, asset list, known gaps), see [docs/osm_roads_prep.md](../../docs/osm_roads_prep.md).
+
 ## Environment setup
 
 > **Important:** Python processing for OSM extraction should be carried out in a **Conda virtual environment**, not Pip.

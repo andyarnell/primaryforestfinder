@@ -1,6 +1,8 @@
 # PFF GEE App — Workshop One-Pager
 
-**Hands-on testing · v4.15.7-beta.1** · open the browser app: [primary-forest-finder](https://ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder)
+**Hands-on testing · v4.15.7-beta.1** · open the browser app: [primary-forest-finder](https://fao-fra-493913.projects.earthengine.app/view/primary-forest-finder)
+
+> **Note:** the browser app has moved to `fao-fra-493913.projects.earthengine.app/view/primary-forest-finder`. The old `ee-andyarnellgee.projects.earthengine.app` link will eventually be deprecated.
 
 ## The four sections (left panel)
 
@@ -46,7 +48,7 @@ Top bar: country selector · **↻ recenter** · **⚙ Config** · **ⓘ About**
 
 | Resource | Link |
 |---|---|
-| **Browser app** — no account needed | [ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder](https://ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder) |
+| **Browser app** — no account needed | [fao-fra-493913.projects.earthengine.app/view/primary-forest-finder](https://fao-fra-493913.projects.earthengine.app/view/primary-forest-finder) (moved; the old `ee-andyarnellgee` link will eventually be deprecated) |
 | **Code Editor script** — save settings, export to Drive, edit the script (free GEE account) | [code.earthengine.google.com/66503aadedcb379433227212fa3e29a6](https://code.earthengine.google.com/66503aadedcb379433227212fa3e29a6) |
 | **Country test data** (all workshop countries — pick your own) | [Google Drive folder](https://drive.google.com/drive/folders/1PCuTzOISfQ6uArx6HIRruSBNf3vKe6Do?usp=drive_link) |
 | **QGIS plugin** (companion offline tool) | [dist folder on GitHub](https://github.com/andyarnell/primaryforestfinder/tree/main/dist) |

@@ -19,6 +19,7 @@ The two tools are complementary: GEE provides consistent preprocessed exports (h
 ## Current versions
 
 - **pff_4.js** — see top-of-file `PFF_SCRIPT_VERSION` (add if missing per task 10 in backlog)
+- **modules/timeSeriesAnthro.js** — `MODULE_VERSION` + `DATASET_VERSIONS` at top of file. Bump it (and `EXPECTED_ANTHRO_MODULE_VERSION` in pff_4.js) whenever a dataset, asset ID, threshold or processing step changes; both are recorded in run metadata and the methods note.
 - **QGIS plugin** — v0.8.0 (see `pff_qgis_tools/metadata.txt` and `full_workflow.py` `PFF_VERSION`)
 
 ---

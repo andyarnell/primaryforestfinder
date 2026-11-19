@@ -10,7 +10,7 @@ Companion to the QGIS walkthrough ([`QGIS_Walkthrough_Ann_Rotich_V0.md`](QGIS_Wa
 
 | Resource | Link |
 |---|---|
-| **Browser app** (no account needed) | [primary-forest-finder](https://ee-andyarnellgee.projects.earthengine.app/view/primary-forest-finder) |
+| **Browser app** (no account needed) | [primary-forest-finder](https://fao-fra-493913.projects.earthengine.app/view/primary-forest-finder) — moved here; the old `ee-andyarnellgee.projects.earthengine.app` link will eventually be deprecated |
 | **Code Editor script** (free GEE account; save settings, export, edit) | [code.earthengine.google.com/...](https://code.earthengine.google.com/66503aadedcb379433227212fa3e29a6) |
 | **Country test data** (workshop countries — pick your own) | [Google Drive folder](https://drive.google.com/drive/folders/1PCuTzOISfQ6uArx6HIRruSBNf3vKe6Do?usp=drive_link) |
 | **QGIS plugin** (companion offline tool, latest zip) | [dist folder on GitHub](https://github.com/andyarnell/primaryforestfinder/tree/main/dist) |
