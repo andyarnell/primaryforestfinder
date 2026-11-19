@@ -1,19 +1,26 @@
 # PFF Global Datasets — Reference
 
-Human-readable companion to [`datasets_global.json`](datasets_global.json) (the canonical machine-readable source — feed it to run-metadata, dataset pages, and (i) buttons).
-
-Covers `pff_4.js` v4.16.0-beta.18 and `modules/timeSeriesAnthro.js`, checked against the code on 2026-11-19. Lists only the datasets each run actually loads; off-by-default / not-loaded datasets are recorded in the JSON only (see below) — including `rubber_sea_2020` (optional SE-Asia rubber → planted forest checkbox, added beta.18).
+Sources, versions and citations for the global datasets the GEE app loads (`pff_4.js` v4.16.0-beta.18, checked against the code 2026-11-19). Machine-readable version: [`datasets_global.json`](datasets_global.json).
 
 ## Contents
 
 - [Using these datasets in your own GEE script](#using-these-datasets-in-your-own-gee-script)
 - [How to read the status field](#how-to-read-the-status-field)
-- Datasets by group: [Forest cover](#forest-cover-binary-baseline) · [Forest reference layers](#forest-reference-layers-visual-comparison-only) · [Administrative](#administrative) · [Protected areas](#protected-areas) · [Terrain](#terrain) · [Built-up](#built-up) · [Land cover / agriculture](#land-cover--agriculture) · [Plantations / tree crops](#plantations--tree-crops) · [Roads / infrastructure](#roads--infrastructure)
+- Datasets by group:
+  - [Forest cover](#forest-cover-binary-baseline)
+  - [Forest reference layers](#forest-reference-layers-visual-comparison-only)
+  - [Administrative](#administrative)
+  - [Protected areas](#protected-areas)
+  - [Terrain](#terrain)
+  - [Built-up](#built-up)
+  - [Land cover / agriculture](#land-cover--agriculture)
+  - [Plantations / tree crops](#plantations--tree-crops)
+  - [Roads / infrastructure](#roads--infrastructure)
 - [Datasets not folded into a run](#datasets-not-folded-into-a-run)
 
 ## Using these datasets in your own GEE script
 
-The prepared human-influence, cropland, plantation and roads layers below come from one Earth Engine module, `modules/timeseriesAnthro.js`. (Tree cover, WDPA, the DEM, pasture and GAUL boundaries are loaded directly in `pff_4.js` from their public catalogue assets.) The module is in the public `users/andyarnellgee/apps` script repository. Any Earth Engine account can read it. Browse the source in the Code Editor at <https://code.earthengine.google.com/?scriptPath=users%2Fandyarnellgee%2Fapps%3Amodules%2FtimeseriesAnthro.js>, or load it from your own script:
+Built-up, cropland, oil palm, SDPT and roads layers come from one public Earth Engine module ([view source](https://code.earthengine.google.com/?scriptPath=users%2Fandyarnellgee%2Fapps%3Amodules%2FtimeseriesAnthro.js)). Tree cover, WDPA, DEM, pasture and GAUL load directly in `pff_4.js`.
 
 ```javascript
 var anthro = require('users/andyarnellgee/apps:modules/timeseriesAnthro.js');
@@ -24,14 +31,13 @@ var cropland2020 = anthro.getCroplandsGladForYear(2020);  // GLAD cropland
 var oilPalm2020  = anthro.getOilPalmDescalsForYear(2020); // Descals oil palm
 var plantedSDPT  = anthro.processingPlantedForestSDPT();  // SDPT class 1 (planted forest)
 var treeCrops    = anthro.processingTreeCropsSDPT();      // SDPT class 2 (tree crops)
-var roadsRaster  = anthro.roadsMosaicStatic();            // OSM roads raster (see caveat below)
-var roadsVector  = anthro.getOsmRoadsAll(aoi);            // OSM roads vector, all 34 chunks
+var roadsRaster  = anthro.roadsMosaicStatic();            // OSM roads raster -- see issue #98
+var roadsVector  = anthro.getOsmRoadsAll(aoi);            // OSM roads vector, complete
 ```
 
-- The path is lowercase `timeseriesAnthro.js` in Earth Engine, although the GitHub file is `timeSeriesAnthro.js`.
-- You load the **live** copy, so updates reach you automatically. Check `MODULE_VERSION`, and record it with your results, if you need to reproduce a run. `DATASET_VERSIONS` lists the version of each dataset the module loads.
-- The OSM roads **raster** is missing one Asia chunk (heavy in Southeast Asia). The vector is complete. See the OSM Roads entry below and [`osm_roads_prep.md`](osm_roads_prep.md#known-gaps-and-caveats).
-- If you'd rather pin a version, copy the file from GitHub into your own repository.
+- **Live copy** — updates reach you automatically. Record `MODULE_VERSION` with your results; copy the file into your own repo to pin a version.
+- **Roads raster** is missing one Asia chunk — status: [issue #98](https://github.com/andyarnell/primaryforestfinder/issues/98). The vector is complete.
+- In Earth Engine the path is lowercase `timeseriesAnthro.js` (GitHub file: `timeSeriesAnthro.js`).
 
 ---
 
