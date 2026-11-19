@@ -6,6 +6,8 @@ Tools for identifying potential primary forest at national scale. Both tools are
 
 - **GEE app** ([`pff_4.js`](pff_4.js)) — global-scale analysis in Google Earth Engine: tree cover → forest → naturally regenerating → primary forest, with human-influence buffers, protected-area and steep-slope rescues, and a connectivity refinement. Exports rasters/vectors + run metadata.
 - **QGIS plugin** ([`pff_qgis_tools/`](pff_qgis_tools/)) — the same workflow on the desktop, for mixing national + global data and offline use. See the [plugin README](pff_qgis_tools/README.md).
+- **Datasets module** ([`modules/timeSeriesAnthro.js`](modules/timeSeriesAnthro.js)) — the prepared global human-influence and land-use layers the GEE app uses (built-up, cropland, oil palm, planted forest / tree crops, roads), ready to load in your own Earth Engine script:
+  `require('users/andyarnellgee/apps:modules/timeseriesAnthro.js')`. Versioned (`MODULE_VERSION`). See [how to use it](docs/datasets_global.md#using-these-datasets-in-your-own-gee-script).
 
 ## Run the GEE app
 
