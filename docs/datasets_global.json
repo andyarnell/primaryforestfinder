@@ -42,7 +42,7 @@
       "code_refs": [
         {"file": "pff_4.js", "lines": "505-520", "function": "gfcHansenTreecoverPrep"},
         {"file": "pff_4.js", "lines": "2295-2302", "context": "Hansen raw export 02a"},
-        {"file": "modules/timeSeriesAnthro.js", "lines": "1267-1287", "function": "forest_disturbances (defined but not called by pff_4.js)"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "1269-1289", "function": "forest_disturbances (defined but not called by pff_4.js)"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "2000 baseline; annual loss 2001–2024",
@@ -375,7 +375,7 @@
       "status": "optional_default_off",
       "active_in_default_run": false,
       "ee_assets": ["projects/sat-io/open-datasets/ORNL/LANDSCAN_GLOBAL"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1303-1337"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1305-1339"}],
       "native_resolution_m": 1000,
       "temporal_coverage": "Annual 2000–2022 (1990 falls back to 2000 image)",
       "description": "30 arc-second (~1 km) global ambient-population grid produced annually by ORNL using a smart-disaggregation approach combining census, remote sensing and machine learning. 'Ambient' = average over 24 hours.",
@@ -677,7 +677,7 @@
       ],
       "code_refs": [
         {"file": "modules/timeSeriesAnthro.js", "lines": "1022-1116", "function": "getOsmRoadsAll"},
-        {"file": "modules/timeSeriesAnthro.js", "lines": "1201-1242", "function": "roadsMosaicStatic (incl. missing-chunk note)"}
+        {"file": "modules/timeSeriesAnthro.js", "lines": "1201-1244", "function": "roadsMosaicStatic (incl. missing-chunk note)"}
       ],
       "native_resolution_m": 30,
       "temporal_coverage": "Static snapshot from May 2025 OSM",
@@ -693,7 +693,7 @@
         "pff_processing_scripts": "preprocessing/osm_local/README.md"
       },
       "license": "© OpenStreetMap contributors, ODbL 1.0",
-      "pff_known_issues": "RASTER MISSING ONE ASIA CHUNK: roadsAllImageOSM (June 2025) was rasterised from 33 of 34 vector chunks; asia_20000000_to_30000000_of_62409033 (~10M ways, OSM ways created ~2018-19) was not uploaded until 2026-09-15 and the global raster re-export has not run. The gap is spread across Asia and heavy in SE Asia (a 1-degree Thailand test box holds ~half its road pixels), so roads are under-buffered and primary forest over-estimated there. Complete vector: the missing chunk is projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033, already included by getOsmRoadsAll(aoi). For a complete raster over an AOI, paint that chunk onto roadsMosaicStatic() (recipe in the code comment above roadsMosaicStatic and in docs/osm_roads_prep.md)."
+      "pff_known_issues": "RASTER MISSING ONE ASIA CHUNK: roadsAllImageOSM (June 2025) was rasterised from 33 of 34 vector chunks; asia_20000000_to_30000000_of_62409033 (~10M ways, OSM ways created ~2018-19) was not uploaded until 2026-09-15 and the global raster re-export has not run. The gap is spread across Asia and heavy in SE Asia (a 1-degree Thailand test box holds ~half its road pixels), so roads are under-buffered and primary forest over-estimated there. Complete vector: the missing chunk is projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033, already included by getOsmRoadsAll(aoi). For a complete raster over an AOI, paint that chunk onto roadsMosaicStatic() (recipe in the code comment above roadsMosaicStatic and in docs/osm_roads_prep.md). Status: https://github.com/andyarnell/primaryforestfinder/issues/98 (closed = fixed)."
     },
     {
       "id": "jrc_tmf_def_v1_2025",
@@ -704,7 +704,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["projects/JRC/TMF/v1_2025/DeforestationYear"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1267-1287", "function": "forest_disturbances (defined but not called by pff_4.js)"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1269-1289", "function": "forest_disturbances (defined but not called by pff_4.js)"}],
       "native_resolution_m": 30,
       "temporal_coverage": "Annual deforestation events 1990–latest (TMF release year)",
       "description": "Annual tropical-moist-forest cover-change product produced by JRC from the full Landsat archive. The DeforestationYear band gives the year of detected deforestation (≥1990 = deforested in or before that year).",
@@ -789,7 +789,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["WRI/SBTN/naturalLands/v1_1/2020"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1376"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1378"}],
       "native_resolution_m": 30,
       "temporal_coverage": "2020 single-epoch",
       "description": "Global 30 m natural-lands map for 2020 produced by WRI / WWF US / Systemiq / SBTN to support corporate no-conversion targets. Distinguishes natural vs non-natural land cover.",
@@ -833,7 +833,7 @@
         "projects/sat-io/open-datasets/TIGER/2025/Roads",
         "TIGER/2016/Roads"
       ],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1190-1199, 1244-1246", "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1190-1199, 1246-1248", "context": "commented-out alt"}],
       "vector_native": true,
       "description": "US Census Bureau TIGER/Line roads — comprehensive USA road network.",
       "citation": {
@@ -875,7 +875,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_microsoft/roadsAllImageGlobal"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1257-1260", "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1259-1262", "context": "commented-out alt"}],
       "native_resolution_m": 30,
       "description": "Microsoft Bing Maps roads ML-extracted from satellite imagery. Custom derivative rasterised to global 30 m.",
       "citation": {
@@ -893,7 +893,7 @@
       "status": "queued",
       "active_in_default_run": false,
       "ee_assets": ["projects/ee-andyarnellgee/assets/newguinea_ghostrds"],
-      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1252-1255", "context": "commented-out alt"}],
+      "code_refs": [{"file": "modules/timeSeriesAnthro.js", "lines": "1254-1257", "context": "commented-out alt"}],
       "vector_native": true,
       "description": "Unmapped 'ghost roads' in tropical Asia / New Guinea — informal logging and oil-palm access roads not in OSM.",
       "citation": {

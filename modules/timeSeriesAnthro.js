@@ -1201,6 +1201,8 @@ exports.getCongoRoadsUpToYear = getCongoRoadsUpToYear;
 // Speed version: raster-only, no vector paint
 //
 // KNOWN GAP -- MISSING ASIA ROADS CHUNK IN THIS RASTER (as of 2026-11):
+// Status: https://github.com/andyarnell/primaryforestfinder/issues/98
+// (if that issue is closed, the raster has been fixed).
 // roadsAllImageOSM (exported June 2025) was rasterised from 33 of the 34
 // OSM vector chunks. The chunk `asia_20000000_to_30000000_of_62409033`
 // (~10M Asian roads, mostly OSM ways created ~2018-19) was never

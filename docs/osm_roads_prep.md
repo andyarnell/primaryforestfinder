@@ -92,7 +92,7 @@ interchangeable; for buffering or barrier use they are.
 
 ## Known gaps and caveats
 
-- **Missing Asia chunk (vector asset ingested 2026-09-15; raster NOT yet re-exported — `roadsAllImageOSM` still lacks it as of 2026-11-19)** — the chunk covering Asia rows 20,000,000–30,000,000 was produced locally (`asia_20000000_to_30000000_of_62409033.csv`, 3.2 GB, 29 May 2025, in the OneDrive `work_in_progress/roads/osm/osm_regional_250521/geo_csvs/` folder) but was never ingested into GEE.
+- **Missing Asia chunk (vector asset ingested 2026-09-15; raster NOT yet re-exported — `roadsAllImageOSM` still lacks it as of 2026-11-19; status: [issue #98](https://github.com/andyarnell/primaryforestfinder/issues/98), closed = fixed)** — the chunk covering Asia rows 20,000,000–30,000,000 was produced locally (`asia_20000000_to_30000000_of_62409033.csv`, 3.2 GB, 29 May 2025, in the OneDrive `work_in_progress/roads/osm/osm_regional_250521/geo_csvs/` folder) but was never ingested into GEE.
 
   **Where to get the complete set.** The missing vector file is now the GEE FeatureCollection `projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/asia_20000000_to_30000000_of_62409033` (ingested 2026-09-15, ~4 GB). `getOsmRoadsAll(aoi)` includes it, so per-AOI **vector** exports are complete. The **raster** used in the analysis (`roadsMosaicStatic()` → `roadsAllImageOSM`) is not: the global 30 m re-export ([gee_scripts/export_osm_roads_raster.js](../gee_scripts/export_osm_roads_raster.js) and the `_tiled` / `_banded` variants) has not completed on the current GEE quota tier. Until it does, patch the raster over your AOI by painting the missing chunk on top:
 

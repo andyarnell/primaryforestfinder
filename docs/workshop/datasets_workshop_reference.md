@@ -73,7 +73,7 @@ Buffer exclusions: pixels of the tree-cover/forest mask near human activity are 
 
 | Dataset | Role | Citation & source |
 |---|---|---|
-| **OSM Roads (PFF regional merge)** <br>*OpenStreetMap road network collected globally in May 2025* | Active road raster — global OpenStreetMap collected May 2025. **Known gap:** the raster lacks one Asia chunk (~10 M roads, heavy in SE Asia), so roads are under-buffered there; the vector export is complete. See [osm_roads_prep.md](../osm_roads_prep.md#known-gaps-and-caveats). | © OpenStreetMap contributors (2025), ODbL 1.0. [openstreetmap.org](https://www.openstreetmap.org/) |
+| **OSM Roads (PFF regional merge)** <br>*OpenStreetMap road network collected globally in May 2025* | Active road raster — global OpenStreetMap collected May 2025. **Known gap:** the raster lacks one Asia chunk (~10 M roads, heavy in SE Asia), so roads are under-buffered there; the vector export is complete. See [osm_roads_prep.md](../osm_roads_prep.md#known-gaps-and-caveats); status: [issue #98](https://github.com/andyarnell/primaryforestfinder/issues/98). | © OpenStreetMap contributors (2025), ODbL 1.0. [openstreetmap.org](https://www.openstreetmap.org/) |
 
 *Note: GRIP4 with predicted traffic is in the codebase but currently switched off — see backup section.*
 

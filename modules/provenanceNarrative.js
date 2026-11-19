@@ -323,7 +323,8 @@ exports.buildNarrative = function(settings, run) {
     dataIssues.push('Roads: the global OpenStreetMap roads raster used here (v1, June 2025) is missing one of ' +
       'its 34 source chunks -- about 10 million roads spread across Asia, with heavy losses in Southeast Asia. ' +
       'Where roads are missing they are not buffered, so primary forest may be over-estimated in affected ' +
-      'parts of Asia; outside Asia the layer is complete. The OSM roads vector export is complete.');
+      'parts of Asia; outside Asia the layer is complete. The OSM roads vector export is complete. ' +
+      'Status: https://github.com/andyarnell/primaryforestfinder/issues/98 (closed = fixed).');
   }
 
   // Assemble.

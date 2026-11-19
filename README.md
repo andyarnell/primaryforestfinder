@@ -27,6 +27,8 @@ Current build: [`pff_qgis_tools_0.16.0-beta.17.zip`](dist/pff_qgis_tools_0.16.0-
 
 Global datasets the GEE app loads, with sources and citations: [`docs/datasets_global.md`](docs/datasets_global.md). To use the same prepared layers in your own Earth Engine script, see [Using these datasets in your own GEE script](docs/datasets_global.md#using-these-datasets-in-your-own-gee-script).
 
+**Known data issue:** the global OSM roads raster is missing one chunk of Asian roads (heavy in Southeast Asia), so roads are under-buffered there and primary forest may be over-estimated. The roads vector export is complete. Status: [issue #98](https://github.com/andyarnell/primaryforestfinder/issues/98) — if it is closed, this has been fixed.
+
 ## Issues & feedback
 
 Report bugs or request features on the [GitHub issues page](https://github.com/andyarnell/primaryforestfinder/issues). Filter by label to focus — e.g. [`GEE App`](https://github.com/andyarnell/primaryforestfinder/issues?q=is%3Aissue+label%3A%22GEE+App%22) or [`QGIS Plugin`](https://github.com/andyarnell/primaryforestfinder/issues?q=is%3Aissue+label%3A%22QGIS+Plugin%22).
