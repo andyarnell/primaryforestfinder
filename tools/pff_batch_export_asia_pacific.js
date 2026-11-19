@@ -18,7 +18,7 @@
 
 // ═══ 1. CONFIGURATION ═══════════════════════════════════════════════
 
-var SCRIPT_VERSION = '1.2.1';  // 1.2.1: records timeseriesAnthro.js MODULE_VERSION + DATASET_VERSIONS in run metadata
+var SCRIPT_VERSION = '1.2.1';  // 1.2.1: records timeseriesAnthro.js MODULE_VERSION + known data issues in run metadata
 var EXPORT_SCALE = 90;
 var EXPORT_CRS = 'EPSG:4326';
 
@@ -647,10 +647,8 @@ function runCountry(country) {
       'run__export_destination':       'google_drive',
       'run__export_folder':            folder
     };
-    var dsVersions = timeseriesAnthroModule.DATASET_VERSIONS || {};
-    Object.keys(dsVersions).forEach(function(k) {
-      bundle['run__dataset_version__' + k] = dsVersions[k];
-    });
+    bundle['run__known_data_issues'] = (timeseriesAnthroModule.KNOWN_ISSUES || [])
+      .map(function(k) { return k.id; }).join(', ') || 'none';
     var bundleFC = ee.FeatureCollection([ee.Feature(null, bundle)]);
     var bundlePrefix = iso3 + '_gee_run_metadata_' + metaYear + '_' + s + 'm';
     var bundleDesc = bundlePrefix + runTag;

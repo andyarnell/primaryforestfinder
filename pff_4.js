@@ -1,26 +1,17 @@
 ﻿  // Primary Forest Finder App
   var PFF_SCRIPT_VERSION = "4.16.0-beta.18";
 
-  // Version of modules/timeseriesAnthro.js this script expects. The module
-  // is require()d live from the GEE repo (GEE cannot pin a version), so a
-  // mismatch means the two were pasted at different times. Bump together
-  // with MODULE_VERSION in the module. Both versions, plus the module's
-  // DATASET_VERSIONS, are recorded in run metadata and the methods note.
-  var EXPECTED_ANTHRO_MODULE_VERSION = "1.0.0";
+  // Datasets module. require() loads the live copy from the GEE repo (GEE
+  // can't pin a version), so print its MODULE_VERSION once; it is also
+  // recorded in run metadata and the methods note.
   var ANTHRO_MODULE_PATH = "users/andyarnellgee/apps:modules/timeseriesAnthro.js";
-  var _anthroVersionChecked = false;
-  // require() the datasets module (GEE caches it after the first call) and
-  // warn once in the Console if its version is not the expected one.
+  var _anthroVersionPrinted = false;
   function getAnthroModule() {
-    var mod = require(ANTHRO_MODULE_PATH);
-    if (!_anthroVersionChecked) {
-      _anthroVersionChecked = true;
-      if (mod.MODULE_VERSION !== EXPECTED_ANTHRO_MODULE_VERSION) {
-        print('WARNING: modules/timeseriesAnthro.js is ' +
-              (mod.MODULE_VERSION ? 'v' + mod.MODULE_VERSION : 'unversioned (older than 1.0.0)') +
-              ' but pff_4.js v' + PFF_SCRIPT_VERSION + ' expects v' + EXPECTED_ANTHRO_MODULE_VERSION +
-              ' -- update whichever copy is older in the GEE repo.');
-      }
+    var mod = require(ANTHRO_MODULE_PATH);  // cached by GEE after the first call
+    if (!_anthroVersionPrinted) {
+      _anthroVersionPrinted = true;
+      print('Datasets module (timeseriesAnthro.js) ' +
+            (mod.MODULE_VERSION ? 'v' + mod.MODULE_VERSION : 'unversioned'));
     }
     return mod;
   }
@@ -2055,11 +2046,11 @@
       country: countrySelector.getValue(), iso3: iso3, year: year, scale: scale,
       pffVersion: PFF_SCRIPT_VERSION, timestamp: new Date().toISOString(),
       anthroVersion: getAnthroModule().MODULE_VERSION,
-      datasetVersions: getAnthroModule().DATASET_VERSIONS,
+      knownIssues: getAnthroModule().KNOWN_ISSUES,
       customForest: (typeof nationalForest !== 'undefined' && nationalForest.checkbox
                      ? nationalForest.checkbox.getValue() : false),
       compare: _splitOn, year2: _otherYear,
-      length: 'extended', exportedLayers: _expLayers
+      exportedLayers: _expLayers
     });
   }
 
@@ -2079,13 +2070,11 @@
       bundle['config__' + k] = settings[k];
     });
     bundle['run__pff_script_version'] = PFF_SCRIPT_VERSION;
-    // Datasets-module version + per-dataset versions (flat keys, see above).
+    // Datasets-module version + ids of its known data issues (flat keys).
     var _anthro = getAnthroModule();
     bundle['run__timeseries_anthro_version'] = _anthro.MODULE_VERSION || 'unversioned';
-    var _dsVersions = _anthro.DATASET_VERSIONS || {};
-    Object.keys(_dsVersions).forEach(function(k) {
-      bundle['run__dataset_version__' + k] = _dsVersions[k];
-    });
+    bundle['run__known_data_issues'] = (_anthro.KNOWN_ISSUES || [])
+      .map(function(k) { return k.id; }).join(', ') || 'none';
     bundle['run__timestamp']          = new Date().toISOString();
     bundle['run__country']            = countrySelector.getValue();
     bundle['run__iso3']               = iso3;

@@ -14,9 +14,9 @@
  *   var prov = require('users/andyarnellgee/apps:modules/provenanceNarrative.js');
  *   var md = prov.buildNarrative(collectSettings(), {
  *     country: 'Bhutan', iso3: 'BTN', year: 2020, scale: 30,
- *     pffVersion: PFF_SCRIPT_VERSION, length: 'extended',  // or 'short'
- *     anthroVersion: anthro.MODULE_VERSION,       // timeseriesAnthro.js
- *     datasetVersions: anthro.DATASET_VERSIONS    // drives "Known data issues"
+ *     pffVersion: PFF_SCRIPT_VERSION,
+ *     anthroVersion: anthro.MODULE_VERSION,   // timeseriesAnthro.js
+ *     knownIssues: anthro.KNOWN_ISSUES        // -> "Known data issues" block
  *   });
  *   print(md);
  *
@@ -63,6 +63,10 @@ var CITATIONS = {
     short: 'Pesaresi et al., 2024',
     full: 'Pesaresi, M. et al. (2024). Advances on the Global Human Settlement Layer by Joint Assessment of Earth Observation and Population Survey Data. Int. J. Digital Earth 17(1).',
     url: 'https://doi.org/10.1080/17538947.2024.2390454'},
+  wsf_evo: {
+    short: 'Marconcini et al., 2020',
+    full: 'Marconcini, M. et al. (2020). Outlining where humans live, the World Settlement Footprint 2015. Sci. Data 7, 242. (Dataset: DLR World Settlement Footprint Evolution.)',
+    url: 'https://doi.org/10.1038/s41597-020-00580-5'},
   glad_cropland: {
     short: 'Potapov et al., 2022b',
     full: 'Potapov, P. et al. (2022b). Global maps of cropland extent and change show accelerated cropland expansion in the twenty-first century. Nat. Food 3, 19-28.',
@@ -96,28 +100,27 @@ var CITATIONS = {
 };
 exports.CITATIONS = CITATIONS;
 
-// -- Per-exported-layer recipes: datasets + one-line processing per file. --
-// `cites: ['source']` is expanded to the run's actual tree-cover source(s).
+// -- Per-exported-layer recipes: one-line description per exported file. --
 var LAYER_RECIPES = {
-  aoi:                {stem: '00a_aoi', text: 'Country / area-of-interest boundary.', cites: ['gaul']},
-  tree_cover_binary:  {stem: '02a_tree_cover_binary', text: 'Thresholded binary tree cover -- the input that defines the reference grid.', cites: ['source']},
-  hansen_raw:         {stem: '02a_hansen_treecover2000_raw / _lossyear_raw', text: 'Raw Hansen GFC bands (canopy cover 2000 and annual loss year), un-thresholded, for re-thresholding.', cites: ['hansen_gfc']},
-  glad_tree_height_raw: {stem: '02a_glad_tree_height_raw', text: 'Raw GLAD continuous tree height (m), un-thresholded, for re-thresholding.', cites: ['glad_glclu']},
-  other_land_with_tree_cover: {stem: '02b_other_land_with_tree_cover', text: 'Non-forest tree cover (oil palm, tree crops/SDPT class 2, urban tree cover) removed from tree cover en route to Forest.', cites: ['descals_palm', 'sdpt']},
-  forest:             {stem: '02c_forest', text: 'Tree cover minus other land with tree cover approx. FRA Forest.', cites: []},
-  planted_forest:     {stem: '02d_planted_forest', text: 'Planted forest (SDPT class 1: timber/pulp + national overrides).', cites: ['sdpt']},
-  naturally_regenerating_forest: {stem: '02e_naturally_regenerating_forest', text: 'Forest minus planted forest approx. FRA naturally regenerating forest.', cites: []},
-  roads:              {stem: '03a_roads', text: 'Roads rasterised for the disturbance buffer.', cites: ['osm']},
-  roads_osm_vector:   {stem: '03a_roads_osm_vector', text: 'Roads as supplied vector.', cites: ['osm']},
-  builtup_small:      {stem: '03a_builtup_small', text: 'Built-up (rural settlement) extent for the disturbance buffer.', cites: ['ghsl']},
-  builtup_large:      {stem: '03a_builtup_large', text: 'Built-up (urban centre) extent for the disturbance buffer.', cites: ['ghsl']},
-  agriculture:        {stem: '03a_agriculture', text: 'Agriculture (cropland, pasture, oil palm, tree crops) for the disturbance buffer.', cites: ['glad_cropland', 'pasture', 'descals_palm', 'sdpt']},
-  protection_natural_dem: {stem: '03b_protection_natural_dem', text: 'Digital surface model for the steep-slope rescue tier.', cites: ['alos_dem']},
-  protection_natural_slope: {stem: '03b_protection_natural_slope', text: 'Slope derived from the DEM for the steep-slope rescue tier.', cites: ['alos_dem']},
-  protection_legal:   {stem: '03b_protection_legal', text: 'Legally protected areas for the protection rescue tier.', cites: ['wdpa']},
-  protection_legal_unfiltered_vector: {stem: '03b_protection_legal_unfiltered_vector', text: 'Protected areas as supplied vector.', cites: ['wdpa']},
-  pre_refinement_primary_forest: {stem: '03c_pre_refinement_primary_forest', text: 'Forest surviving the buffers and exceptions, before the Refine Output (ecological-viability) step.', cites: []},
-  primary_forest:     {stem: '04a_primary_forest', text: 'Final primary forest after the Refine Output (ecological-viability) step.', cites: []}
+  aoi:                {stem: '00a_aoi', text: 'Country / area-of-interest boundary.'},
+  tree_cover_binary:  {stem: '02a_tree_cover_binary', text: 'Thresholded binary tree cover -- the input that defines the reference grid.'},
+  hansen_raw:         {stem: '02a_hansen_treecover2000_raw / _lossyear_raw', text: 'Raw Hansen GFC bands (canopy cover 2000 and annual loss year), un-thresholded, for re-thresholding.'},
+  glad_tree_height_raw: {stem: '02a_glad_tree_height_raw', text: 'Raw GLAD continuous tree height (m), un-thresholded, for re-thresholding.'},
+  other_land_with_tree_cover: {stem: '02b_other_land_with_tree_cover', text: 'Non-forest tree cover (oil palm, tree crops/SDPT class 2, urban tree cover) removed from tree cover en route to Forest.'},
+  forest:             {stem: '02c_forest', text: 'Tree cover minus other land with tree cover approx. FRA Forest.'},
+  planted_forest:     {stem: '02d_planted_forest', text: 'Planted forest (SDPT class 1: timber/pulp + national overrides).'},
+  naturally_regenerating_forest: {stem: '02e_naturally_regenerating_forest', text: 'Forest minus planted forest approx. FRA naturally regenerating forest.'},
+  roads:              {stem: '03a_roads', text: 'Roads rasterised for the disturbance buffer.'},
+  roads_osm_vector:   {stem: '03a_roads_osm_vector', text: 'Roads as supplied vector.'},
+  builtup_small:      {stem: '03a_builtup_small', text: 'Built-up (rural settlement) extent -- JRC GHSL + DLR WSF Evolution -- for the disturbance buffer.'},
+  builtup_large:      {stem: '03a_builtup_large', text: 'Built-up (urban centre) extent for the disturbance buffer.'},
+  agriculture:        {stem: '03a_agriculture', text: 'Agriculture (cropland, pasture, oil palm, tree crops, planted forest) for the disturbance buffer.'},
+  protection_natural_dem: {stem: '03b_protection_natural_dem', text: 'Digital surface model for the steep-slope rescue tier.'},
+  protection_natural_slope: {stem: '03b_protection_natural_slope', text: 'Slope derived from the DEM for the steep-slope rescue tier.'},
+  protection_legal:   {stem: '03b_protection_legal', text: 'Legally protected areas for the protection rescue tier.'},
+  protection_legal_unfiltered_vector: {stem: '03b_protection_legal_unfiltered_vector', text: 'Protected areas as supplied vector.'},
+  pre_refinement_primary_forest: {stem: '03c_pre_refinement_primary_forest', text: 'Forest surviving the buffers and exceptions, before the Refine Output (ecological-viability) step.'},
+  primary_forest:     {stem: '04a_primary_forest', text: 'Final primary forest after the Refine Output (ecological-viability) step.'}
 };
 
 // FRA category definitions -- KEEP IN SYNC with the app's "FRA 2025 definitions"
@@ -136,7 +139,6 @@ function num(v, dflt) {
 exports.buildNarrative = function(settings, run) {
   settings = settings || {};
   run = run || {};
-  var length = run.length || 'extended';
   function s(key, dflt) {
     var v = settings[key];
     return (v === undefined || v === null || v === '') ? dflt : v;
@@ -184,18 +186,6 @@ exports.buildNarrative = function(settings, run) {
       ') to give a binary tree-cover layer';
   }
 
-  // Tree-cover source id(s), for the per-layer list's `cites: ['source']`.
-  var srcIds;
-  if (customForest) {
-    srcIds = [];
-  } else if (s('Use Hansen (GFC) Tree Cover', false) === true) {
-    srcIds = ['hansen_gfc'];
-  } else if (s('Use Agreement Forest', false) === true || s('Use Combined Extent Forest', false) === true) {
-    srcIds = ['glad_glclu', 'hansen_gfc'];
-  } else {
-    srcIds = ['glad_glclu'];
-  }
-
   var resPhrase = ' at ' + scale + ' m';
   var ts = run.timestamp || '';
   // Human-readable UTC stamp from the ISO timestamp (e.g. 2026-06-12 13:04 UTC).
@@ -207,41 +197,34 @@ exports.buildNarrative = function(settings, run) {
   if (run.pffVersion) { subline += (subline ? ' | ' : '') + 'Primary Forest Finder v' + run.pffVersion; }
   if (run.anthroVersion) { subline += (subline ? ' | ' : '') + 'datasets module v' + run.anthroVersion; }
 
-  var p1, p2 = '';
-  if (length === 'short') {
-    p1 = sourceSentence + resPhrase +
-      ', refined toward the FAO FRA forest definition by removing other land with tree cover (oil palm (' +
-      cite('descals_palm') + '), tree crops/agroforestry (SDPT class 2; ' + cite('sdpt') + '), urban tree cover) and ' +
-      'planted forest (SDPT class 1; ' + cite('sdpt') + '), then removing forest within buffers around likely human influence (roads (' + cite('osm') +
-      '), built-up (' + cite('ghsl') + '), agriculture (' + cite('glad_cropland') + ')) while retaining steep-slope (' +
-      cite('alos_dem') + ') and legally protected (' + cite('wdpa') + ') forest, producing the final primary-forest map' +
-      resPhrase + '.';
-  } else {
-    p1 = sourceSentence + resPhrase + ' (`02a_tree_cover_binary`). This was refined toward the FAO Forest Resources ' +
-      'Assessment (FRA) forest definition: *other land with tree cover* -- oil palm (' + cite('descals_palm') +
-      '), rubber/tree-crop and agroforestry plantations (SDPT class 2; ' + cite('sdpt') + '), and urban tree cover -- ' +
-      'was removed to give Forest (`02c`), and planted forest (SDPT class 1: timber/pulp and national overrides; ' +
-      cite('sdpt') + ') was subtracted to give naturally regenerating forest (`02e`).';
+  var p1 = sourceSentence + resPhrase + ' (`02a_tree_cover_binary`). This was refined toward the FAO Forest Resources ' +
+    'Assessment (FRA) forest definition: *other land with tree cover* -- oil palm (' + cite('descals_palm') +
+    '), rubber/tree-crop and agroforestry plantations (SDPT class 2; ' + cite('sdpt') + '), and urban tree cover -- ' +
+    'was removed to give Forest (`02c`), and planted forest (SDPT class 1: timber/pulp and national overrides; ' +
+    cite('sdpt') + ') was subtracted to give naturally regenerating forest (`02e`).';
 
-    var roadBuf  = num(s('Road Small Buffer (m)', 1000), 1000);
-    var builtBuf = num(s('Built-Up Small Buffer (m)', 1000), 1000);
-    var agriBuf  = num(s('Agriculture Buffer (m)', 1000), 1000);
-    var slopeDeg = num(s('Slope to keep (degrees)', 45), 45);
-    var wdpaYear = s('WDPA Established Before', null);
-    var smoothR  = num(s('Forest Smoothing Radius (m)', 2000), 2000);
-    var densPct  = Math.round(num(s('Forest Smoothing Threshold', 0.5), 0.5) * 100);
+  var roadBuf  = num(s('Road Small Buffer (m)', 1000), 1000);
+  var builtBuf = num(s('Built-Up Small Buffer (m)', 1000), 1000);
+  var agriBuf  = num(s('Agriculture Buffer (m)', 1000), 1000);
+  var slopeDeg = num(s('Slope to keep (degrees)', 45), 45);
+  var wdpaYear = s('WDPA Established Before', null);
+  var smoothR  = num(s('Forest Smoothing Radius (m)', 2000), 2000);
+  var densPct  = Math.round(num(s('Forest Smoothing Threshold', 0.5), 0.5) * 100);
 
-    p2 = 'To represent likely human influence, the following were buffered and any forest falling within those buffers was removed from the analysis: roads (OpenStreetMap; ' +
-      cite('osm') + ') by ' + roadBuf + ' m, built-up areas (JRC GHSL; ' + cite('ghsl') + ') by ' + builtBuf +
-      ' m, and agriculture -- cropland (GLAD, ' + cite('glad_cropland') +
-      '), pasture (Global Pasture Watch; ' + cite('pasture') + '), oil palm (' + cite('descals_palm') + ') and tree crops (' +
-      cite('sdpt') + ') -- by ' + agriBuf + ' m. Two exceptions were kept within those buffers: forest on ' +
-      'slopes >= ' + slopeDeg + ' deg (JAXA ALOS AW3D30 DEM; ' + cite('alos_dem') + ') and forest in legally ' +
-      'protected areas' + (wdpaYear ? ' established before ' + wdpaYear : ' (established >= 30 years before the analysis year)') +
-      ' (WDPA; ' + cite('wdpa') + '). The surviving forest (`03c`) was then passed through the Refine Output step ' +
-      '-- ecological-viability filtering by neighbourhood-density smoothing (' + smoothR + ' m radius, keeping ' +
-      'pixels with >= ' + densPct + '% forest density) -- producing the final primary-forest map (`04a_primary_forest`)' + resPhrase + '.';
-  }
+  // Datasets named here must match what pff_4.js feeds each buffer:
+  // built-up small = GHSL + WSF Evolution; agriculture = cropland + pasture +
+  // oil palm + SDPT class 2 (tree crops) + SDPT class 1 (planted forest).
+  var p2 = 'To represent likely human influence, the following were buffered and any forest falling within those buffers was removed from the analysis: roads (OpenStreetMap; ' +
+    cite('osm') + ') by ' + roadBuf + ' m, built-up areas (JRC GHSL; ' + cite('ghsl') + ' and DLR WSF Evolution; ' +
+    cite('wsf_evo') + ') by ' + builtBuf + ' m, and agriculture -- cropland (GLAD; ' + cite('glad_cropland') +
+    '), pasture (Global Pasture Watch; ' + cite('pasture') + '), oil palm (' + cite('descals_palm') +
+    '), tree crops and planted forest (SDPT classes 2 and 1; ' + cite('sdpt') + ') -- by ' + agriBuf +
+    ' m. Two exceptions were kept within those buffers: forest on ' +
+    'slopes >= ' + slopeDeg + ' deg (JAXA ALOS AW3D30 DEM; ' + cite('alos_dem') + ') and forest in legally ' +
+    'protected areas' + (wdpaYear ? ' established before ' + wdpaYear : ' (established >= 30 years before the analysis year)') +
+    ' (WDPA; ' + cite('wdpa') + '). The surviving forest (`03c`) was then passed through the Refine Output step ' +
+    '-- ecological-viability filtering by neighbourhood-density smoothing (' + smoothR + ' m radius, keeping ' +
+    'pixels with >= ' + densPct + '% forest density) -- producing the final primary-forest map (`04a_primary_forest`)' + resPhrase + '.';
 
   // Caveats / FRA-alignment notes.
   var caveats = [];
@@ -282,10 +265,8 @@ exports.buildNarrative = function(settings, run) {
     run.exportedLayers.forEach(function(key) {
       var r = LAYER_RECIPES[key];
       if (!r) { return; }
-      // No footnote markers here -- the per-layer list would otherwise cluster
-      // numbers (e.g. agriculture's many sources). Citations live in the prose
-      // and References; this list just names each file. (`cites`/`srcIds` kept
-      // for possible future use.)
+      // Citations live in the prose and References; this list just names
+      // each file.
       layersBlock += '- `' + r.stem + '` -- ' + r.text + '\n';
     });
   }
@@ -314,18 +295,17 @@ exports.buildNarrative = function(settings, run) {
       '; that year has its own note)';
   }
 
-  // Known data issues -- keyed off the datasets module's DATASET_VERSIONS,
-  // so each line drops out by itself once the dataset is fixed.
+  // Known data issues -- from the datasets module's KNOWN_ISSUES list (an
+  // entry is removed there once fixed). Skipped when the affected buffer
+  // was switched off for this run.
+  var ISSUE_GATES = {roads: 'Enable Roads Buffer', builtup_small: 'Enable Small BuiltUp Buffer',
+                     builtup_large: 'Enable Large BuiltUp Buffer', agriculture: 'Enable Agriculture Buffer'};
   var dataIssues = [];
-  var dv = run.datasetVersions || {};
-  if (dv.osm_roads_raster && dv.osm_roads_raster.indexOf('v1') === 0 &&
-      s('Enable Roads Buffer', true) !== false) {
-    dataIssues.push('Roads: the global OpenStreetMap roads raster used here (v1, June 2025) is missing one of ' +
-      'its 34 source chunks -- about 10 million roads spread across Asia, with heavy losses in Southeast Asia. ' +
-      'Where roads are missing they are not buffered, so primary forest may be over-estimated in affected ' +
-      'parts of Asia; outside Asia the layer is complete. The OSM roads vector export is complete. ' +
-      'Status: https://github.com/andyarnell/primaryforestfinder/issues/98 (closed = fixed).');
-  }
+  (run.knownIssues || []).forEach(function(k) {
+    var gate = ISSUE_GATES[k.appliesTo];
+    if (gate && s(gate, true) === false) { return; }
+    dataIssues.push(k.text + (k.url ? ' Status: ' + k.url + ' (closed = fixed).' : ''));
+  });
 
   // Assemble.
   var md = title + (subline ? '\n' + subline : '') + '\n' + yearLine + '\n\n' + p1;

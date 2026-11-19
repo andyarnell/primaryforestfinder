@@ -66,10 +66,10 @@ The current production script is `pff_4.js`. Older versions (`pff.js`, `pff_3.js
 ### Versioning (GEE)
 
 - `pff_4.js` carries `PFF_SCRIPT_VERSION` (top of file); log changes in `CHANGELOG_GEE.md`.
-- `modules/timeSeriesAnthro.js` carries its own `MODULE_VERSION` plus a `DATASET_VERSIONS` map (top of file). GEE `require()` loads the live module and cannot pin a version, so the app and the module can drift when pasted at different times.
-- When you change a dataset, asset ID, threshold or processing step in the module: bump `MODULE_VERSION` (patch = no output change, minor = output change or new dataset, major = breaking API), update `DATASET_VERSIONS`, set `EXPECTED_ANTHRO_MODULE_VERSION` in `pff_4.js` to match, and add a line to the module header history and `CHANGELOG_GEE.md`. Update `docs/datasets_global.json` (and `.md` if the dataset is active) too.
-- In `pff_4.js`, load the module with `getAnthroModule()`, not a bare `require()`, so the version check runs (one Console warning on mismatch).
-- Both versions are recorded in run metadata (`run__timeseries_anthro_version`, `run__dataset_version__*`) and the methods note. The methods note's "Known data issues" block is driven by `DATASET_VERSIONS` (see `modules/provenanceNarrative.js`), so a fixed dataset's caveat drops out once its version entry changes.
+- `modules/timeSeriesAnthro.js` carries one `MODULE_VERSION` (top of file). GEE `require()` loads the live module and cannot pin a version, so each run records it (run metadata `run__timeseries_anthro_version`, methods note header) and pff_4.js prints it in the Console.
+- When you change a dataset, asset ID, threshold or processing step in the module: bump `MODULE_VERSION` (patch = no output change, minor = output change or new dataset, major = breaking API) and add a line to the module header history and `CHANGELOG_GEE.md`. Update `docs/datasets_global.json` (and `.md` if the dataset is active) too.
+- Known data problems go in the module's `KNOWN_ISSUES` list (`id`, `appliesTo`, `text`, `url`). The methods note prints them ("Known data issues", skipped when that buffer is off) and run metadata lists their ids (`run__known_data_issues`). Remove an entry when it is fixed.
+- In `pff_4.js`, load the module with `getAnthroModule()` rather than a bare `require()`, so the version is printed once.
 
 ### GEE distance and masking patterns
 

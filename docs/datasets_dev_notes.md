@@ -16,7 +16,7 @@ const usedInRun = datasets.datasets.filter(d => d.status === 'active' || d.activ
 // Embed { id, name, version, ee_assets, citation: { text, doi, documentation } } per entry.
 ```
 
-**What runs record today:** `buildRunBundle()` in `pff_4.js` (and the batch tool) writes `run__timeseries_anthro_version` (the module's `MODULE_VERSION`) and one `run__dataset_version__<key>` per entry in the module's `DATASET_VERSIONS`. The methods note shows the module version in its header and a **Known data issues** block driven by `DATASET_VERSIONS` (e.g. the roads raster gap while `osm_roads_raster` is v1). When an asset changes, update `DATASET_VERSIONS` and bump `MODULE_VERSION` (see the header of `modules/timeSeriesAnthro.js`).
+**What runs record today:** `buildRunBundle()` in `pff_4.js` (and the batch tool) writes `run__timeseries_anthro_version` (the module's `MODULE_VERSION`) and `run__known_data_issues` (ids from the module's `KNOWN_ISSUES`). The methods note shows the module version in its header and lists each known issue under **Known data issues**. When an asset changes, bump `MODULE_VERSION`; when an issue is fixed, remove its `KNOWN_ISSUES` entry (see the header of `modules/timeSeriesAnthro.js`).
 
 For the (i)-button popup body, render: `description` + blank line + `citation.text` + DOI link + documentation link.
 

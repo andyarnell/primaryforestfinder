@@ -1,48 +1,32 @@
 // =====================================================================
 // timeseriesAnthro.js -- PFF anthropogenic / land-use datasets module
 // =====================================================================
-// VERSIONING. pff_4.js and tools/*.js require() this file live from the
-// GEE repo (GEE cannot pin a module version), so the two can drift when
-// they are pasted at different times. MODULE_VERSION is recorded in every
-// run's metadata + methods note, and pff_4.js warns when it differs from
-// its EXPECTED_ANTHRO_MODULE_VERSION.
-// When you change a dataset, asset ID, threshold or processing step here:
-//   1. bump MODULE_VERSION (semver: patch = comments/fixes with no output
-//      change, minor = output change or new dataset, major = breaking API),
-//   2. update DATASET_VERSIONS if an asset/version changed,
-//   3. set EXPECTED_ANTHRO_MODULE_VERSION in pff_4.js to match,
-//   4. add a line to the history below and to CHANGELOG_GEE.md.
+// VERSION. Scripts require() this file live from the GEE repo (GEE can't
+// pin a version), so each run records MODULE_VERSION in its metadata and
+// methods note. When you change a dataset, asset ID, threshold or
+// processing step here, bump MODULE_VERSION and add a history line below
+// (+ CHANGELOG_GEE.md). Dataset sources/versions: docs/datasets_global.json.
 // History:
-//   1.0.0 (2026-11-19) first versioned release; matches pff_4.js
-//         v4.16.0-beta.18.
+//   1.0.0 (2026-11-19) first versioned release (pff_4.js v4.16.0-beta.18).
 var MODULE_VERSION = '1.0.0';
 exports.MODULE_VERSION = MODULE_VERSION;
 
-// Version of each dataset this module loads (recorded per run). Keep in
-// sync with the asset IDs below and docs/datasets_global.json.
-var DATASET_VERSIONS = {
-  hansen_gfc:          'Hansen GFC 2024 v1_12',
-  jrc_tmf:             'JRC TMF v1_2025 DeforestationYear',
-  glc_fcs30d:          'GLC_FCS30D 1985-2022 (sat-io annual + five-years-map)',
-  ghsl:                'JRC GHSL P2023A (GHS_SMOD + GHS_POP)',
-  gisd30:              'GISD30 1985-2020 (sat-io)',
-  gisa:                'GISA 1972-2019 (sat-io)',
-  wsf_evo:             'DLR WSF Evolution (sat-io WSF_EVO)',
-  landscan:            'LandScan Global (sat-io ORNL)',
-  glad_cropland:       'GLAD Global cropland 2003/2011/2015/2019 (Potapov et al. 2022)',
-  descals_oil_palm:    'GlobalOilPalm_YoP_2021 (Descals et al. 2024)',
-  sdpt:                'SDPT v2 (sdpt_v2_simpleType_v09032024_public)',
-  fdap_commodities:    'FDAP palm/rubber/cocoa model_2024a',
-  fdap_rubber_2026:    'FDAP rubber model_2026a (2020, p>0.35)',
-  rubber_sea:          'rubber_SEA_2020 (Ahrends et al. 2026, preprint)',
-  grip4_aadt:          'GRIP4 + predicted AADT, 2024-03-12 snapshot (1990/2000/2015)',
-  congo_logging_roads: 'WUR forestroads_afr_2019-01_2024-12 + Kleinschroth et al. 2019',
-  osm_roads_vector:    'OSM via Geofabrik, May 2025 -- 34 chunks (complete)',
-  // v1 = roadsAllImageOSM; v2 = roadsAllImageOSM_v2 (all 34 chunks, not
-  // yet exported). See the KNOWN GAP note above roadsMosaicStatic().
-  osm_roads_raster:    'v1 roadsAllImageOSM (June 2025) -- 33 of 34 chunks; missing asia_20000000_to_30000000_of_62409033'
-};
-exports.DATASET_VERSIONS = DATASET_VERSIONS;
+// Known problems with this module's data. Each run's methods note lists
+// them (only when the affected input was used). Add an entry when you find
+// one; remove it (and bump MODULE_VERSION) when it is fixed.
+// appliesTo: roads | builtup_small | builtup_large | agriculture.
+var KNOWN_ISSUES = [
+  {
+    id: 'osm_roads_raster_missing_asia_chunk',
+    appliesTo: 'roads',
+    text: 'Roads: the global OpenStreetMap roads raster (roadsAllImageOSM, June 2025) is missing one of ' +
+      'its 34 source chunks -- about 10 million roads spread across Asia, with heavy losses in Southeast ' +
+      'Asia. Where roads are missing they are not buffered, so primary forest may be over-estimated in ' +
+      'affected parts of Asia; outside Asia the layer is complete. The OSM roads vector export is complete.',
+    url: 'https://github.com/andyarnell/primaryforestfinder/issues/98'
+  }
+];
+exports.KNOWN_ISSUES = KNOWN_ISSUES;
 // =====================================================================
 
 // var image = ee.Image('Tsinghua/DESS/ChinaTerraceMap/v1');
@@ -1231,8 +1215,8 @@ exports.getCongoRoadsUpToYear = getCongoRoadsUpToYear;
 //   barrier.)
 // - Global re-export scripts: gee_scripts/export_osm_roads_raster*.js
 //   (output: roadsAllImageOSM_v2). When v2 exists, point this function at
-//   it, set DATASET_VERSIONS.osm_roads_raster to v2 and bump MODULE_VERSION
-//   (minor -- outputs change), so run metadata shows which raster was used.
+//   it, remove the roads entry from KNOWN_ISSUES (top of file), bump
+//   MODULE_VERSION (minor -- outputs change) and close issue #98.
 // Full details + measured impact: docs/osm_roads_prep.md ("Known gaps").
 function roadsMosaicStatic() {
   var osmRoadsImage = ee.Image("projects/ee-andyarnellgee/assets/crosscutting/infrastructure/roads_osm/roadsAllImageOSM");
